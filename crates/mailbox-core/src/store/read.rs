@@ -669,9 +669,11 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<(u32, String)>> {
         let mut st = self.conn.prepare(
+            // `uid IS NOT NULL`: a body cannot be fetched for a placement the
+            // server has not named yet.
             "SELECT p.uid, m.id FROM placements p
              JOIN messages m ON m.rowid = p.message_rowid
-             WHERE p.folder_id = ?1 AND m.blob_id IS NULL
+             WHERE p.folder_id = ?1 AND p.uid IS NOT NULL AND m.blob_id IS NULL
                AND (?2 IS NULL OR m.date >= ?2)
              ORDER BY m.date DESC
              LIMIT ?3",
@@ -680,6 +682,22 @@ impl Store {
             Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?))
         })?;
         Ok(rows.filter_map(std::result::Result::ok).collect())
+    }
+
+    /// The `Message-ID` header of a message, for a server-side lookup.
+    ///
+    /// `None` both when the message is unknown and when it never had one —
+    /// callers treat those the same, because neither can be searched for.
+    pub fn header_message_id(&self, message_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT message_id FROM messages WHERE id = ?1",
+                [message_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten())
     }
 
     /// Drops every placement in a folder. The `UIDVALIDITY`-reset path (§5.3):

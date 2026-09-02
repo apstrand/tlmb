@@ -24,15 +24,24 @@ than retrofitted.
 | Query language, with unknown keys as errors | done (§6.2) |
 | `ls`, `show`, `search`, `folders`, `accounts`, `sync`, `status`, `schema` | done (§6.1) |
 | `folders --remote` — what the server holds, without syncing | done (§6.1) |
+| Optimistic writes: `flag`, `mv`, `cp`, `rm`, `archive`, `spam` | done (§5.3, M2) |
+| Operation queue with idempotent replay, backoff, and conflicts | done (§5.3, M2) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
 
-### What M1 does not have yet
+### In progress: M2
 
-- **Writes.** Flags, moves, compose, SMTP, and the outbox are M2. Folders are
-  opened with `EXAMINE`, so a sync can never set `\Seen` as a side effect.
+Flags and moves have landed. Still to come in M2: SMTP and the outbox, compose,
+reply, multi-account and the unified inbox, and the L3 fault-injection suite
+with the crash-only and double-send oracles.
+
+### Not built yet
+
+- **Sending.** SMTP, the outbox, `compose`, `send`, and `reply`.
+- **Multi-account.** The config takes several accounts, but one store is opened
+  at a time; the unified inbox is one account's inbox.
 - **Instance coordination.** The owner lock and the Unix socket of §4.1 are
   designed but not built; today a write command opens the store directly.
   Reads already take the read-only path, which is the half that matters most.

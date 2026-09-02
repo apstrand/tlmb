@@ -21,7 +21,7 @@ use crate::imap::{Client, ConnectionConfig};
 use crate::query::{self, Node};
 use crate::render::RenderOptions;
 use crate::store::read::{ListOptions, Listing};
-use crate::store::Store;
+use crate::store::{Store, Written};
 use crate::trace::Tracer;
 
 /// How a session was asked to open.
@@ -298,11 +298,89 @@ impl Session {
                 unread: self.store.unread_count()?,
                 folders: self.store.folder_count()?,
                 owner: !self.store.is_read_only(),
+                queued_ops: self.store.queued_op_count()?,
+                conflicts: self.conflicts()?,
                 last_sync: (state.last_full_sync > 0).then(|| format_rfc3339(state.last_full_sync)),
                 last_error: None,
             }],
             store_bytes: self.store.disk_usage(),
         })
+    }
+
+    /// `flag` (§6.1): adds and removes flags and tags on messages.
+    ///
+    /// Local and instant (§5.3). The server hears about it on the next sync,
+    /// and if it refuses, the conflict shows up in `mailbox status`.
+    pub fn flag(&mut self, refs: &[IdRef], change: &FlagSpec) -> Result<Vec<Written>> {
+        let ids = self.resolve_all(refs)?;
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let mut written = self
+                .store
+                .set_flags(&id, &change.add_flags, &change.remove_flags)?;
+            if !change.add_tags.is_empty() || !change.remove_tags.is_empty() {
+                self.store
+                    .set_tags(&id, &change.add_tags, &change.remove_tags)?;
+                written.changed = true;
+            }
+            out.push(written);
+        }
+        Ok(out)
+    }
+
+    /// `mv` (§6.1). `cp`, `rm`, `archive`, and `spam` are sugar over this.
+    pub fn move_to(&mut self, refs: &[IdRef], target: &str) -> Result<Vec<Written>> {
+        let ids = self.resolve_all(refs)?;
+        ids.into_iter()
+            .map(|id| self.store.move_message(&id, target))
+            .collect()
+    }
+
+    /// `cp` (§6.1): the message ends up in both folders.
+    pub fn copy_to(&mut self, refs: &[IdRef], target: &str) -> Result<Vec<Written>> {
+        let ids = self.resolve_all(refs)?;
+        ids.into_iter()
+            .map(|id| self.store.copy_message(&id, target))
+            .collect()
+    }
+
+    /// The folder a special-use name resolves to on this account.
+    ///
+    /// `rm`, `archive`, and `spam` are moves to whatever the server calls
+    /// Trash, Archive, and Junk — which is not the same string everywhere, and
+    /// is not the user's problem.
+    pub fn special_folder(&self, use_name: &str) -> Result<String> {
+        self.store
+            .folders()?
+            .into_iter()
+            .find(|f| f.special_use.as_deref() == Some(use_name))
+            .map(|f| f.path)
+            .ok_or_else(|| {
+                Error::not_found("folder", format!("{use_name} (this account has none)"))
+            })
+    }
+
+    fn resolve_all(&self, refs: &[IdRef]) -> Result<Vec<String>> {
+        refs.iter().map(|r| self.resolve(r)).collect()
+    }
+
+    /// §5.3's conflicts: local writes that were abandoned, whose effect the
+    /// next pull has undone.
+    fn conflicts(&self) -> Result<Vec<mailbox_api::Conflict>> {
+        Ok(self
+            .store
+            .failed_ops()?
+            .into_iter()
+            .map(|op| mailbox_api::Conflict {
+                message: op.message_id,
+                operation: op.kind.as_str().to_string(),
+                folder: op.folder_path,
+                reason: op
+                    .last_error
+                    .unwrap_or_else(|| "the server would not accept the change".into()),
+                queued_at: format_rfc3339(op.created),
+            })
+            .collect())
     }
 
     /// One sync pass to quiescence (§6.7's `sync --once`).
@@ -363,4 +441,94 @@ impl Session {
 /// in explicitly. This is the loopback half.
 fn is_loopback(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]") || host.starts_with("127.")
+}
+
+/// A parsed `flag` argument list: `+seen -flagged +tag:invoices` (§6.1).
+///
+/// Flags and tags are separated here rather than downstream because they have
+/// different fates: a flag is queued for the server, a tag is local until M8
+/// gives it the state folder (§5.4).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FlagSpec {
+    pub add_flags: Vec<String>,
+    pub remove_flags: Vec<String>,
+    pub add_tags: Vec<String>,
+    pub remove_tags: Vec<String>,
+}
+
+impl FlagSpec {
+    /// Parses `+seen`, `-flagged`, `+tag:invoices`.
+    ///
+    /// The sign is required. `mailbox flag 1 seen` is rejected rather than
+    /// guessed at: it reads equally well as "set seen" and as "these are the
+    /// flags now", and the two differ.
+    pub fn parse(args: &[String]) -> Result<FlagSpec> {
+        let mut spec = FlagSpec::default();
+        for arg in args {
+            let (adding, rest) = match arg.chars().next() {
+                Some('+') => (true, &arg[1..]),
+                Some('-') => (false, &arg[1..]),
+                _ => {
+                    return Err(Error::usage(format!(
+                        "`{arg}` needs a sign: `+{arg}` to add it, `-{arg}` to remove it"
+                    )))
+                }
+            };
+            if rest.is_empty() {
+                return Err(Error::usage("a bare `+` or `-` names no flag"));
+            }
+
+            if let Some(tag) = rest.strip_prefix("tag:") {
+                if tag.is_empty() {
+                    return Err(Error::usage("`tag:` needs a name"));
+                }
+                let tag = tag.to_ascii_lowercase();
+                if adding {
+                    spec.add_tags.push(tag);
+                } else {
+                    spec.remove_tags.push(tag);
+                }
+                continue;
+            }
+
+            let flag = normalize_flag_name(rest)?;
+            if adding {
+                spec.add_flags.push(flag);
+            } else {
+                spec.remove_flags.push(flag);
+            }
+        }
+        if spec == FlagSpec::default() {
+            return Err(Error::usage(
+                "nothing to change; try `+seen`, `-flagged`, or `+tag:invoices`",
+            ));
+        }
+        Ok(spec)
+    }
+}
+
+/// Accepts the system flags by their short names and any server keyword.
+///
+/// Keywords are legitimate IMAP — servers and other clients invent them — so
+/// this rejects only what cannot be sent: whitespace, and the characters that
+/// would break an atom out of its parentheses.
+fn normalize_flag_name(name: &str) -> Result<String> {
+    let n = name.trim_start_matches('\\').to_ascii_lowercase();
+    let n = match n.as_str() {
+        "unread" | "unseen" => {
+            return Err(Error::usage(
+                "`unread` is the absence of a flag; use `-seen` to mark unread",
+            ))
+        }
+        "read" => crate::flags::SEEN.to_string(),
+        "junk" => crate::flags::SPAM.to_string(),
+        other => other.to_string(),
+    };
+    if n.is_empty()
+        || n.chars()
+            .any(|c| c.is_whitespace() || matches!(c, '(' | ')' | '{' | '%' | '*' | '"' | '\\'))
+    {
+        return Err(Error::usage(format!("`{name}` is not a usable flag name")));
+    }
+    Ok(n)
 }

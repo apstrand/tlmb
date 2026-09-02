@@ -13,7 +13,7 @@ use crate::trace::{event, Tracer};
 /// Bumped whenever [`MIGRATIONS`] grows. A store from the future is refused
 /// rather than opened read-only: a newer version may have written columns this
 /// build would silently drop on the next write.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Each entry is applied in order inside one transaction. Migrations are
 /// append-only — editing an existing one changes what an already-migrated store
@@ -105,6 +105,78 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (folder_id, uid)
     ) WITHOUT ROWID;
     CREATE INDEX placements_msg ON placements(message_rowid);
+    "#,
+    // v2 — M2: the write path.
+    //
+    // Two changes, both forced by §5.3's "writes are optimistic". A message
+    // moved locally is in its destination *now*, before any server has agreed —
+    // so a placement has to be able to exist without a UID, which the v1
+    // primary key forbade. And the operation queue needs somewhere to live.
+    r#"
+    -- Rebuilt rather than altered: SQLite cannot drop a primary key, and the
+    -- natural key was wrong anyway. A message appears at most once in a folder,
+    -- so (folder_id, message_rowid) is the real identity; the UID is what the
+    -- server calls it, which is a different question and sometimes has no
+    -- answer yet.
+    CREATE TABLE placements_v2 (
+        id            INTEGER PRIMARY KEY,
+        folder_id     INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+        -- NULL while a local move has not yet been confirmed by the server.
+        uid           INTEGER,
+        message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
+        flags         TEXT    NOT NULL DEFAULT ' ',
+        modseq        INTEGER,
+        internaldate  INTEGER
+    );
+    INSERT INTO placements_v2 (folder_id, uid, message_rowid, flags, modseq, internaldate)
+        SELECT folder_id, uid, message_rowid, flags, modseq, internaldate FROM placements;
+    DROP TABLE placements;
+    ALTER TABLE placements_v2 RENAME TO placements;
+
+    CREATE UNIQUE INDEX placements_folder_msg ON placements(folder_id, message_rowid);
+    -- Partial, so any number of placements may be awaiting a UID at once. A
+    -- plain unique index would let one folder hold exactly one pending move.
+    CREATE UNIQUE INDEX placements_folder_uid  ON placements(folder_id, uid)
+        WHERE uid IS NOT NULL;
+    CREATE INDEX placements_msg ON placements(message_rowid);
+
+    -- The operation queue of §5.3. Every write lands here and is replayed with
+    -- idempotent semantics on reconnect.
+    --
+    -- Operations name a message by its stable id (§5.2) and a folder by its
+    -- path — never by UID. A UID is resolved at replay time, so a queue that
+    -- outlives a UIDVALIDITY reset still means what it meant when it was
+    -- written, and a replayed operation is a no-op rather than a second edit.
+    CREATE TABLE ops (
+        id           INTEGER PRIMARY KEY,
+        -- flag | move | copy | delete
+        kind         TEXT    NOT NULL,
+        message_id   TEXT    NOT NULL,
+        -- The folder the message was in when the operation was queued.
+        folder_path  TEXT,
+        -- The UID it had there, and the UIDVALIDITY that UID belongs to.
+        --
+        -- An optimistic move deletes the source placement immediately, so by
+        -- replay time the store no longer knows what the server calls the
+        -- message in the folder it is being moved out of. Recording it here is
+        -- the cheap path; the UIDVALIDITY is what says whether it is still
+        -- true, and a `SEARCH` by `Message-ID` is the fallback when it is not.
+        source_uid          INTEGER,
+        source_uidvalidity  INTEGER,
+        -- Destination, for move and copy.
+        target_path  TEXT,
+        -- Kind-specific JSON: the flags to add and remove, for `flag`.
+        payload      TEXT    NOT NULL DEFAULT '{}',
+        -- pending | done | failed
+        state        TEXT    NOT NULL DEFAULT 'pending',
+        attempts     INTEGER NOT NULL DEFAULT 0,
+        last_error   TEXT,
+        created      INTEGER NOT NULL,
+        -- Unix seconds before which a retry must not be attempted (backoff).
+        next_attempt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX ops_pending ON ops(state, next_attempt);
+    CREATE INDEX ops_message ON ops(message_id);
 
     CREATE TABLE addresses (
         message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,

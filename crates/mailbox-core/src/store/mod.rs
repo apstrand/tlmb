@@ -11,9 +11,11 @@
 
 pub mod blobs;
 pub mod ingest;
+pub mod ops;
 pub mod read;
 pub mod schema;
 pub mod state;
+pub mod write;
 
 use std::path::{Path, PathBuf};
 
@@ -24,7 +26,9 @@ use crate::error::{Error, Result};
 use crate::trace::{event, Tracer};
 
 pub use blobs::Blobs;
+pub use ops::{FlagChange, Op, OpKind, OpState};
 pub use state::{FolderState, SyncState};
+pub use write::Written;
 
 /// How a folder is ranked when a message is filed in several of them (§5.3).
 pub mod rank {

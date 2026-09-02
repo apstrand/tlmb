@@ -12,7 +12,7 @@
 
 mod l2;
 
-use l2::{server_available, World};
+use l2::{server_available, World, PORT};
 
 /// Every test starts with this. It brings the shared container up if needed and
 /// returns false when Docker is unavailable, which is a loud skip on a laptop
@@ -815,4 +815,345 @@ fn two_stores_of_the_same_mailbox_converge() {
     assert_eq!(da["messages"], db["messages"]);
     assert_eq!(da["threads"], db["threads"]);
     assert_eq!(da["placements"], db["placements"]);
+}
+
+// ---- M2: the write path (§5.3) ----
+
+/// §5.3: "local state changes immediately, the operation is queued".
+///
+/// Both halves matter, and the test asserts both: the flag is visible before
+/// any server has agreed, and the server agrees after the next sync.
+#[test]
+fn flags_are_local_immediately_and_pushed_on_sync() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    let id = w.id("inv42@example.com");
+    let out = w.json(&["flag", &id, "+seen", "+flagged"]);
+    assert_eq!(out["changed"], 1);
+
+    // Visible now, with no sync in between.
+    let shown = w.json(&["show", &id]);
+    let flags: Vec<&str> = shown["message"]["flags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    assert!(flags.contains(&"seen"), "{flags:?}");
+    assert!(flags.contains(&"flagged"), "{flags:?}");
+
+    // And queued, which `status` says.
+    let status = w.json(&["status"]);
+    assert_eq!(status["accounts"][0]["queued_ops"], 1);
+
+    // The server has not heard yet.
+    assert!(w.server_flags("INBOX", "<inv42@example.com>").is_empty());
+
+    let synced = w.sync();
+    assert_eq!(synced["synced"][0]["ops_applied"], 1);
+    assert_eq!(
+        w.server_flags("INBOX", "<inv42@example.com>"),
+        vec!["flagged".to_string(), "seen".to_string()]
+    );
+    assert_eq!(w.json(&["status"])["accounts"][0]["queued_ops"], 0);
+}
+
+/// Removing a flag is the same path in reverse, and `-seen` is how a message is
+/// marked unread — there is no `unread` flag to add.
+#[test]
+fn flags_can_be_removed() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    // The reply was seeded `\Seen`.
+    let id = w.id("reply@example.com");
+    w.json(&["flag", &id, "-seen"]);
+    w.sync();
+    assert!(!w
+        .server_flags("INBOX", "<reply@example.com>")
+        .contains(&"seen".to_string()));
+
+    let out = w.run(&["--json", "flag", &id, "+unread"]);
+    assert_eq!(
+        out.status, 2,
+        "`+unread` should be rejected: {}",
+        out.stdout
+    );
+    assert!(out.error_code() == "usage");
+}
+
+/// Several changes to one message collapse into one `STORE`.
+#[test]
+fn repeated_flag_changes_collapse_into_one_operation() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    let id = w.id("inv42@example.com");
+    w.json(&["flag", &id, "+seen"]);
+    w.json(&["flag", &id, "+flagged"]);
+    w.json(&["flag", &id, "-seen"]);
+
+    assert_eq!(
+        w.json(&["status"])["accounts"][0]["queued_ops"],
+        1,
+        "three edits to one message should be one queued operation"
+    );
+
+    w.sync();
+    // Last write wins per flag: `+seen` then `-seen` is unseen.
+    assert_eq!(
+        w.server_flags("INBOX", "<inv42@example.com>"),
+        vec!["flagged".to_string()]
+    );
+}
+
+#[test]
+fn a_move_is_local_immediately_and_pushed_on_sync() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    let id = w.id("inv42@example.com");
+    w.json(&["mv", &id, "Archive"]);
+
+    // Local view moved before the server heard anything.
+    assert_eq!(w.json(&["show", &id])["message"]["folder"], "Archive");
+    assert_eq!(
+        w.server_count("Archive"),
+        1,
+        "the server still has only the digest"
+    );
+
+    w.sync();
+    assert!(w.server_has("Archive", "<inv42@example.com>"));
+    assert!(!w.server_has("INBOX", "<inv42@example.com>"));
+    // And the store agrees with itself afterwards.
+    assert_eq!(w.json(&["show", &id])["message"]["folder"], "Archive");
+}
+
+/// `rm`, `archive`, and `spam` resolve the server's own special-use folders, so
+/// the user never has to know whether it is `Junk` or `Spam` (§6.1).
+#[test]
+fn the_move_sugar_resolves_special_use_folders() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    w.json(&["archive", &w.id("inv42@example.com")]);
+    w.json(&["spam", &w.id("reply@example.com")]);
+    w.json(&["rm", &w.id("digest@example.org")]);
+    w.sync();
+
+    assert!(w.server_has("Archive", "<inv42@example.com>"));
+    assert!(w.server_has("Junk", "<reply@example.com>"));
+    assert!(w.server_has("Trash", "<digest@example.org>"));
+}
+
+/// `cp` leaves the original where it was.
+#[test]
+fn copy_puts_the_message_in_both_folders() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    w.json(&["cp", &w.id("inv42@example.com"), "Archive"]);
+    w.sync();
+
+    assert!(w.server_has("Archive", "<inv42@example.com>"));
+    assert!(
+        w.server_has("INBOX", "<inv42@example.com>"),
+        "the original should stay"
+    );
+}
+
+/// The property that makes a crash mid-push cost nothing (§14.3): replaying an
+/// operation that already applied changes neither the server nor the store.
+#[test]
+fn replaying_the_queue_is_idempotent() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    w.json(&["flag", &w.id("inv42@example.com"), "+seen"]);
+    w.json(&["mv", &w.id("digest@example.org"), "INBOX"]);
+    w.sync();
+    let after_first = w.dump(None);
+
+    let second = w.sync();
+    assert_eq!(second["synced"][0]["ops_applied"], 0);
+    assert_eq!(second["synced"][0]["messages_added"], 0);
+    assert_eq!(second["synced"][0]["messages_removed"], 0);
+    assert_eq!(
+        w.dump(None),
+        after_first,
+        "a second pass must change nothing"
+    );
+}
+
+/// Writes made offline survive and push when the server comes back — which is
+/// the whole reason the queue is in `meta.db` rather than in memory.
+#[test]
+fn writes_made_while_offline_are_pushed_later() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    // Point the account at a dead port, make three edits, and confirm the sync
+    // fails without losing them.
+    let good = std::fs::read_to_string(&w.config).unwrap();
+    std::fs::write(&w.config, good.replace(&format!("{PORT}"), "1")).unwrap();
+
+    w.json(&["flag", &w.id("inv42@example.com"), "+flagged"]);
+    w.json(&["mv", &w.id("digest@example.org"), "INBOX"]);
+    let offline = w.run(&["--json", "sync", "--once"]);
+    assert_ne!(offline.status, 0, "syncing to a dead port should fail");
+    assert_eq!(w.json(&["status"])["accounts"][0]["queued_ops"], 2);
+
+    std::fs::write(&w.config, good).unwrap();
+    let synced = w.sync();
+    assert_eq!(synced["synced"][0]["ops_applied"], 2);
+    assert!(w
+        .server_flags("INBOX", "<inv42@example.com>")
+        .contains(&"flagged".to_string()));
+    assert!(w.server_has("INBOX", "<digest@example.org>"));
+}
+
+/// §5.3: "conflicts resolve to the server's flags".
+///
+/// A flag change for a message another client expunged is not an error — IMAP
+/// makes `STORE` on a UID that is gone a silent no-op — and the right outcome
+/// is not a conflict but a quiet convergence: the push does nothing, the pull
+/// removes the message, and the store ends up agreeing with the server rather
+/// than holding an edit to something that no longer exists.
+#[test]
+fn a_write_to_a_vanished_message_resolves_in_the_servers_favour() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    let id = w.id("inv42@example.com");
+    w.json(&["flag", &id, "+flagged"]);
+
+    // Another client expunges it out from under us.
+    let uid = *w.uids.get("root").expect("a recorded UID");
+    w.expunge("INBOX", uid);
+
+    let synced = w.sync();
+    assert_eq!(
+        synced["synced"][0]["ops_conflicted"], 0,
+        "a no-op push is not a conflict"
+    );
+    assert!(!w.has("inv42@example.com"), "the server's version won");
+    assert_eq!(w.json(&["status"])["accounts"][0]["queued_ops"], 0);
+}
+
+/// A write the server actually *refuses* is a conflict, and §5.3 requires the
+/// note to reach `mailbox status`.
+///
+/// A move whose destination was deleted between queueing and pushing is the
+/// clean case: the server answers `NO`, no retry can help, and the user needs
+/// to be told rather than have it retried silently forever.
+#[test]
+fn a_refused_write_is_reported_as_a_conflict() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.append("digest", "Project", BASIC);
+    w.sync();
+
+    // Queue a move into `Project`, then delete it server-side.
+    w.json(&["mv", &w.id("inv42@example.com"), "Project"]);
+    w.delete_folder("Project");
+
+    let synced = w.sync();
+    assert_eq!(synced["synced"][0]["ops_conflicted"], 1);
+
+    let status = w.json(&["status"]);
+    let conflicts = status["accounts"][0]["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["operation"], "move");
+    assert!(
+        !conflicts[0]["reason"].as_str().unwrap().is_empty(),
+        "the note has to say why"
+    );
+
+    // Abandoned rather than retried: nothing is left queued.
+    assert_eq!(status["accounts"][0]["queued_ops"], 0);
+}
+
+/// A queued move must survive a `UIDVALIDITY` change: the recorded UID stops
+/// meaning anything, and the `Message-ID` search is what finds the message
+/// again (§5.2, §5.3).
+#[test]
+fn a_queued_move_survives_a_uidvalidity_change() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    // Queue the move first, then invalidate every UID in the source folder by
+    // recreating it and putting the message back.
+    w.json(&["mv", &w.id("digest@example.org"), "INBOX"]);
+    w.recreate_folder("Archive");
+    w.append("digest", "Archive", BASIC);
+
+    let synced = w.sync();
+    assert_eq!(
+        synced["synced"][0]["ops_conflicted"], 0,
+        "the move should have been re-found, not abandoned"
+    );
+    assert!(w.server_has("INBOX", "<digest@example.org>"));
+}
+
+/// §6.5: `--dry-run` shows exactly what would change and touches nothing —
+/// neither the store nor the network.
+#[test]
+fn dry_run_writes_change_nothing() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+    let before = w.dump(None);
+
+    let out = w.json(&["--dry-run", "flag", &w.id("inv42@example.com"), "+seen"]);
+    assert_eq!(out["dry_run"], true);
+    assert_eq!(out["add_flags"][0], "seen");
+
+    let out = w.json(&["--dry-run", "mv", &w.id("inv42@example.com"), "Archive"]);
+    assert_eq!(out["target"], "Archive");
+
+    assert_eq!(w.dump(None), before, "a dry run must not touch the store");
+    assert_eq!(w.json(&["status"])["accounts"][0]["queued_ops"], 0);
+}
+
+/// Tags are local until M8 gives them the state folder (§5.4), so they change
+/// the store and queue nothing.
+#[test]
+fn tags_are_local_and_queue_nothing() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    w.json(&["flag", &w.id("inv42@example.com"), "+tag:invoices"]);
+    assert_eq!(
+        w.json(&["status"])["accounts"][0]["queued_ops"],
+        0,
+        "a tag has nowhere to go on an IMAP server"
+    );
+    let hits = w.json(&["search", "tag:invoices"]);
+    assert_eq!(hits["messages"].as_array().unwrap().len(), 1);
 }

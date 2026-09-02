@@ -85,6 +85,13 @@ pub fn sync_once(
         account: store.account().to_string(),
         ..Default::default()
     };
+
+    // Push before pull (§5.3). A pull that ran first would fetch the server's
+    // pre-edit state, overwrite the user's local change, and only then push it.
+    let replayed = crate::imap::replay::replay(client, store)?;
+    report.ops_applied = replayed.applied;
+    report.ops_deferred = replayed.deferred;
+    report.ops_conflicted = replayed.conflicts;
     let mut state = store.sync_state();
     state.account = store.account().to_string();
     state.capabilities = client.capabilities().iter().cloned().collect();

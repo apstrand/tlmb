@@ -128,12 +128,14 @@ impl CommandResult {
     pub fn require_ok(self, what: &str) -> Result<CommandResult> {
         match self.status {
             Status::Ok => Ok(self),
-            Status::No => {
-                let msg = self.information.clone().unwrap_or_default();
-                Err(Error::Network(format!(
-                    "{what} refused by the server: {msg}"
-                )))
-            }
+            // A `NO` is the server understanding the command and declining
+            // it. Reporting that as a network error made the replay treat every
+            // refused write as a dropped socket, back off, and abandon the rest
+            // of the queue behind it (§5.3).
+            Status::No => Err(Error::Rejected {
+                command: what.to_string(),
+                message: self.information.clone().unwrap_or_default(),
+            }),
             _ => {
                 let msg = self.information.clone().unwrap_or_default();
                 Err(Error::protocol(format!("{what}: {msg}")))

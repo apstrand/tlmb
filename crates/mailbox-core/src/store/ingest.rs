@@ -148,10 +148,15 @@ impl Store {
     /// This is the expunge path: servers without `QRESYNC` tell us what is
     /// there, not what left, so the difference has to be computed.
     pub fn retain_uids(&mut self, folder_id: i64, keep: &BTreeSet<u32>) -> Result<u64> {
+        // Pending placements are excluded: they have no UID *because* the
+        // server has not seen them yet, so their absence from the server's
+        // listing is expected rather than an expunge. Treating them as expunged
+        // would delete a message the moment it was moved into a folder.
         let present: Vec<(u32, i64)> = {
-            let mut st = self
-                .conn
-                .prepare("SELECT uid, message_rowid FROM placements WHERE folder_id = ?1")?;
+            let mut st = self.conn.prepare(
+                "SELECT uid, message_rowid FROM placements
+                 WHERE folder_id = ?1 AND uid IS NOT NULL",
+            )?;
             let rows = st.query_map([folder_id], |r| {
                 Ok((r.get::<_, u32>(0)?, r.get::<_, i64>(1)?))
             })?;
@@ -365,16 +370,20 @@ fn apply_in_tx(tx: &Transaction<'_>, account: &str, incoming: &Incoming) -> Resu
     }
     index_fts(tx, rowid, &parsed)?;
 
+    // Keyed on (folder, message), not (folder, uid): a message appears at most
+    // once in a folder, and a placement created by a local move (§5.3) is
+    // already there without a UID. Upserting on the UID would insert a second
+    // row for the same message the moment the server finally named it.
     let existing_placement: i64 = tx.query_row(
-        "SELECT count(*) FROM placements WHERE folder_id = ?1 AND uid = ?2",
-        params![incoming.folder_id, incoming.uid],
+        "SELECT count(*) FROM placements WHERE folder_id = ?1 AND message_rowid = ?2",
+        params![incoming.folder_id, rowid],
         |r| r.get(0),
     )?;
     tx.execute(
         "INSERT INTO placements (folder_id, uid, message_rowid, flags, modseq, internaldate)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(folder_id, uid) DO UPDATE SET
-            message_rowid = excluded.message_rowid,
+         ON CONFLICT(folder_id, message_rowid) DO UPDATE SET
+            uid           = excluded.uid,
             flags         = excluded.flags,
             modseq        = excluded.modseq,
             internaldate  = excluded.internaldate",
@@ -405,7 +414,7 @@ fn apply_in_tx(tx: &Transaction<'_>, account: &str, incoming: &Incoming) -> Resu
 /// The rank ordering is what deduplicates `[Gmail]/All Mail` against the label
 /// folders (§5.3): every Gmail message is in All Mail, and reporting that as
 /// its folder would make the unified inbox useless.
-fn refresh_primary(tx: &Transaction<'_>, rowid: i64) -> Result<()> {
+pub(crate) fn refresh_primary(tx: &Transaction<'_>, rowid: i64) -> Result<()> {
     let primary: Option<(i64, String)> = tx
         .query_row(
             "SELECT p.folder_id, p.flags FROM placements p

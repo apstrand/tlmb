@@ -7,6 +7,7 @@
 //! "supports IMAP".
 
 pub mod connection;
+pub mod replay;
 pub mod sync;
 pub mod utf7;
 
@@ -54,6 +55,35 @@ impl RemoteFolder {
             total: counts.map(|c| c.0),
             unread: counts.map(|c| c.1),
         }
+    }
+}
+
+/// Our flag spelling back to IMAP's.
+///
+/// The inverse of [`crate::flags::normalize`], and deliberately conservative:
+/// only the five system flags get a backslash. Everything else goes out as a
+/// keyword, because inventing a `\Something` the server never advertised is how
+/// a `STORE` gets rejected.
+pub fn wire_flag(flag: &str) -> String {
+    match flag {
+        crate::flags::SEEN => "\\Seen".into(),
+        crate::flags::FLAGGED => "\\Flagged".into(),
+        crate::flags::ANSWERED => "\\Answered".into(),
+        crate::flags::DRAFT => "\\Draft".into(),
+        crate::flags::DELETED => "\\Deleted".into(),
+        crate::flags::SPAM => "$Junk".into(),
+        other => other.to_string(),
+    }
+}
+
+/// The destination UID from a `UIDPLUS` `[COPYUID …]`.
+fn copy_uid(result: &connection::CommandResult) -> Option<u32> {
+    match &result.code {
+        Some(imap_proto::ResponseCode::CopyUid(_, _, dest)) => dest.first().map(|m| match m {
+            imap_proto::types::UidSetMember::Uid(u) => *u,
+            imap_proto::types::UidSetMember::UidRange(r) => *r.start(),
+        }),
+        _ => None,
     }
 }
 
@@ -309,6 +339,14 @@ impl Client {
         }
         self.current = Some(path.to_string());
 
+        Ok(self.selected_from(path, &result))
+    }
+
+    /// Reads a `SELECT`/`EXAMINE` completion into [`Selected`].
+    ///
+    /// Shared by both, because the difference between them is write access, not
+    /// what the server says about the mailbox.
+    fn selected_from(&self, path: &str, result: &connection::CommandResult) -> Selected {
         let mut sel = Selected {
             path: path.to_string(),
             ..Default::default()
@@ -335,7 +373,108 @@ impl Client {
                 _ => {}
             }
         }
-        Ok(sel)
+        sel
+    }
+
+    /// Opens a folder for writing.
+    ///
+    /// The read path uses `EXAMINE` so a sync can never set `\Seen` as a side
+    /// effect (§5.3). Pushing a queued write needs `SELECT`, and this is the
+    /// only place that asks for it.
+    pub fn select(&mut self, path: &str) -> Result<Selected> {
+        let encoded = self.encode_mailbox(path);
+        let result = self.conn.command(&format!("SELECT {encoded}"))?;
+        if !result.ok() {
+            self.current = None;
+            return Err(Error::not_found("folder", path));
+        }
+        self.current = Some(path.to_string());
+        Ok(self.selected_from(path, &result))
+    }
+
+    /// `UID STORE` — adds and removes flags in one round trip where both are
+    /// needed.
+    ///
+    /// Returns false when the server refused, so the caller can distinguish
+    /// "the message is gone" from "the connection broke".
+    pub fn store_flags(&mut self, uid: u32, add: &[String], remove: &[String]) -> Result<()> {
+        self.require_selected()?;
+        for (op, list) in [("+", add), ("-", remove)] {
+            if list.is_empty() {
+                continue;
+            }
+            let wire: Vec<String> = list.iter().map(|f| wire_flag(f)).collect();
+            self.conn
+                .command(&format!(
+                    "UID STORE {uid} {op}FLAGS.SILENT ({})",
+                    wire.join(" ")
+                ))?
+                .require_ok("STORE")?;
+        }
+        Ok(())
+    }
+
+    /// Moves a message to another folder.
+    ///
+    /// `MOVE` (RFC 6851) where advertised; `COPY` + `\Deleted` + `UID EXPUNGE`
+    /// otherwise. The fallback is why `UIDPLUS` matters: a plain `EXPUNGE`
+    /// removes *every* `\Deleted` message in the folder, including ones another
+    /// client marked and did not intend us to remove.
+    ///
+    /// Returns the UID the message was given in the destination, when the
+    /// server said (`UIDPLUS`).
+    pub fn move_message(&mut self, uid: u32, target: &str) -> Result<Option<u32>> {
+        self.require_selected()?;
+        let encoded = self.encode_mailbox(target);
+
+        if self.has("MOVE") {
+            let result = self.conn.command(&format!("UID MOVE {uid} {encoded}"))?;
+            let result = result.require_ok("MOVE")?;
+            return Ok(copy_uid(&result));
+        }
+
+        let result = self.conn.command(&format!("UID COPY {uid} {encoded}"))?;
+        let result = result.require_ok("COPY")?;
+        let new_uid = copy_uid(&result);
+
+        self.conn
+            .command(&format!("UID STORE {uid} +FLAGS.SILENT (\\Deleted)"))?
+            .require_ok("STORE")?;
+        self.expunge_uid(uid)?;
+        Ok(new_uid)
+    }
+
+    /// Copies a message, leaving the original where it is.
+    pub fn copy_message(&mut self, uid: u32, target: &str) -> Result<Option<u32>> {
+        self.require_selected()?;
+        let encoded = self.encode_mailbox(target);
+        let result = self.conn.command(&format!("UID COPY {uid} {encoded}"))?;
+        Ok(copy_uid(&result.require_ok("COPY")?))
+    }
+
+    /// Removes one message: `\Deleted` then expunge.
+    pub fn delete_message(&mut self, uid: u32) -> Result<()> {
+        self.require_selected()?;
+        self.conn
+            .command(&format!("UID STORE {uid} +FLAGS.SILENT (\\Deleted)"))?
+            .require_ok("STORE")?;
+        self.expunge_uid(uid)
+    }
+
+    /// Expunges exactly one UID where `UIDPLUS` allows it, and declines to
+    /// expunge at all where it does not.
+    ///
+    /// A bare `EXPUNGE` would remove every `\Deleted` message in the folder,
+    /// including ones another client marked for its own reasons. Leaving the
+    /// message flagged `\Deleted` but present is a visible, recoverable state;
+    /// deleting somebody else's mail is not.
+    fn expunge_uid(&mut self, uid: u32) -> Result<()> {
+        if self.has("UIDPLUS") {
+            self.conn
+                .command(&format!("UID EXPUNGE {uid}"))?
+                .require_ok("UID EXPUNGE")?;
+        }
+        Ok(())
     }
 
     /// `UID SEARCH`. `criteria` is raw IMAP search syntax, which is also how
@@ -355,6 +494,24 @@ impl Client {
         uids.sort_unstable();
         uids.dedup();
         Ok(uids)
+    }
+
+    /// Finds a message by its `Message-ID` header in the selected folder.
+    ///
+    /// The fallback when a queued operation's recorded UID is no longer
+    /// trustworthy — after a `UIDVALIDITY` reset, or when the message was
+    /// already moved by another client. `HEADER` search is exact and works on
+    /// every server; it is a round trip, which is why it is a fallback.
+    pub fn find_by_message_id(&mut self, message_id: &str) -> Result<Option<u32>> {
+        let bare = message_id.trim_start_matches('<').trim_end_matches('>');
+        let uids = self.uid_search(&format!(
+            "HEADER MESSAGE-ID {}",
+            connection::quote_astring(&format!("<{bare}>"))
+        ))?;
+        // More than one match means two messages share a Message-ID, which
+        // happens. The lowest UID is the oldest, and picking deterministically
+        // beats picking arbitrarily.
+        Ok(uids.first().copied())
     }
 
     /// Headers, flags, and structure for a set of UIDs — the §5.1 default

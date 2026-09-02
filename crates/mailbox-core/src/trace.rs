@@ -23,6 +23,9 @@ pub mod event {
     pub const IMAP_SEND: &str = "imap.send";
     pub const IMAP_RECV: &str = "imap.recv";
     pub const IMAP_DISCONNECT: &str = "imap.disconnect";
+    pub const REPLAY_BEGIN: &str = "replay.begin";
+    pub const REPLAY_OP: &str = "replay.op";
+    pub const REPLAY_END: &str = "replay.end";
     pub const SYNC_BEGIN: &str = "sync.begin";
     pub const SYNC_FOLDER_BEGIN: &str = "sync.folder.begin";
     pub const SYNC_FOLDER_END: &str = "sync.folder.end";

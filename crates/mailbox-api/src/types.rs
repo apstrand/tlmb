@@ -177,6 +177,13 @@ pub struct SyncReport {
     pub messages_updated: u32,
     pub messages_removed: u32,
     pub bodies_fetched: u32,
+    /// Queued local writes pushed to the server this pass (§5.3).
+    pub ops_applied: u32,
+    /// Queued writes that failed transiently and will be retried.
+    pub ops_deferred: u32,
+    /// Queued writes abandoned. The next pull resolves them in the server's
+    /// favour, and `mailbox status` carries the note.
+    pub ops_conflicted: u32,
     /// Folders whose `UIDVALIDITY` changed, forcing a rescan.
     pub uidvalidity_resets: Vec<String>,
     pub duration_ms: u64,
@@ -190,6 +197,19 @@ pub struct Status {
     pub store_bytes: u64,
 }
 
+/// A local write that could not be pushed, reported by `mailbox status` (§5.3).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Conflict {
+    pub message: String,
+    /// `flag`, `move`, `copy`, `delete`.
+    pub operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    pub reason: String,
+    /// RFC3339 of when the write was made locally.
+    pub queued_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AccountStatus {
     pub account: String,
@@ -199,6 +219,10 @@ pub struct AccountStatus {
     pub folders: u32,
     /// True when this process holds the account's owner lock (§4.1).
     pub owner: bool,
+    /// Local writes not yet pushed (§5.3).
+    pub queued_ops: u64,
+    /// Writes that were abandoned and lost to the server's version.
+    pub conflicts: Vec<Conflict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

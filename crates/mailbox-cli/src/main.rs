@@ -95,6 +95,12 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Ls(args) => commands::ls(&ctx, args),
         Command::Show(args) => commands::show(&ctx, args),
         Command::Search(args) => commands::search(&ctx, args),
+        Command::Flag(args) => commands::flag(&ctx, args),
+        Command::Mv(args) => commands::mv(&ctx, args, false),
+        Command::Cp(args) => commands::mv(&ctx, args, true),
+        Command::Rm(args) => commands::move_to_special(&ctx, args, "trash"),
+        Command::Archive(args) => commands::move_to_special(&ctx, args, "archive"),
+        Command::Spam(args) => commands::move_to_special(&ctx, args, "junk"),
         Command::Folders(args) => commands::folders(&ctx, args),
         Command::Accounts(args) => commands::accounts(&ctx, args),
         Command::Sync(args) => commands::sync(&ctx, args),
@@ -111,7 +117,15 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
 /// default here is "read-only unless we know better".
 fn needs_write(cmd: &Command) -> bool {
     match cmd {
-        Command::Sync(_) => true,
+        // Every write goes through the store, so these need it writable even
+        // though none of them touches the network (§5.3).
+        Command::Sync(_)
+        | Command::Flag(_)
+        | Command::Mv(_)
+        | Command::Cp(_)
+        | Command::Rm(_)
+        | Command::Archive(_)
+        | Command::Spam(_) => true,
         Command::Debug(args) => matches!(
             args.action,
             cli::DebugAction::Fixture { .. } | cli::DebugAction::Rethread

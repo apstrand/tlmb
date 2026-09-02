@@ -443,6 +443,49 @@ impl World {
         let _ = client.logout();
     }
 
+    /// The flags the *server* holds for a message, found by its `Message-ID`
+    /// so no assertion has to name a UID.
+    pub fn server_flags(&self, folder: &str, message_id: &str) -> Vec<String> {
+        let mut client = self.client();
+        client.examine(folder, None).expect("examine");
+        let uid = client
+            .find_by_message_id(message_id)
+            .expect("search")
+            .unwrap_or_else(|| panic!("{message_id} is not in {folder} on the server"));
+        let fetched = client.fetch_flags(&[uid]).expect("fetch flags");
+        let _ = client.logout();
+        let mut flags: Vec<String> = fetched
+            .first()
+            .map(|f| {
+                f.flags
+                    .iter()
+                    .filter_map(|f| mailbox_core::flags::normalize(f))
+                    .collect()
+            })
+            .unwrap_or_default();
+        flags.sort();
+        flags
+    }
+
+    /// Whether the server has the message in that folder at all.
+    pub fn server_has(&self, folder: &str, message_id: &str) -> bool {
+        let mut client = self.client();
+        let found = client
+            .examine(folder, None)
+            .and_then(|_| client.find_by_message_id(message_id))
+            .unwrap_or(None);
+        let _ = client.logout();
+        found.is_some()
+    }
+
+    /// How many messages the server holds in a folder.
+    pub fn server_count(&self, folder: &str) -> u32 {
+        let mut client = self.client();
+        let counts = client.status(folder).expect("status");
+        let _ = client.logout();
+        counts.map(|c| c.0).unwrap_or(0)
+    }
+
     /// Deletes a folder, the way another client would.
     pub fn delete_folder(&self, folder: &str) {
         let mut client = self.client();

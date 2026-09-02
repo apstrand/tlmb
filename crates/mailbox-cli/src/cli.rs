@@ -118,6 +118,25 @@ pub enum Command {
     /// Full-text and structured search (§6.2).
     Search(SearchArgs),
 
+    /// Add or remove flags and tags: `+seen`, `-flagged`, `+tag:invoices`.
+    Flag(FlagArgs),
+
+    /// Move messages to a folder.
+    #[command(visible_alias = "move")]
+    Mv(MoveArgs),
+
+    /// Copy messages into a folder, leaving the originals.
+    Cp(MoveArgs),
+
+    /// Move messages to Trash. Sugar over `mv` (§6.1).
+    Rm(TargetArgs),
+
+    /// Move messages to Archive. Sugar over `mv` (§6.1).
+    Archive(TargetArgs),
+
+    /// Move messages to Junk. Sugar over `mv` (§6.1).
+    Spam(TargetArgs),
+
     /// List folders with counts.
     Folders(FoldersArgs),
 
@@ -176,6 +195,35 @@ pub struct SearchArgs {
 
     #[arg(long)]
     pub full_ids: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct FlagArgs {
+    /// Message ids and flag changes, in any order.
+    ///
+    /// Anything starting with `+` or `-` is a change; everything else is an id,
+    /// an id prefix, `^`, `@`, or an index into the last listing (§5.2).
+    ///
+    /// Because `-flagged` is a value and not an option, global flags have to
+    /// come before the subcommand: `mailbox --json flag 1 +seen`.
+    #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct MoveArgs {
+    /// One or more message ids, then the destination folder.
+    ///
+    /// The folder is matched by full path, by leaf name, or by special-use — so
+    /// `archive` finds whatever this server calls its archive.
+    #[arg(required = true, num_args = 2..)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct TargetArgs {
+    #[arg(required = true, num_args = 1..)]
+    pub ids: Vec<String>,
 }
 
 #[derive(Debug, Args)]

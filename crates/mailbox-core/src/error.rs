@@ -25,6 +25,15 @@ pub enum Error {
     #[error("the server broke the protocol: {0}")]
     Protocol(String),
 
+    /// The server understood the command and declined it — an IMAP `NO`.
+    ///
+    /// Distinct from [`Error::Network`] because the two want opposite
+    /// responses: a broken connection should be retried, and a refusal should
+    /// not. Conflating them made the replay treat every rejected write as a
+    /// dropped socket and abandon the rest of the queue with it.
+    #[error("the server refused {command}: {message}")]
+    Rejected { command: String, message: String },
+
     #[error("local state disagrees with the server: {0}")]
     Conflict(String),
 
@@ -71,6 +80,7 @@ impl Error {
             Error::Auth(_) => ErrorCode::AuthFailed,
             Error::Network(_) | Error::Io(_) => ErrorCode::Network,
             Error::Protocol(_) => ErrorCode::Protocol,
+            Error::Rejected { .. } => ErrorCode::Conflict,
             Error::Conflict(_) => ErrorCode::Conflict,
             Error::Store(_) => ErrorCode::Store,
             Error::Usage(_) => ErrorCode::Usage,

@@ -7,13 +7,14 @@ use mailbox_core::error::{Error, Result};
 use mailbox_core::history::History;
 use mailbox_core::imap::sync::SyncOptions;
 use mailbox_core::render::RenderOptions;
-use mailbox_core::session::{IdRef, Session, SessionOptions};
+use mailbox_core::session::{FlagSpec, IdRef, Session, SessionOptions};
 use mailbox_core::store::read::{ListOptions, Sort};
+use mailbox_core::store::Written;
 use mailbox_core::Tracer;
 
 use crate::cli::{
-    AccountsAction, AccountsArgs, DebugAction, DebugArgs, FixtureAction, FoldersArgs, Format,
-    GlobalFlags, LsArgs, SchemaArgs, SearchArgs, ShowArgs, SyncArgs,
+    AccountsAction, AccountsArgs, DebugAction, DebugArgs, FixtureAction, FlagArgs, FoldersArgs,
+    Format, GlobalFlags, LsArgs, MoveArgs, SchemaArgs, SearchArgs, ShowArgs, SyncArgs, TargetArgs,
 };
 use crate::format;
 use crate::output::{maybe_page, Out, GREEN, YELLOW};
@@ -178,6 +179,187 @@ fn render_threads(ctx: &Ctx<'_>, session: &Session, list: &MessageList) -> Resul
                 return Ok(());
             }
             maybe_page(ctx.out, &format::thread_summary(ctx.out, &payload.threads));
+        }
+    }
+    Ok(())
+}
+
+/// `flag` (§6.1): `mailbox flag 1 2 +seen -flagged +tag:invoices`.
+///
+/// Ids and changes may be interleaved, because the sign already says which is
+/// which and requiring an order would be a rule with no reason behind it.
+pub fn flag(ctx: &Ctx<'_>, args: &FlagArgs) -> Result<()> {
+    // `+seen`/`-flagged` force clap to stop parsing options for this
+    // command's arguments, which means a global flag written *after* the
+    // subcommand arrives here as text. Silently treating `--json` as a flag
+    // named `-json` is the worst possible outcome — the caller's output format
+    // is ignored and a nonsense flag is queued — so it is called out instead.
+    if let Some(misplaced) = args.args.iter().find(|a| a.starts_with("--")) {
+        return Err(Error::usage(format!(
+            "`{misplaced}` has to come before the subcommand: \
+             `mailbox {misplaced} flag …`. `flag` takes `+name` and `-name`, \
+             so it cannot tell an option from a flag once it has started."
+        )));
+    }
+
+    let (ids, changes): (Vec<String>, Vec<String>) = args
+        .args
+        .iter()
+        .cloned()
+        .partition(|a| !a.starts_with('+') && !a.starts_with('-'));
+
+    if ids.is_empty() {
+        return Err(Error::usage("no message given"));
+    }
+    let spec = FlagSpec::parse(&changes)?;
+
+    ctx.confirm("flag")?;
+    let refs: Vec<IdRef> = ids.iter().map(|s| IdRef::parse(s)).collect();
+    for r in &refs {
+        ctx.warn_if_positional(r);
+    }
+
+    let mut session = ctx.session()?;
+    if ctx.global.dry_run {
+        return report_dry_run(ctx, "flag", &session, &refs, None, Some(&spec));
+    }
+    let written = session.flag(&refs, &spec)?;
+    report_written(ctx, "flag", &written)
+}
+
+/// `mv` and `cp` (§6.1). The last argument is the destination.
+pub fn mv(ctx: &Ctx<'_>, args: &MoveArgs, copy: bool) -> Result<()> {
+    let (target, ids) = args
+        .args
+        .split_last()
+        .map(|(t, ids)| (t.clone(), ids.to_vec()))
+        .ok_or_else(|| Error::usage("give one or more messages and a destination folder"))?;
+    if ids.is_empty() {
+        return Err(Error::usage("no message given"));
+    }
+
+    let command = if copy { "cp" } else { "mv" };
+    ctx.confirm(command)?;
+    let refs: Vec<IdRef> = ids.iter().map(|s| IdRef::parse(s)).collect();
+    for r in &refs {
+        ctx.warn_if_positional(r);
+    }
+
+    let mut session = ctx.session()?;
+    if ctx.global.dry_run {
+        return report_dry_run(ctx, command, &session, &refs, Some(&target), None);
+    }
+    let written = if copy {
+        session.copy_to(&refs, &target)?
+    } else {
+        session.move_to(&refs, &target)?
+    };
+    report_written(ctx, command, &written)
+}
+
+/// `rm`, `archive`, and `spam`: moves to whatever this server calls Trash,
+/// Archive, and Junk (§6.1).
+pub fn move_to_special(ctx: &Ctx<'_>, args: &TargetArgs, use_name: &str) -> Result<()> {
+    let command = match use_name {
+        "trash" => "rm",
+        "junk" => "spam",
+        other => other,
+    };
+    ctx.confirm(command)?;
+
+    let refs: Vec<IdRef> = args.ids.iter().map(|s| IdRef::parse(s)).collect();
+    for r in &refs {
+        ctx.warn_if_positional(r);
+    }
+
+    let mut session = ctx.session()?;
+    let target = session.special_folder(use_name)?;
+    if ctx.global.dry_run {
+        return report_dry_run(ctx, command, &session, &refs, Some(&target), None);
+    }
+    let written = session.move_to(&refs, &target)?;
+    report_written(ctx, command, &written)
+}
+
+/// The result of a write, in both audiences' terms.
+fn report_written(ctx: &Ctx<'_>, command: &str, written: &[Written]) -> Result<()> {
+    let payload = serde_json::json!({
+        "changed": written.iter().filter(|w| w.changed).count(),
+        "messages": written
+            .iter()
+            .map(|w| serde_json::json!({
+                "id": w.message_id,
+                "folder": w.folder,
+                "flags": w.flags,
+                "changed": w.changed,
+            }))
+            .collect::<Vec<_>>(),
+    });
+
+    if ctx.out.is_structured() {
+        ctx.out.reply(command, &payload)?;
+        return Ok(());
+    }
+    let changed = written.iter().filter(|w| w.changed).count();
+    if changed == 0 {
+        ctx.out.print(ctx.out.dim("nothing changed"));
+        return Ok(());
+    }
+    for w in written.iter().filter(|w| w.changed) {
+        ctx.out.print(format!(
+            "{} {} {}",
+            ctx.out.paint("✓", GREEN),
+            ctx.out.dim(format::short(&w.message_id)),
+            w.folder
+        ));
+    }
+    // The queue is the whole point of §5.3's optimistic write: the change is
+    // already visible, and the server hears about it on the next sync.
+    ctx.out
+        .note("queued for the server — run `mailbox sync` to push it");
+    Ok(())
+}
+
+/// §6.5: `--dry-run` shows exactly what would happen and touches nothing.
+fn report_dry_run(
+    ctx: &Ctx<'_>,
+    command: &str,
+    session: &Session,
+    refs: &[IdRef],
+    target: Option<&str>,
+    spec: Option<&FlagSpec>,
+) -> Result<()> {
+    let mut messages = Vec::new();
+    for r in refs {
+        let id = session.resolve(r)?;
+        let summary = session.store().summary(&id)?;
+        messages.push(serde_json::json!({
+            "id": id,
+            "subject": summary.subject,
+            "folder": summary.folder,
+            "flags": summary.flags,
+        }));
+    }
+    let payload = serde_json::json!({
+        "dry_run": true,
+        "would": command,
+        "target": target,
+        "add_flags": spec.map(|s| s.add_flags.clone()),
+        "remove_flags": spec.map(|s| s.remove_flags.clone()),
+        "add_tags": spec.map(|s| s.add_tags.clone()),
+        "remove_tags": spec.map(|s| s.remove_tags.clone()),
+        "messages": messages,
+    });
+
+    if ctx.out.is_structured() {
+        ctx.out.reply(command, &payload)?;
+    } else {
+        for m in &messages {
+            ctx.out.print(format!(
+                "would {command} {} {}",
+                ctx.out.dim(&m["id"].as_str().unwrap_or_default()[..7]),
+                target.unwrap_or(""),
+            ));
         }
     }
     Ok(())
@@ -489,6 +671,30 @@ pub fn status(ctx: &Ctx<'_>) -> Result<()> {
             a.last_sync.clone().unwrap_or_else(|| "never".into()),
             format::human_size(status.store_bytes),
         ));
+        if a.queued_ops > 0 {
+            ctx.out.print(format!(
+                "  {} local {} not yet pushed — run `mailbox sync`",
+                ctx.out.paint(&a.queued_ops.to_string(), YELLOW),
+                if a.queued_ops == 1 {
+                    "change"
+                } else {
+                    "changes"
+                },
+            ));
+        }
+        // §5.3: conflicts resolve to the server's flags, with a note here. The
+        // note is the whole of the user's recourse, so it says what was lost
+        // and why rather than just counting.
+        for c in &a.conflicts {
+            ctx.out.print(format!(
+                "  {} {} {} {} — {}",
+                ctx.out.paint("conflict", YELLOW),
+                c.operation,
+                ctx.out.dim(format::short(&c.message)),
+                c.folder.clone().unwrap_or_default(),
+                c.reason,
+            ));
+        }
     }
     Ok(())
 }
