@@ -14,7 +14,6 @@ mod format;
 mod output;
 mod table;
 
-use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -73,10 +72,6 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
     let agent_mode = cli.global.profile.as_deref() == Some("agent")
         || std::env::var("MAILBOX_AGENT").is_ok_and(|v| v == "1");
 
-    // §6.4 again: no interactive prompts when stdin is not a TTY. Checked once,
-    // here, so no command has to remember to.
-    let interactive = std::io::stdin().is_terminal();
-
     let opts = SessionOptions {
         account: cli.global.account.clone(),
         config_path: cli.global.config.clone(),
@@ -94,7 +89,6 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         tracer,
         clock,
         agent_mode,
-        interactive,
     };
 
     match &cli.command {

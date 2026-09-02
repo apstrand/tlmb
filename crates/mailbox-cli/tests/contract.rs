@@ -104,13 +104,9 @@ impl Cli {
 
         let manifest = cli.dir.join("fixture.toml");
         std::fs::write(&manifest, FIXTURE).expect("write fixture");
-        let seeded = cli.run(&[
-            "debug",
-            "fixture",
-            "load",
-            manifest.to_str().unwrap(),
-            "--yes",
-        ]);
+        // Deliberately no `--yes`: these tests run with stdin redirected, and a
+        // state-changing command must not treat that as a missing confirmation.
+        let seeded = cli.run(&["debug", "fixture", "load", manifest.to_str().unwrap()]);
         assert_eq!(seeded.status, 0, "seeding failed: {}", seeded.stderr);
         cli
     }
@@ -296,6 +292,23 @@ fn error_documents_conform_to_the_error_schema() {
     let cli = Cli::new();
     let run = cli.run(&["--json", "show", "ffffff0"]);
     assert_conforms(&cli, "error", &run.error());
+}
+
+/// §6.4's non-TTY rule is about commands that *would have prompted*, and none
+/// of M1's do. Treating a redirected stdin as a missing confirmation broke
+/// `mailbox sync` from cron, from a systemd timer, and from every script —
+/// which is most of the ways a sync is meant to be run.
+#[test]
+fn a_redirected_stdin_is_not_a_missing_confirmation() {
+    let cli = Cli::new();
+    // `--dry-run` so this asserts on the gate rather than on the network.
+    let run = cli.run(&["--json", "sync", "--once", "--dry-run"]);
+    assert_eq!(
+        run.status, 0,
+        "sync without --yes must work from a script:\n{}",
+        run.stderr
+    );
+    assert_eq!(run.json()["would_sync"], true);
 }
 
 /// §6.4: read-only by default in agent mode.

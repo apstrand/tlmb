@@ -50,20 +50,40 @@ cargo build --release      # target/release/mailbox
 
 No runtime, no daemon, no database server. SQLite is compiled in.
 
-## Configuration
+## Adding an account
 
-`$XDG_CONFIG_HOME/mailbox/config.toml`, everything optional except an account's
-address and server ([§12](SPEC.md)):
+`accounts add` and autoconfig discovery are M2. For now an account is a stanza
+in `$XDG_CONFIG_HOME/mailbox/config.toml` (default
+`~/.config/mailbox/config.toml`); everything is optional except the address and
+the server ([§12](SPEC.md)):
 
 ```toml
-[accounts.work]
+[accounts.work]                 # `work` is the id `--account` takes
 address    = "peter@example.com"
 imap_host  = "imap.example.com"
-imap_port  = 993
-# `pass`, `gpg`, `op read`, … — anything that prints the password on stdout.
-# The secret never lives in this file (§9).
-credential_command = "pass show mail/example"
-offline = "recent"          # none | recent | full
+imap_port  = 993                # 993 implies TLS, 143 implies STARTTLS
+# imap_user  = "peter"          # only when the login differs from the address
+# identities = ["p.strand@example.com"]   # what `to:me` matches
+offline    = "recent"           # none | recent | full — the §5.1 body prefetch
+```
+
+The password never goes in this file (§9). It is resolved, in order, from:
+
+1. `MAILBOX_PASSWORD_<ID>` — the id uppercased, with `-` and `.` as `_`
+   (`[accounts.work]` → `MAILBOX_PASSWORD_WORK`). Also
+   `MAILBOX_OAUTH_TOKEN_<ID>` for a bearer token.
+2. `credential_command` — anything that prints the secret on stdout:
+   `pass show mail/example`, `gpg -dq ~/.mail.gpg`, `op read op://…`.
+3. The OS keychain, through its own CLI:
+   `secret-tool store --label=mailbox service mailbox account work` on Linux, or
+   an internet password matching `imap_host` and the login user on macOS.
+
+Check it before syncing — this connects, authenticates, and reports which of
+§5.3's fast paths the server offers:
+
+```sh
+mailbox accounts            # what is configured, and whether a credential resolves
+mailbox accounts test       # connect and authenticate for real
 ```
 
 Then:
@@ -74,6 +94,41 @@ mailbox ls
 mailbox search 'from:alice has:attachment after:-7d'
 mailbox show ^ --format=md --strip-quotes
 ```
+
+To keep a test account away from your real one, set `MAILBOX_CONFIG` and
+`MAILBOX_STATE_DIR`: they relocate every path the process touches (§6.7), so
+nothing lands in `$HOME`.
+
+```sh
+export MAILBOX_CONFIG=/tmp/mb/config.toml MAILBOX_STATE_DIR=/tmp/mb/state
+```
+
+### Against the test server
+
+The L2 Dovecot accepts any username with the password `testpass`, which makes
+it the fastest way to get a real mailbox to poke at:
+
+```sh
+docker build -t mailbox-test-dovecot tests/dovecot
+docker run -d --name mailbox-l2 -p 21430:143 mailbox-test-dovecot
+
+mkdir -p /tmp/mb && cat > /tmp/mb/config.toml <<'TOML'
+[accounts.dev]
+address       = "me@example.com"
+imap_host     = "127.0.0.1"
+imap_port     = 21430
+imap_security = "none"
+require_tls   = false           # §9 allows plaintext only for a loopback host
+TOML
+
+export MAILBOX_CONFIG=/tmp/mb/config.toml MAILBOX_STATE_DIR=/tmp/mb/state
+export MAILBOX_PASSWORD_DEV=testpass
+mailbox accounts test
+```
+
+It starts empty. `mailbox debug fixture render <manifest>` emits NDJSON with
+each message's bytes, folder, and flags, ready to `APPEND` — that is how the L2
+suite seeds it (§14.1).
 
 ## For agents
 
@@ -97,9 +152,25 @@ cargo test -p mailbox-cli --test contract     # the JSON contract, no server
 cargo test -p mailbox-cli --test l2_dovecot   # L2: a real Dovecot in Docker
 ```
 
-L2 builds and starts `tests/dovecot` on first use and reuses the container
-afterwards. Without Docker it skips loudly; `MAILBOX_L2_REQUIRED=1` makes the
-skip a failure, which is what CI sets.
+`cargo test` alone runs all three.
+
+**L2 needs nothing but a working Docker.** The harness builds
+`tests/dovecot` on first use, starts it as a container named `mailbox-l2` on
+port 21430, and reuses it on later runs — so the first invocation takes a
+minute and the rest take seconds. Each test mints a fresh account rather than
+cleaning up after itself (§14's "cheap reset"), so tests run in parallel and
+leave the container reusable.
+
+```sh
+cargo test -p mailbox-cli --test l2_dovecot                    # the whole suite
+cargo test -p mailbox-cli --test l2_dovecot -- --nocapture     # with the skip notes
+cargo test -p mailbox-cli --test l2_dovecot an_expunge         # one test
+docker rm -f mailbox-l2                                        # start over
+```
+
+Without Docker the suite skips itself and says so. `MAILBOX_L2_REQUIRED=1` turns
+that skip into a failure — a suite that silently skips is a suite nobody
+notices has stopped running — and CI sets it.
 
 Nothing in the suite depends on wall-clock time or on a server-assigned value:
 `MAILBOX_CLOCK` and `MAILBOX_SEED` pin the clock and the RNG (§6.7), and

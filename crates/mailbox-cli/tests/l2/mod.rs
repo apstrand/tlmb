@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use mailbox_core::fixture::Fixture;
 use mailbox_core::imap::{Client, ConnectionConfig, Credential, Security};
@@ -39,9 +39,19 @@ fn l2_required() -> bool {
 /// Brings the server up if it is not already running, and returns false when
 /// L2 cannot run here.
 ///
-/// Idempotent and safe to call from every test: the container is shared, and
-/// the port check is what decides, not a lock.
+/// Every test calls this, and they run in parallel in one process — so the
+/// startup is behind a `Once`. Without it, several tests racing a cold
+/// container each reach the `docker rm -f` below and tear down the container
+/// the others are already using, which shows up as one unrelated test failing
+/// on a cold run and passing on every rerun.
 pub fn server_available() -> bool {
+    static START: std::sync::Once = std::sync::Once::new();
+    static READY: AtomicBool = AtomicBool::new(false);
+    START.call_once(|| READY.store(start_server(), Ordering::SeqCst));
+    READY.load(Ordering::SeqCst)
+}
+
+fn start_server() -> bool {
     if !docker_works() {
         if l2_required() {
             panic!("MAILBOX_L2_REQUIRED=1 but Docker is not usable here");
@@ -51,7 +61,7 @@ pub fn server_available() -> bool {
         );
         return false;
     }
-    if port_open() {
+    if server_ready() {
         return true;
     }
 
@@ -95,16 +105,16 @@ pub fn server_available() -> bool {
         return false;
     }
 
-    for _ in 0..100 {
-        if port_open() {
+    for _ in 0..150 {
+        if server_ready() {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     if l2_required() {
-        panic!("MAILBOX_L2_REQUIRED=1 but Dovecot never opened port {PORT}");
+        panic!("MAILBOX_L2_REQUIRED=1 but Dovecot never answered on port {PORT}");
     }
-    eprintln!("L2 SKIPPED: Dovecot never came up on port {PORT}");
+    eprintln!("L2 SKIPPED: Dovecot never answered on port {PORT}");
     false
 }
 
@@ -118,14 +128,30 @@ fn docker_works() -> bool {
         .unwrap_or(false)
 }
 
-fn port_open() -> bool {
-    std::net::TcpStream::connect_timeout(
-        &format!("127.0.0.1:{PORT}")
-            .parse()
-            .expect("a valid address"),
-        std::time::Duration::from_millis(300),
-    )
-    .is_ok()
+/// Readiness is a valid IMAP greeting, not an open port.
+///
+/// Docker's userland proxy accepts the TCP connection as soon as the container
+/// exists, and only then fails to reach the process behind it — so a plain
+/// connect succeeds a second or two before Dovecot is listening. Every test
+/// then starts at once against a server that closes the connection
+/// mid-greeting, which reads as a sync bug and is not one.
+fn server_ready() -> bool {
+    use std::io::Read;
+
+    let addr = format!("127.0.0.1:{PORT}")
+        .parse()
+        .expect("a valid address");
+    let Ok(mut stream) =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300))
+    else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+    let mut buf = [0u8; 64];
+    match stream.read(&mut buf) {
+        Ok(n) if n > 0 => buf[..n].starts_with(b"* OK"),
+        _ => false,
+    }
 }
 
 fn dovecot_dir() -> PathBuf {
@@ -300,13 +326,13 @@ impl World {
 
     /// One sync pass to quiescence (§6.7), then the ids it produced.
     pub fn sync(&mut self) -> serde_json::Value {
-        let result = self.json(&["sync", "--once", "--yes"]);
+        let result = self.json(&["sync", "--once"]);
         self.refresh_ids();
         result
     }
 
     pub fn sync_with(&mut self, extra: &[&str]) -> serde_json::Value {
-        let mut args = vec!["sync", "--once", "--yes"];
+        let mut args = vec!["sync", "--once"];
         args.extend_from_slice(extra);
         let result = self.json(&args);
         self.refresh_ids();

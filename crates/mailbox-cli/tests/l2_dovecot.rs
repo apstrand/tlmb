@@ -498,7 +498,6 @@ fn the_trace_records_the_conversation_without_the_password() {
     let out = w.run(&[
         "sync",
         "--once",
-        "--yes",
         "--json",
         "--trace",
         trace.to_str().unwrap(),
@@ -549,7 +548,6 @@ fn sync_until_stops_at_the_named_event() {
     let out = w.run(&[
         "sync",
         "--once",
-        "--yes",
         "--json",
         "--trace",
         trace.to_str().unwrap(),
@@ -581,7 +579,7 @@ fn dry_run_touches_no_network() {
     )
     .unwrap();
 
-    let result = w.json(&["sync", "--dry-run", "--yes"]);
+    let result = w.json(&["sync", "--dry-run"]);
     assert_eq!(result["would_sync"], true);
 }
 
@@ -591,8 +589,7 @@ fn dry_run_touches_no_network() {
 fn a_bad_credential_is_auth_failed() {
     l2_or_skip!();
     let w = World::new();
-    let (code, status) =
-        run_with_password(&w, &["sync", "--once", "--yes", "--json"], "wrong-password");
+    let (code, status) = run_with_password(&w, &["sync", "--once", "--json"], "wrong-password");
     assert_eq!(status, 4, "§6.6 gives authentication its own exit code");
     assert_eq!(code, "auth_failed");
 }

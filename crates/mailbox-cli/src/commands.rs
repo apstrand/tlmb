@@ -25,7 +25,6 @@ pub struct Ctx<'a> {
     pub tracer: Tracer,
     pub clock: Clock,
     pub agent_mode: bool,
-    pub interactive: bool,
 }
 
 impl Ctx<'_> {
@@ -43,27 +42,23 @@ impl Ctx<'_> {
         }
     }
 
-    /// §6.4: read-only by default in agent mode — any state-changing command
-    /// needs an explicit `--yes`. And §6.4 again: a command that would have
-    /// prompted must not, when stdin is not a TTY; it fails with
-    /// `needs_confirmation` and names the flag that supplies the answer.
+    /// §6.4: read-only by default in agent mode — `MAILBOX_AGENT=1` makes any
+    /// state-changing command require an explicit `--yes`.
+    ///
+    /// Note what this deliberately does *not* do: gate on whether stdin is a
+    /// terminal. §6.4's other rule — "no interactive prompts when stdin is not
+    /// a TTY" — is about commands that *would have prompted*, and none of M1's
+    /// do. Treating a non-TTY as a missing confirmation would break
+    /// `mailbox sync` from cron, from a systemd timer, and from every script,
+    /// which is most of the ways a sync is meant to be run.
     fn confirm(&self, what: &str) -> Result<()> {
-        if self.global.yes {
+        if self.global.yes || !self.agent_mode {
             return Ok(());
         }
-        if self.agent_mode {
-            return Err(Error::usage(format!(
-                "agent mode makes `{what}` require an explicit --yes"
-            ))
-            .needs_confirmation("pass --yes"));
-        }
-        if !self.interactive {
-            return Err(Error::usage(format!(
-                "`{what}` changes state and stdin is not a terminal"
-            ))
-            .needs_confirmation("pass --yes"));
-        }
-        Ok(())
+        Err(Error::usage(format!(
+            "agent mode makes `{what}` require an explicit --yes"
+        ))
+        .needs_confirmation("pass --yes"))
     }
 
     /// §6.4: an agent that uses `^` or a listing index is relying on state from
