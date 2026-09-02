@@ -168,7 +168,11 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// One test's world: a fresh IMAP account, a fresh store, and a config file
 /// pointing at both.
 pub struct World {
+    /// The account's address.
     pub user: String,
+    /// The name the server is told, which is `user` unless `imap_user`
+    /// overrides it.
+    pub login: String,
     pub dir: PathBuf,
     pub config: PathBuf,
     pub state: PathBuf,
@@ -183,9 +187,25 @@ pub struct World {
 impl World {
     /// Mints a fresh account and writes its config.
     pub fn new() -> World {
+        World::with_login(false)
+    }
+
+    /// Mints an account whose IMAP login name differs from its address.
+    ///
+    /// The login is minted fresh like every other account rather than taken as
+    /// an argument: a literal name would be shared by every run of the test and
+    /// by every test using it, so the mailbox would accumulate across runs and
+    /// the message counts would drift. §14's reset is "use a name you have not
+    /// used yet", and that applies to the login too.
+    pub fn with_separate_login() -> World {
+        World::with_login(true)
+    }
+
+    fn with_login(separate: bool) -> World {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let pid = std::process::id();
         let user = format!("t{pid}x{n}@example.com");
+        let imap_user = separate.then(|| format!("login-t{pid}x{n}"));
 
         let dir = std::env::temp_dir().join(format!("mailbox-l2-{pid}-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -193,11 +213,19 @@ impl World {
 
         let state = dir.join("state");
         let config = dir.join("config.toml");
+        // The address and the login are the same thing unless a test asks for
+        // them to differ; `login` is what the server actually sees.
+        let login = imap_user.clone().unwrap_or_else(|| user.clone());
+        let imap_user_line = match &imap_user {
+            Some(u) => format!("imap_user = \"{u}\"\n"),
+            None => String::new(),
+        };
         std::fs::write(
             &config,
             format!(
                 "[accounts.test]\n\
                  address = \"{user}\"\n\
+                 {imap_user_line}\
                  imap_host = \"127.0.0.1\"\n\
                  imap_port = {PORT}\n\
                  imap_security = \"none\"\n\
@@ -211,6 +239,7 @@ impl World {
 
         World {
             user,
+            login,
             dir,
             config,
             state,
@@ -229,7 +258,7 @@ impl World {
         };
         let mut client = Client::connect(&cfg, Tracer::disabled()).expect("connect to Dovecot");
         client
-            .login(&self.user, &Credential::Password(PASSWORD.into()))
+            .login(&self.login, &Credential::Password(PASSWORD.into()))
             .expect("authenticate against Dovecot");
         client
     }

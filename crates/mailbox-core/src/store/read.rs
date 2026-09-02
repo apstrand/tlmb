@@ -537,11 +537,18 @@ impl Store {
 
     /// The account row for `mailbox accounts --json`, filled in from what the
     /// store knows; the caller supplies the parts that live in config.
-    pub fn account_summary(&self, address: &str, imap_host: &str, imap_port: u16) -> Account {
+    pub fn account_summary(
+        &self,
+        address: &str,
+        login_user: &str,
+        imap_host: &str,
+        imap_port: u16,
+    ) -> Account {
         let state = self.sync_state();
         Account {
             id: self.account.clone(),
             address: address.to_string(),
+            login_user: login_user.to_string(),
             imap_host: imap_host.to_string(),
             imap_port,
             has_credential: false,

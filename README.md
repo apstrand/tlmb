@@ -62,15 +62,29 @@ the server ([§12](SPEC.md)):
 address    = "peter@example.com"
 imap_host  = "imap.example.com"
 imap_port  = 993                # 993 implies TLS, 143 implies STARTTLS
-# imap_user  = "peter"          # only when the login differs from the address
-# identities = ["p.strand@example.com"]   # what `to:me` matches
 offline    = "recent"           # none | recent | full — the §5.1 body prefetch
 ```
 
+**When the login name is not the address**, set `imap_user`. Shared mailboxes,
+`DOMAIN\user` logins, and accounts whose address is an alias all need this;
+without it the address is sent as the username.
+
+```toml
+[accounts.work]
+address    = "team@example.com"     # what the mail says
+imap_user  = "peter"                # what the server is told
+identities = ["peter@example.com"]  # extra addresses `to:me` matches
+```
+
+`mailbox accounts` shows the login name in its own column when it differs from
+the address, and `accounts test` prints `logged in as:` — because "wrong
+username" and "wrong password" fail identically from the outside, and this is
+the half you can check.
+
 The password never goes in this file (§9). It is resolved, in order, from:
 
-1. `MAILBOX_PASSWORD_<ID>` — the id uppercased, with `-` and `.` as `_`
-   (`[accounts.work]` → `MAILBOX_PASSWORD_WORK`). Also
+1. `MAILBOX_PASSWORD_<ID>` — the *account id* uppercased, with `-` and `.` as
+   `_` (`[accounts.work]` → `MAILBOX_PASSWORD_WORK`), not the login name. Also
    `MAILBOX_OAUTH_TOKEN_<ID>` for a bearer token.
 2. `credential_command` — anything that prints the secret on stdout:
    `pass show mail/example`, `gpg -dq ~/.mail.gpg`, `op read op://…`.

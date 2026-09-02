@@ -154,6 +154,11 @@ pub struct Folder {
 pub struct Account {
     pub id: String,
     pub address: String,
+    /// The name sent to the server, which is the address unless `imap_user`
+    /// overrides it. Reported separately because "wrong username" and "wrong
+    /// password" fail identically from the outside, and this is the one that
+    /// can be checked without a trace.
+    pub login_user: String,
     pub imap_host: String,
     pub imap_port: u16,
     /// Whether a credential for this account is currently resolvable.

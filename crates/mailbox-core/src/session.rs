@@ -205,6 +205,7 @@ impl Session {
             out.push(Account {
                 id: id.clone(),
                 address: cfg.address.clone(),
+                login_user: cfg.login_user().to_string(),
                 imap_host: cfg.imap_host.clone().unwrap_or_default(),
                 imap_port: cfg.port(),
                 has_credential,

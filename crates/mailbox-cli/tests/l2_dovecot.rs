@@ -612,6 +612,52 @@ fn run_with_password(w: &World, args: &[&str], password: &str) -> (String, i32) 
     )
 }
 
+/// §9/§12: plenty of providers separate the login name from the address —
+/// a shared mailbox, a `domain\user` login, an account whose address is an
+/// alias. `imap_user` is what the server is told; `address` is what the mail
+/// says.
+///
+/// The seeded mailbox belongs to the *login*, so this only passes if the login
+/// name reached the server. Sending the address instead would authenticate
+/// fine against a server that takes any username and then sync somebody else's
+/// empty mailbox — which is exactly the failure that looks like "sync is
+/// broken" and is not.
+#[test]
+fn a_login_name_may_differ_from_the_address() {
+    l2_or_skip!();
+    let mut w = World::with_separate_login();
+    assert_ne!(w.user, w.login);
+    w.seed(BASIC);
+
+    let result = w.sync();
+    assert_eq!(result["synced"][0]["messages_added"], 3);
+    assert!(w.has("inv42@example.com"));
+
+    // And the contract says which name was used, so "wrong username" is
+    // distinguishable from "wrong password" without reading a trace.
+    let accounts = w.json(&["accounts"]);
+    assert_eq!(accounts["accounts"][0]["login_user"], w.login);
+    assert_eq!(accounts["accounts"][0]["address"], w.user);
+
+    let tested = w.json(&["accounts", "test"]);
+    assert_eq!(tested["login_user"], w.login);
+    assert_eq!(tested["authenticated"], true);
+}
+
+/// Without `imap_user`, the address is the login. The default has to keep
+/// working, or every ordinary account breaks.
+#[test]
+fn the_address_is_the_login_by_default() {
+    l2_or_skip!();
+    let mut w = World::new();
+    assert_eq!(w.user, w.login);
+    w.seed(BASIC);
+    w.sync();
+
+    let accounts = w.json(&["accounts"]);
+    assert_eq!(accounts["accounts"][0]["login_user"], w.user);
+}
+
 /// `accounts test` reports which of §5.3's fast paths this server offers.
 #[test]
 fn accounts_test_reports_the_sync_path() {

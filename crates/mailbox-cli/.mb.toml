@@ -1,0 +1,8 @@
+[accounts.ps]
+address = "peter@zarquon.se"
+imap_host = "mail.zarquon.se"
+imap_user = "zarq"
+imap_port = 993
+imap_security = "tls"
+require_tls = false
+

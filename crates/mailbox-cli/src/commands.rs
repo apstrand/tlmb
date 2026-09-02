@@ -304,6 +304,7 @@ fn accounts_list(ctx: &Ctx<'_>) -> Result<()> {
             let mut table = Table::new(vec![
                 Column::new("account").min(10),
                 Column::new("address").flexible().min(20),
+                Column::new("login").min(10),
                 Column::new("server").min(20),
                 Column::new("credential").min(10),
             ]);
@@ -311,6 +312,13 @@ fn accounts_list(ctx: &Ctx<'_>) -> Result<()> {
                 table.push(vec![
                     a.id.clone(),
                     a.address.clone(),
+                    // Repeating the address in every row would be noise; the
+                    // column earns its width only when it says something.
+                    if a.login_user == a.address {
+                        ctx.out.dim("(address)")
+                    } else {
+                        a.login_user.clone()
+                    },
                     format!("{}:{}", a.imap_host, a.imap_port),
                     if a.has_credential {
                         ctx.out.paint("ok", GREEN)
@@ -365,6 +373,7 @@ fn accounts_test(ctx: &Ctx<'_>, account: Option<&str>) -> Result<()> {
     let payload = serde_json::json!({
         "account": session.account_id,
         "address": cfg.address,
+        "login_user": cfg.login_user(),
         "server": format!("{host}:{}", cfg.port()),
         "authenticated": true,
         "capabilities": caps,
@@ -382,10 +391,11 @@ fn accounts_test(ctx: &Ctx<'_>, account: Option<&str>) -> Result<()> {
         ctx.out.reply("accounts test", &payload)?;
     } else {
         ctx.out.print(format!(
-            "{} {} at {}\n  {} folders\n  sync path: {}\n  capabilities: {}",
+            "{} {} at {}\n  logged in as: {}\n  {} folders\n  sync path: {}\n  capabilities: {}",
             ctx.out.paint("ok", GREEN),
             cfg.address,
             conn_cfg.host,
+            cfg.login_user(),
             folders.len(),
             payload["sync_path"].as_str().unwrap_or(""),
             caps.join(" "),
