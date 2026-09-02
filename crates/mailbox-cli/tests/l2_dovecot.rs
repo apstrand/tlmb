@@ -612,6 +612,80 @@ fn run_with_password(w: &World, args: &[&str], password: &str) -> (String, i32) 
     )
 }
 
+/// §6.1: `folders --remote` answers "what is on the server, and how big is it"
+/// without syncing.
+///
+/// The properties that make it worth having are that it needs no store and
+/// creates none — so it works on an account that has never synced, which is
+/// exactly when the question gets asked.
+#[test]
+fn remote_folders_lists_the_server_without_syncing() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+
+    let remote = w.json(&["folders", "--remote"]);
+    let folders = remote["folders"].as_array().expect("folders");
+
+    let inbox = folders
+        .iter()
+        .find(|f| f["path"] == "INBOX")
+        .expect("an INBOX");
+    assert_eq!(
+        inbox["total"], 2,
+        "counts come from STATUS, not from a sync"
+    );
+    assert_eq!(inbox["unread"], 1);
+    assert_eq!(inbox["special_use"], "inbox");
+
+    let archive = folders
+        .iter()
+        .find(|f| f["path"] == "Archive")
+        .expect("an Archive");
+    assert_eq!(archive["total"], 1);
+
+    // Inbox first, then the other special-use folders — the same order the
+    // local listing uses, so the two views of one mailbox agree.
+    assert_eq!(folders[0]["path"], "INBOX");
+
+    // Nothing was written: the store still does not exist, and the local
+    // listing is still empty.
+    assert!(
+        !w.state.join("test/meta.db").exists(),
+        "a remote listing must not create a store"
+    );
+    let local = w.json(&["folders"]);
+    assert!(local["folders"].as_array().unwrap().is_empty());
+}
+
+/// And after a sync the two agree about what is there.
+#[test]
+fn remote_and_local_folder_listings_agree_after_a_sync() {
+    l2_or_skip!();
+    let mut w = World::new();
+    w.seed(BASIC);
+    w.sync();
+
+    let names = |v: &serde_json::Value| -> Vec<(String, u64, u64)> {
+        v["folders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["path"].as_str().unwrap().to_string(),
+                    f["total"].as_u64().unwrap(),
+                    f["unread"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        names(&w.json(&["folders", "--remote"])),
+        names(&w.json(&["folders"]))
+    );
+}
+
 /// §9/§12: plenty of providers separate the login name from the address —
 /// a shared mailbox, a `domain\user` login, an account whose address is an
 /// alias. `imap_user` is what the server is told; `address` is what the mail

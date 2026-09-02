@@ -95,7 +95,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Ls(args) => commands::ls(&ctx, args),
         Command::Show(args) => commands::show(&ctx, args),
         Command::Search(args) => commands::search(&ctx, args),
-        Command::Folders => commands::folders(&ctx),
+        Command::Folders(args) => commands::folders(&ctx, args),
         Command::Accounts(args) => commands::accounts(&ctx, args),
         Command::Sync(args) => commands::sync(&ctx, args),
         Command::Status => commands::status(&ctx),

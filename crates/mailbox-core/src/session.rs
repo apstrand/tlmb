@@ -9,7 +9,8 @@
 use std::path::PathBuf;
 
 use mailbox_api::{
-    Account, AccountList, AccountStatus, FolderList, MessageList, ShowResult, Status, SyncResult,
+    Account, AccountList, AccountStatus, Folder, FolderList, MessageList, ShowResult, Status,
+    SyncResult,
 };
 
 use crate::clock::{format_rfc3339, Clock};
@@ -192,6 +193,77 @@ impl Session {
         })
     }
 
+    /// What the *server* holds, with counts, without syncing (§6.1).
+    ///
+    /// Answers "what is up there, and how big is it" before committing to a
+    /// sync. It writes nothing: no folder is created locally, no message is
+    /// fetched, and the store is not touched at all — so it works on an account
+    /// that has never synced.
+    pub fn remote_folders(&self) -> Result<FolderList> {
+        let mut client = self.connect()?;
+        let listed = client.list_folders_with_counts();
+        let _ = client.logout();
+
+        let mut listed = listed?;
+        // The same order the local listing uses — inbox first, then the other
+        // special-use folders, then the rest by path. Servers return LIST in
+        // whatever order they please, and a `--remote` listing that disagreed
+        // with the local one about where the inbox goes would be a needless
+        // difference between two views of the same mailbox.
+        listed.sort_by(|a, b| {
+            (a.record.rank(), &a.record.path).cmp(&(b.record.rank(), &b.record.path))
+        });
+
+        Ok(FolderList {
+            folders: listed
+                .into_iter()
+                .map(|f| Folder {
+                    account: self.account_id.clone(),
+                    path: f.record.path,
+                    name: f.record.name,
+                    special_use: f.record.special_use,
+                    // A server that would not give a count reports zero rather
+                    // than a missing field: the contract's counts are not
+                    // optional, and a folder that cannot hold mail genuinely
+                    // holds none.
+                    total: f.total.unwrap_or(0),
+                    unread: f.unread.unwrap_or(0),
+                    selectable: f.record.selectable,
+                })
+                .collect(),
+        })
+    }
+
+    /// Opens an authenticated connection for this account.
+    ///
+    /// Shared by `sync`, `accounts test`, and `folders --remote`, so the TLS
+    /// policy of §9 is decided in exactly one place.
+    pub fn connect(&self) -> Result<Client> {
+        let cfg = self.account_config()?.clone();
+        let host = cfg.imap_host.clone().ok_or_else(|| {
+            Error::usage(format!(
+                "account `{}` has no imap_host; autoconfig discovery lands with `accounts add`",
+                self.account_id
+            ))
+        })?;
+        let credential = crate::credentials::resolve(&self.account_id, &cfg)?;
+
+        let conn_cfg = ConnectionConfig {
+            host: host.clone(),
+            port: cfg.port(),
+            security: cfg.security(),
+            // §9: plaintext is refused unless the host is loopback *and* the
+            // user opted in. Both halves are checked here, so a config that
+            // says `require_tls = false` for a public host still gets TLS.
+            require_tls: cfg.require_tls || !is_loopback(&host),
+            timeout: std::time::Duration::from_millis(self.timeout_ms),
+        };
+
+        let mut client = Client::connect(&conn_cfg, self.tracer.clone())?;
+        client.login(cfg.login_user(), &credential)?;
+        Ok(client)
+    }
+
     pub fn accounts(&self) -> Result<AccountList> {
         let mut out = Vec::new();
         for (id, cfg) in &self.config.accounts {
@@ -235,29 +307,7 @@ impl Session {
 
     /// One sync pass to quiescence (§6.7's `sync --once`).
     pub fn sync(&mut self, opts: &SyncOptions) -> Result<SyncResult> {
-        let cfg = self.account_config()?.clone();
-        let host = cfg.imap_host.clone().ok_or_else(|| {
-            Error::usage(format!(
-                "account `{}` has no imap_host; autoconfig discovery lands with `accounts add`",
-                self.account_id
-            ))
-        })?;
-        let credential = crate::credentials::resolve(&self.account_id, &cfg)?;
-
-        let conn_cfg = ConnectionConfig {
-            host,
-            port: cfg.port(),
-            security: cfg.security(),
-            // §9: plaintext is refused unless the host is loopback *and* the
-            // user opted in. Both halves are checked here, so a config that
-            // says `require_tls = false` for a public host still gets TLS.
-            require_tls: cfg.require_tls || !is_loopback(cfg.imap_host.as_deref().unwrap_or("")),
-            timeout: std::time::Duration::from_millis(self.timeout_ms),
-        };
-
-        let mut client = Client::connect(&conn_cfg, self.tracer.clone())?;
-        client.login(cfg.login_user(), &credential)?;
-
+        let mut client = self.connect()?;
         let clock = self.clock.clone();
         let report = sync_once(&mut client, &mut self.store, opts, &clock);
         // Log out even when the pass failed: leaving a connection open counts

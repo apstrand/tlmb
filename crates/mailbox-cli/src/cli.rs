@@ -119,7 +119,7 @@ pub enum Command {
     Search(SearchArgs),
 
     /// List folders with counts.
-    Folders,
+    Folders(FoldersArgs),
 
     /// List accounts, or test one.
     Accounts(AccountsArgs),
@@ -214,6 +214,17 @@ pub struct ShowArgs {
     /// Print headers only.
     #[arg(long)]
     pub headers_only: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct FoldersArgs {
+    /// Ask the server instead of reading the local store.
+    ///
+    /// Shows what is up there and how big it is without syncing anything —
+    /// nothing is fetched and nothing is written, so it works on an account
+    /// that has never synced.
+    #[arg(long, short = 'r')]
+    pub remote: bool,
 }
 
 #[derive(Debug, Args)]

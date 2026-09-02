@@ -12,8 +12,8 @@ use mailbox_core::store::read::{ListOptions, Sort};
 use mailbox_core::Tracer;
 
 use crate::cli::{
-    AccountsAction, AccountsArgs, DebugAction, DebugArgs, FixtureAction, Format, GlobalFlags,
-    LsArgs, SchemaArgs, SearchArgs, ShowArgs, SyncArgs,
+    AccountsAction, AccountsArgs, DebugAction, DebugArgs, FixtureAction, FoldersArgs, Format,
+    GlobalFlags, LsArgs, SchemaArgs, SearchArgs, ShowArgs, SyncArgs,
 };
 use crate::format;
 use crate::output::{maybe_page, Out, GREEN, YELLOW};
@@ -248,9 +248,15 @@ fn render_show_human(ctx: &Ctx<'_>, result: &ShowResult, args: &ShowArgs) {
     }
 }
 
-pub fn folders(ctx: &Ctx<'_>) -> Result<()> {
+pub fn folders(ctx: &Ctx<'_>, args: &FoldersArgs) -> Result<()> {
     let session = ctx.session()?;
-    let list = session.folders()?;
+    // `--remote` asks the server. It reads nothing from the store and writes
+    // nothing to it, so it is not gated by agent mode.
+    let list = if args.remote {
+        session.remote_folders()?
+    } else {
+        session.folders()?
+    };
 
     match ctx.out.mode {
         crate::output::Mode::Json => ctx.out.reply("folders", &list)?,
@@ -276,8 +282,12 @@ pub fn folders(ctx: &Ctx<'_>) -> Result<()> {
                 ]);
             }
             if table.is_empty() {
-                ctx.out
-                    .print(ctx.out.dim("no folders yet — run `mailbox sync`"));
+                let hint = if args.remote {
+                    "the server lists no folders"
+                } else {
+                    "no folders yet — run `mailbox sync`, or `mailbox folders --remote` to ask the server"
+                };
+                ctx.out.print(ctx.out.dim(hint));
             } else {
                 maybe_page(ctx.out, &table.render(ctx.out));
             }
@@ -342,29 +352,16 @@ fn accounts_list(ctx: &Ctx<'_>) -> Result<()> {
 /// It says which of §5.3's fast paths will be available, because "why is my
 /// sync slow" almost always answers to "this server has no CONDSTORE".
 fn accounts_test(ctx: &Ctx<'_>, account: Option<&str>) -> Result<()> {
-    use mailbox_core::imap::{Client, ConnectionConfig};
-
     let mut opts = ctx.opts.clone();
     if let Some(a) = account {
         opts.account = Some(a.to_string());
     }
     let session = Session::open(&opts, ctx.tracer.clone(), ctx.clock.clone())?;
     let cfg = session.account_config()?.clone();
-    let host = cfg
-        .imap_host
-        .clone()
-        .ok_or_else(|| Error::usage("this account has no imap_host configured"))?;
-    let credential = mailbox_core::credentials::resolve(&session.account_id, &cfg)?;
 
-    let conn_cfg = ConnectionConfig {
-        host: host.clone(),
-        port: cfg.port(),
-        security: cfg.security(),
-        require_tls: cfg.require_tls,
-        timeout: std::time::Duration::from_millis(ctx.global.timeout.unwrap_or(30_000)),
-    };
-    let mut client = Client::connect(&conn_cfg, ctx.tracer.clone())?;
-    client.login(cfg.login_user(), &credential)?;
+    // The same connect the sync path uses, so this tests what a sync will
+    // actually do rather than an approximation of it.
+    let mut client = session.connect()?;
     let folders = client.list_folders()?;
     let caps: Vec<String> = client.capabilities().iter().cloned().collect();
     let qresync = client.qresync();
@@ -374,7 +371,7 @@ fn accounts_test(ctx: &Ctx<'_>, account: Option<&str>) -> Result<()> {
         "account": session.account_id,
         "address": cfg.address,
         "login_user": cfg.login_user(),
-        "server": format!("{host}:{}", cfg.port()),
+        "server": format!("{}:{}", cfg.imap_host.clone().unwrap_or_default(), cfg.port()),
         "authenticated": true,
         "capabilities": caps,
         "folders": folders.len(),
@@ -394,7 +391,7 @@ fn accounts_test(ctx: &Ctx<'_>, account: Option<&str>) -> Result<()> {
             "{} {} at {}\n  logged in as: {}\n  {} folders\n  sync path: {}\n  capabilities: {}",
             ctx.out.paint("ok", GREEN),
             cfg.address,
-            conn_cfg.host,
+            cfg.imap_host.clone().unwrap_or_default(),
             cfg.login_user(),
             folders.len(),
             payload["sync_path"].as_str().unwrap_or(""),

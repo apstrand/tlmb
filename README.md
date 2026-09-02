@@ -23,6 +23,7 @@ than retrofitted.
 | Local JWZ threading, narrowed subject grouping | done (§5.6) |
 | Query language, with unknown keys as errors | done (§6.2) |
 | `ls`, `show`, `search`, `folders`, `accounts`, `sync`, `status`, `schema` | done (§6.1) |
+| `folders --remote` — what the server holds, without syncing | done (§6.1) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
@@ -103,11 +104,17 @@ mailbox accounts test       # connect and authenticate for real
 Then:
 
 ```sh
+mailbox folders --remote     # what is on the server, before syncing anything
 mailbox sync --once
 mailbox ls
 mailbox search 'from:alice has:attachment after:-7d'
 mailbox show ^ --format=md --strip-quotes
 ```
+
+`folders --remote` asks the server instead of reading the local store: it lists
+every folder with its message and unread counts, fetches nothing, and writes
+nothing — so it works on an account that has never synced. `folders` without it
+reads the local store, which is empty until the first sync.
 
 To keep a test account away from your real one, set `MAILBOX_CONFIG` and
 `MAILBOX_STATE_DIR`: they relocate every path the process touches (§6.7), so

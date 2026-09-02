@@ -36,6 +36,40 @@ pub struct Fetched {
     pub body: Option<Vec<u8>>,
 }
 
+/// A folder as the server describes it, before anything is stored.
+#[derive(Debug, Clone)]
+pub struct RemoteFolder {
+    pub record: FolderRecord,
+    /// `MESSAGES` from `STATUS`. `None` when the server would not say — a
+    /// container folder, or one that refused.
+    pub total: Option<u32>,
+    /// `UNSEEN` from `STATUS`.
+    pub unread: Option<u32>,
+}
+
+impl RemoteFolder {
+    fn new(record: FolderRecord, counts: Option<(u32, u32)>) -> RemoteFolder {
+        RemoteFolder {
+            record,
+            total: counts.map(|c| c.0),
+            unread: counts.map(|c| c.1),
+        }
+    }
+}
+
+fn status_counts(attrs: &[imap_proto::StatusAttribute]) -> (u32, u32) {
+    let mut total = 0;
+    let mut unread = 0;
+    for a in attrs {
+        match a {
+            imap_proto::StatusAttribute::Messages(n) => total = *n,
+            imap_proto::StatusAttribute::Unseen(n) => unread = *n,
+            _ => {}
+        }
+    }
+    (total, unread)
+}
+
 /// What a `SELECT`/`EXAMINE` told us.
 #[derive(Debug, Clone, Default)]
 pub struct Selected {
@@ -128,29 +162,130 @@ impl Client {
             else {
                 continue;
             };
-            let path = if self.utf8_accepted {
-                name.to_string()
-            } else {
-                utf7::decode(name)
-            };
-            let delim = delimiter.as_ref().map(|d| d.to_string());
-            let leaf = match &delim {
-                Some(d) if !d.is_empty() => {
-                    path.rsplit(d.as_str()).next().unwrap_or(&path).to_string()
-                }
-                _ => path.clone(),
-            };
-            let selectable = is_selectable(name_attributes);
-            out.push(FolderRecord {
-                special_use: special_use(name_attributes, &path),
-                path,
-                name: leaf,
-                delimiter: delim,
-                selectable,
-                subscribed: true,
-            });
+            out.push(self.folder_record(name_attributes, delimiter, name));
         }
         Ok(out)
+    }
+
+    /// Turns one `LIST` response into a folder record: the name decoded from
+    /// modified UTF-7, the leaf split on the server's own delimiter, and the
+    /// special-use resolved.
+    fn folder_record(
+        &self,
+        name_attributes: &[NameAttribute<'static>],
+        delimiter: &Option<std::borrow::Cow<'static, str>>,
+        name: &str,
+    ) -> FolderRecord {
+        let path = if self.utf8_accepted {
+            name.to_string()
+        } else {
+            utf7::decode(name)
+        };
+        let delim = delimiter.as_ref().map(|d| d.to_string());
+        let leaf = match &delim {
+            Some(d) if !d.is_empty() => path.rsplit(d.as_str()).next().unwrap_or(&path).to_string(),
+            _ => path.clone(),
+        };
+        FolderRecord {
+            special_use: special_use(name_attributes, &path),
+            selectable: is_selectable(name_attributes),
+            path,
+            name: leaf,
+            delimiter: delim,
+            subscribed: true,
+        }
+    }
+
+    /// Lists every folder *with its message counts*, without selecting any of
+    /// them and without touching the local store.
+    ///
+    /// This is what answers "what is on the server, and how big is it" before
+    /// committing to a sync. `LIST-STATUS` (RFC 5819) folds the counts into the
+    /// one `LIST` round trip where the server offers it; where it does not, a
+    /// `STATUS` per folder is the fallback — more round trips, but `STATUS` is
+    /// IMAP4rev1 core, so the counts are always obtainable.
+    pub fn list_folders_with_counts(&mut self) -> Result<Vec<RemoteFolder>> {
+        if self.has("LIST-STATUS") {
+            return self.list_status();
+        }
+
+        let mut out = Vec::new();
+        for record in self.list_folders()? {
+            // `STATUS` on a container folder is an error on most servers, and
+            // the honest count for something that cannot hold mail is zero.
+            let counts = if record.selectable {
+                self.status(&record.path)?
+            } else {
+                None
+            };
+            out.push(RemoteFolder::new(record, counts));
+        }
+        Ok(out)
+    }
+
+    fn list_status(&mut self) -> Result<Vec<RemoteFolder>> {
+        let special_use = if self.has("SPECIAL-USE") {
+            "SPECIAL-USE "
+        } else {
+            ""
+        };
+        let result = self
+            .conn
+            .command(&format!(
+                "LIST \"\" \"*\" RETURN ({special_use}STATUS (MESSAGES UNSEEN))"
+            ))?
+            .require_ok("LIST")?;
+
+        // The two response kinds interleave, and the STATUS names arrive in the
+        // server's own encoding — so they are matched on the wire name before
+        // anything is decoded.
+        let mut counts: std::collections::HashMap<String, (u32, u32)> = Default::default();
+        let mut records = Vec::new();
+        for r in &result.responses {
+            match r {
+                Response::MailboxData(MailboxDatum::Status { mailbox, status }) => {
+                    counts.insert(mailbox.to_string(), status_counts(status));
+                }
+                Response::MailboxData(MailboxDatum::List {
+                    name_attributes,
+                    delimiter,
+                    name,
+                }) => {
+                    records.push((
+                        name.to_string(),
+                        self.folder_record(name_attributes, delimiter, name),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(records
+            .into_iter()
+            .map(|(wire_name, record)| {
+                let counts = counts.get(&wire_name).copied();
+                RemoteFolder::new(record, counts)
+            })
+            .collect())
+    }
+
+    /// `STATUS` for one folder: message and unseen counts, without selecting it.
+    pub fn status(&mut self, path: &str) -> Result<Option<(u32, u32)>> {
+        let encoded = self.encode_mailbox(path);
+        let result = self
+            .conn
+            .command(&format!("STATUS {encoded} (MESSAGES UNSEEN)"))?;
+        if !result.ok() {
+            // A folder that refuses STATUS is not a failure of the listing —
+            // report the folder without counts rather than losing the row.
+            return Ok(None);
+        }
+        for r in &result.responses {
+            if let Response::MailboxData(MailboxDatum::Status { status, .. }) = r {
+                return Ok(Some(status_counts(status)));
+            }
+        }
+        Ok(None)
     }
 
     /// Opens a folder read-only.
