@@ -817,6 +817,53 @@ pub fn debug(ctx: &Ctx<'_>, args: &DebugArgs) -> Result<()> {
             Ok(())
         }
 
+        DebugAction::Generate {
+            messages,
+            seed,
+            folders,
+        } => {
+            ctx.confirm("debug generate")?;
+            let mut session = ctx.session()?;
+            let report = session
+                .store_mut()
+                .generate_corpus(&mailbox_core::store::CorpusSpec {
+                    messages: *messages,
+                    seed: *seed,
+                    folders: *folders,
+                    ..Default::default()
+                })?;
+            let payload = serde_json::json!({
+                "messages": report.messages,
+                "threads": report.threads,
+                "folders": report.folders,
+                "elapsed_ms": report.elapsed_ms,
+            });
+            if ctx.out.is_structured() {
+                ctx.out.reply("debug generate", &payload)?;
+            } else {
+                ctx.out.print(format!(
+                    "generated {} messages in {} threads across {} folders in {} ms",
+                    report.messages, report.threads, report.folders, report.elapsed_ms
+                ));
+            }
+            Ok(())
+        }
+
+        DebugAction::Bench {
+            samples,
+            baseline,
+            tolerance,
+            save_baseline,
+            budgets,
+        } => bench(
+            ctx,
+            *samples,
+            baseline.as_deref(),
+            *tolerance,
+            save_baseline.as_deref(),
+            *budgets,
+        ),
+
         DebugAction::Replay {
             transcript,
             strict,
@@ -830,6 +877,106 @@ pub fn debug(ctx: &Ctx<'_>, args: &DebugArgs) -> Result<()> {
             fixture(ctx, action)
         }
     }
+}
+
+/// `debug bench` (§14.5): the §10 budgets, measured and compared.
+fn bench(
+    ctx: &Ctx<'_>,
+    samples: u32,
+    baseline: Option<&std::path::Path>,
+    tolerance: f64,
+    save_baseline: Option<&std::path::Path>,
+    budgets: bool,
+) -> Result<()> {
+    let session = ctx.session()?;
+    let report = mailbox_core::bench::run(session.store(), samples)?;
+
+    if let Some(path) = save_baseline {
+        std::fs::write(path, serde_json::to_string_pretty(&report)?)?;
+    }
+
+    let mut regressions = Vec::new();
+    if let Some(path) = baseline {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| Error::usage(format!("{}: {e}", path.display())))?;
+        let previous: mailbox_core::bench::BenchReport = serde_json::from_str(&text)
+            .map_err(|e| Error::usage(format!("{}: {e}", path.display())))?;
+        regressions = report.regressions(&previous, tolerance);
+    }
+
+    let over_budget: Vec<&mailbox_core::bench::Measurement> = report
+        .measurements
+        .iter()
+        .filter(|m| !m.within_budget())
+        .collect();
+
+    if ctx.out.is_structured() {
+        ctx.out.reply(
+            "debug bench",
+            &serde_json::json!({
+                "messages": report.messages,
+                "measurements": report.measurements,
+                "regressions": regressions
+                    .iter()
+                    .map(|r| serde_json::json!({
+                        "name": r.name,
+                        "baseline_ms": r.baseline_ms,
+                        "current_ms": r.current_ms,
+                        "allowed_ms": r.allowed_ms,
+                    }))
+                    .collect::<Vec<_>>(),
+                "over_budget": over_budget.iter().map(|m| &m.name).collect::<Vec<_>>(),
+            }),
+        )?;
+    } else {
+        ctx.out
+            .print(format!("{} messages in the store", report.messages));
+        use crate::table::{Column, Table};
+        let mut table = Table::new(vec![
+            Column::new("operation").flexible().min(20),
+            Column::new("median ms").right().min(9),
+            Column::new("worst ms").right().min(8),
+            Column::new("budget").right().min(7),
+            Column::new("rows").right().min(6),
+        ]);
+        for m in &report.measurements {
+            let budget = match m.budget_ms {
+                Some(b) if m.median_ms > b => ctx.out.paint(&format!("{b:.0}"), YELLOW),
+                Some(b) => ctx.out.dim(&format!("{b:.0}")),
+                None => ctx.out.dim("—"),
+            };
+            table.push(vec![
+                m.name.clone(),
+                format!("{:.2}", m.median_ms),
+                format!("{:.2}", m.worst_ms),
+                budget,
+                m.rows.to_string(),
+            ]);
+        }
+        ctx.out.print(table.render(ctx.out));
+        for r in &regressions {
+            ctx.out.warn(format!("regression: {r}"));
+        }
+    }
+
+    // §14.5: gate on regression by default; absolute budgets are opt-in.
+    if !regressions.is_empty() {
+        return Err(Error::usage(format!(
+            "{} measurement(s) regressed against the baseline",
+            regressions.len()
+        )));
+    }
+    if budgets && !over_budget.is_empty() {
+        return Err(Error::usage(format!(
+            "over the §10 budget: {}",
+            over_budget
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    Ok(())
 }
 
 /// `debug replay` (§14.2's L1): a sync pass driven by a recording.

@@ -62,7 +62,9 @@ impl Sort {
         match self {
             Sort::DateDesc => "m.date DESC, m.id DESC",
             Sort::DateAsc => "m.date ASC, m.id ASC",
-            Sort::UnreadFirst => "(instr(m.flags, ' seen ') > 0) ASC, m.date DESC, m.id DESC",
+            // The generated `seen` column, so this matches `messages_unread`
+            // exactly and the sort becomes an index walk.
+            Sort::UnreadFirst => "m.seen ASC, m.date DESC, m.id DESC",
         }
     }
 
@@ -167,6 +169,40 @@ impl Store {
             cursor,
             total,
         })
+    }
+
+    /// The query plan SQLite would use for a search, as text.
+    ///
+    /// Exposed because timings cannot gate a build on a shared runner (§14.5)
+    /// but *plans* can: they are deterministic, machine-independent, and the
+    /// thing that actually regressed when the unread-first listing turned into
+    /// a full scan and a full sort. Asserting `SCAN messages` never appears is
+    /// a stronger guarantee than any millisecond threshold.
+    pub fn explain_search(&self, node: &Node, opts: &ListOptions) -> Result<String> {
+        let compiled = compile(
+            node,
+            &CompileOptions {
+                account: self.account.clone(),
+                identities: opts.identities.clone(),
+            },
+        );
+        let sql = format!(
+            "SELECT {SUMMARY_COLS} FROM messages m
+             LEFT JOIN folders f ON f.id = m.primary_folder
+             WHERE {} ORDER BY {} LIMIT ?",
+            compiled.sql,
+            opts.sort.order_by()
+        );
+
+        let mut params = compiled.params.clone();
+        params.push(Value::Integer(opts.limit as i64 + 1));
+
+        let mut st = self.conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+        let rows = st.query_map(params_from_iter(params), |r| r.get::<_, String>(3))?;
+        Ok(rows
+            .filter_map(std::result::Result::ok)
+            .collect::<Vec<_>>()
+            .join("\n"))
     }
 
     /// Resolves an id or an unambiguous prefix to a full id (§5.2).
@@ -355,11 +391,14 @@ impl Store {
     }
 
     pub fn unread_count(&self) -> Result<u64> {
-        Ok(self.conn.query_row(
-            "SELECT count(*) FROM messages WHERE instr(flags, ' seen ') = 0",
-            [],
-            |r| r.get::<_, i64>(0),
-        )? as u64)
+        // The generated `seen` column, so this is an index range rather than a
+        // scan of every message. At a million messages the difference is the
+        // whole of what `mailbox status` costs.
+        Ok(self
+            .conn
+            .query_row("SELECT count(*) FROM messages WHERE seen = 0", [], |r| {
+                r.get::<_, i64>(0)
+            })? as u64)
     }
 
     pub fn folder_count(&self) -> Result<u32> {

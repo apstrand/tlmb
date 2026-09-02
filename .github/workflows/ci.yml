@@ -61,6 +61,22 @@ jobs:
           MAILBOX_L2_REQUIRED: "1"
         run: cargo test -p mailbox-cli --test l2_dovecot
 
+  # §14.5's performance suite. The plan assertions gate here because a query
+  # plan is deterministic and machine-independent; the timings do not, because
+  # "shared CI runners are too noisy to gate on" and a suite that goes red for
+  # reasons the author cannot fix trains everyone to ignore red suites.
+  #
+  # A dedicated runner should run the same tests with
+  # MAILBOX_PERF_MESSAGES=1000000 and MAILBOX_PERF_BUDGETS=1.
+  perf:
+    name: Performance — query plans
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p mailbox-core --test perf
+
   # §10's binary-size budget. Not a benchmark — those need a dedicated runner
   # (§14.5) and arrive with M3's perf suite — but the one budget a shared runner
   # can measure honestly.

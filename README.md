@@ -34,6 +34,7 @@ than retrofitted.
 | Crash-only oracle: `MAILBOX_CRASH_AT` and its supervisor | done (§14.3, M2) |
 | L3 adversarial IMAP server and the §14.2 recovery scenarios | done (§14.2, M2) |
 | L1 transcript record and replay | done (§14.2, M3) |
+| Generated 1M corpus and the §10 performance suite | done (§14.5, M3) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
@@ -249,6 +250,7 @@ cargo test -p mailbox-cli --test contract     # the JSON contract, no server
 cargo test -p mailbox-cli --test l3_smtp      # L3: SMTP faults, no Docker
 cargo test -p mailbox-cli --test l3_imap      # L3: IMAP faults, no Docker
 cargo test -p mailbox-cli --test l1_replay    # L1: transcript replay, no server
+cargo test -p mailbox-core --test perf        # §14.5: query plans, no dedicated runner
 cargo test -p mailbox-cli --test crash_only   # the crash-only oracle, no Docker
 cargo test -p mailbox-cli --test multi_account # several accounts, no Docker
 cargo test -p mailbox-cli --test l2_dovecot   # L2: a real Dovecot in Docker
@@ -272,6 +274,30 @@ cargo test -p mailbox-cli --test record_corpus -- --ignored
 Those recordings came from the in-tree L3 server, because Docker is not reachable
 here; §14.2 wants them from real servers, and re-recording against Dovecot is a
 one-command job once it is.
+
+### Performance
+
+`mailbox debug generate --messages 1000000` fills a store from a seeded,
+deterministic generator (§14.1), and `mailbox debug bench` measures the §10
+budgets against it. Measured on this machine at a million messages:
+
+| Operation | Measured | §10 budget |
+|---|---|---|
+| cold `mailbox ls` | 2.6 ms | 100 ms |
+| structured search | 0.9 ms | 30 ms |
+| full-text search, first page | 12 ms | 100 ms |
+| open a cached thread | 0.02 ms | 50 ms |
+| peak RSS for a listing | 9.7 MB | 80 MB |
+| binary, stripped | 7.8 MB | 25 MB |
+
+The suite that runs in CI gates on **query plans**, not timings: a plan is
+deterministic and machine-independent, and §14.5 is explicit that shared runners
+are too noisy to gate on. That is not a weaker test — the regression it caught
+was `ls` falling back to a full table scan and a full sort, which no millisecond
+threshold on a shared runner would have caught reliably.
+
+`MAILBOX_PERF_MESSAGES=1000000 MAILBOX_PERF_BUDGETS=1` runs the real thing on a
+dedicated runner.
 
 `MAILBOX_CRASH_AT=<event>[:n]` kills the process at a named trace event with no
 cleanup at all, which is what turns §14.3's crash-only oracle into a supervisor

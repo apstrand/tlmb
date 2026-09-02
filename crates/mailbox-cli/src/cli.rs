@@ -473,6 +473,41 @@ pub enum DebugAction {
     Query { query: String },
     /// Rebuild every thread from scratch.
     Rethread,
+    /// Fill the store with a generated corpus (§14.1, §14.5).
+    ///
+    /// Deterministic from `--seed`, so two machines measure the same mailbox.
+    Generate {
+        #[arg(long, default_value_t = 1_000_000)]
+        messages: u64,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        #[arg(long, default_value_t = 8)]
+        folders: u32,
+    },
+
+    /// Measure the §10 budgets against the current store (§14.5).
+    Bench {
+        /// Timed runs per operation. The median is reported.
+        #[arg(long, default_value_t = 9)]
+        samples: u32,
+        /// Compare against a recorded baseline and fail on a regression.
+        #[arg(long)]
+        baseline: Option<std::path::PathBuf>,
+        /// How much slower than the baseline is tolerated, as a fraction.
+        #[arg(long, default_value_t = 0.10)]
+        tolerance: f64,
+        /// Write this run out as the new baseline.
+        #[arg(long)]
+        save_baseline: Option<std::path::PathBuf>,
+        /// Also fail when a measurement exceeds its absolute §10 budget.
+        ///
+        /// Off by default: §14.5 gates on regression rather than on the
+        /// absolute number, so the numbers stay honest instead of being retuned
+        /// whenever they hurt.
+        #[arg(long)]
+        budgets: bool,
+    },
+
     /// Replay a recorded IMAP conversation against the sync engine (§14.2, L1).
     ///
     /// No network, no server: the engine under test is the same code that talks

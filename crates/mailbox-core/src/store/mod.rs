@@ -10,6 +10,7 @@
 //! only lists mail takes the WAL read path and never contends with the TUI.
 
 pub mod blobs;
+pub mod corpus;
 pub mod ingest;
 pub mod ops;
 pub mod outbox;
@@ -27,6 +28,7 @@ use crate::error::{Error, Result};
 use crate::trace::{event, Tracer};
 
 pub use blobs::Blobs;
+pub use corpus::{CorpusReport, CorpusSpec};
 pub use ops::{FlagChange, Op, OpKind, OpState};
 pub use outbox::{NewOutboxEntry, OutboxEntry, OutboxState};
 pub use state::{FolderState, SyncState};
@@ -301,7 +303,7 @@ impl Store {
             "UPDATE folders SET
                 total = (SELECT count(*) FROM placements p WHERE p.folder_id = folders.id),
                 unread = (SELECT count(*) FROM placements p
-                          WHERE p.folder_id = folders.id AND instr(p.flags, ' seen ') = 0)",
+                          WHERE p.folder_id = folders.id AND p.seen = 0)",
         )?;
         Ok(())
     }

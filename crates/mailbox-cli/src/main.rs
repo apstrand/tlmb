@@ -143,6 +143,7 @@ fn needs_write(cmd: &Command) -> bool {
             cli::DebugAction::Fixture { .. }
                 | cli::DebugAction::Rethread
                 | cli::DebugAction::Replay { .. }
+                | cli::DebugAction::Generate { .. }
         ),
         _ => false,
     }

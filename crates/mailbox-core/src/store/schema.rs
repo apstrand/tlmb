@@ -13,7 +13,7 @@ use crate::trace::{event, Tracer};
 /// Bumped whenever [`MIGRATIONS`] grows. A store from the future is refused
 /// rather than opened read-only: a newer version may have written columns this
 /// build would silently drop on the next write.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Each entry is applied in order inside one transaction. Migrations are
 /// append-only — editing an existing one changes what an already-migrated store
@@ -295,6 +295,33 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX outbox_state ON outbox(state, next_attempt);
     CREATE UNIQUE INDEX outbox_idempotency ON outbox(idempotency_key)
         WHERE idempotency_key IS NOT NULL;
+    "#,
+    // v4 — M3: make the default listing indexable.
+    //
+    // `ls` sorts unread-first (§6.1), which was written as
+    // `ORDER BY instr(flags, ' seen ') > 0`. An expression cannot be served by
+    // an index, so every listing was a full table scan followed by a full sort:
+    // fine at a thousand messages, and 82% of §10's 30 ms budget at a hundred
+    // thousand — measured, not guessed, by `debug bench`.
+    r#"
+    -- A *generated* column rather than a maintained one. The value is defined
+    -- by `flags` and derived from it, so it cannot drift the way a column
+    -- updated by hand in four places eventually does. VIRTUAL costs nothing to
+    -- store and can still be indexed, which is the only property that matters
+    -- here.
+    ALTER TABLE messages
+        ADD COLUMN seen INTEGER GENERATED ALWAYS AS (instr(flags, ' seen ') > 0) VIRTUAL;
+
+    -- The exact key `ls` orders by, so SQLite walks the index and stops at the
+    -- page size instead of sorting the whole mailbox to return fifty rows.
+    CREATE INDEX messages_unread ON messages(seen, date DESC, id DESC);
+
+    -- The same trick for the per-folder unread counts, which `sync` recomputes
+    -- every pass and `status` reads. Without it, counting unread mail in eight
+    -- folders is eight scans of a million rows.
+    ALTER TABLE placements
+        ADD COLUMN seen INTEGER GENERATED ALWAYS AS (instr(flags, ' seen ') > 0) VIRTUAL;
+    CREATE INDEX placements_unread ON placements(folder_id, seen);
 
     "#,
 ];

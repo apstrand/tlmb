@@ -82,8 +82,15 @@ impl Compiler<'_> {
                 format!("(m.subject LIKE {p} ESCAPE '\\')")
             }
 
-            // Flags are stored space-delimited and space-padded, so a
-            // containment test on ` seen ` cannot match `unseen`.
+            // `seen` has its own generated column and index, because
+            // `is:unread` is in most queries a user runs and the sort key too.
+            // Everything else is a containment test on the packed flags, which
+            // are space-delimited *and* space-padded so ` seen ` cannot match
+            // `unseen`.
+            Node::Flag { name, want } if name == crate::flags::SEEN => {
+                let p = self.push(i64::from(*want));
+                format!("(m.seen = {p})")
+            }
             Node::Flag { name, want } => {
                 let p = self.push(format!(" {} ", name.to_ascii_lowercase()));
                 if *want {
