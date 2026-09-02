@@ -347,6 +347,12 @@ but they are inert unless asked for, and `debug` is hidden from `--help`.
   all derived from one injected source each, never from ambient `now()` or
   thread-local randomness. Any code path that reaches for the ambient version is
   a bug the lint catches.
+- **`MAILBOX_CRASH_AT=<event>[:n]`** — kill the process at a named trace event,
+  the way a power cut does: no destructors, no `atexit`, nothing flushed. This
+  is what makes the crash-only oracle (§14.3) a supervisor loop rather than a
+  hope, and it works with or without `--trace` — a hook that silently did
+  nothing unless tracing was on is how a crash suite goes green while testing
+  nothing.
 - **`debug fixture load <file>`** — seed a store or an account from a fixture
   manifest (§14.1).
 - **`MAILBOX_STATE_DIR` / `MAILBOX_CONFIG`** — relocate every path the process

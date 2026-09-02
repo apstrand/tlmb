@@ -64,6 +64,10 @@ struct Inner {
     sink: Mutex<Sink>,
     seq: AtomicU64,
     clock: Clock,
+    /// `MAILBOX_CRASH_AT` — the crash-only oracle's hook (§14.3).
+    crash_at: Option<CrashPoint>,
+    /// How many times each event has been seen, for the `:n` form.
+    counts: Mutex<std::collections::HashMap<String, u32>>,
     /// `--trace-bodies`. Off by default: a trace a user can attach to a bug
     /// report must not carry their mail.
     bodies: bool,
@@ -74,7 +78,16 @@ struct Inner {
 
 impl Tracer {
     /// The normal case: every call becomes a branch that does nothing.
+    ///
+    /// The exception is `MAILBOX_CRASH_AT`. The crash-only oracle (§14.3) kills
+    /// at a *trace event*, and if that only worked alongside `--trace` then
+    /// setting the variable without it would be a silent no-op — which is how a
+    /// crash suite goes green while testing nothing. So when the variable is
+    /// set, events are still generated; they simply go nowhere.
     pub fn disabled() -> Tracer {
+        if std::env::var_os("MAILBOX_CRASH_AT").is_some_and(|v| !v.is_empty()) {
+            return Tracer::to_writer(Box::new(std::io::sink()), Clock::from_env(), false, None);
+        }
         Tracer { inner: None }
     }
 
@@ -103,6 +116,8 @@ impl Tracer {
                 }),
                 seq: AtomicU64::new(0),
                 clock,
+                crash_at: CrashPoint::from_env(),
+                counts: Mutex::new(Default::default()),
                 bodies,
                 until,
                 reached: AtomicBool::new(false),
@@ -148,6 +163,20 @@ impl Tracer {
         if inner.until.as_deref() == Some(kind) {
             inner.reached.store(true, Ordering::SeqCst);
         }
+
+        // §14.3's crash-only oracle. The event is written and flushed first, so
+        // the trace records exactly how far the process got before it died.
+        if let Some(point) = &inner.crash_at {
+            let seen = {
+                let mut counts = inner.counts.lock().expect("crash counter");
+                let n = counts.entry(kind.to_string()).or_insert(0);
+                *n += 1;
+                *n
+            };
+            if point.matches(kind, seen) {
+                die_abruptly();
+            }
+        }
     }
 
     /// Convenience for the many events whose payload is one key.
@@ -171,6 +200,52 @@ impl Default for Tracer {
     fn default() -> Self {
         Tracer::disabled()
     }
+}
+
+/// Where `MAILBOX_CRASH_AT` should kill the process.
+///
+/// `MAILBOX_CRASH_AT=smtp.data` dies at the first such event;
+/// `MAILBOX_CRASH_AT=store.txn.commit:3` at the third.
+#[derive(Debug, Clone)]
+struct CrashPoint {
+    event: String,
+    occurrence: u32,
+}
+
+impl CrashPoint {
+    fn from_env() -> Option<CrashPoint> {
+        let raw = std::env::var("MAILBOX_CRASH_AT")
+            .ok()
+            .filter(|v| !v.is_empty())?;
+        let (event, occurrence) = match raw.rsplit_once(':') {
+            Some((e, n)) if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() => {
+                (e.to_string(), n.parse().unwrap_or(1))
+            }
+            _ => (raw, 1),
+        };
+        Some(CrashPoint { event, occurrence })
+    }
+
+    fn matches(&self, kind: &str, seen: u32) -> bool {
+        self.event == kind && self.occurrence == seen
+    }
+}
+
+/// Dies the way a power cut does: no destructors, no `atexit`, no buffered
+/// writes flushed.
+///
+/// `SIGKILL` rather than `abort()` because `abort()` raises `SIGABRT`, which
+/// dumps core — and a crash-only suite that loops over every trace event would
+/// leave hundreds of core files behind on a developer's machine.
+fn die_abruptly() -> ! {
+    // Safety: raising a signal on the current process. There is no state to
+    // corrupt because nothing after this point runs.
+    unsafe {
+        libc::raise(libc::SIGKILL);
+    }
+    // SIGKILL cannot be caught, so this is unreachable; it satisfies the
+    // return type without an unreachable_unchecked.
+    std::process::exit(137)
 }
 
 /// Strips credentials from an IMAP command before it reaches the trace.

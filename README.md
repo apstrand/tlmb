@@ -31,6 +31,7 @@ than retrofitted.
 | Idempotency keys, approval queue, `policy.toml` | done (§6.5, M2) |
 | L3 adversarial SMTP server and its fault matrix | done (§14.2, M2) |
 | Multi-account and the unified inbox | done (§1.5, §7, M2) |
+| Crash-only oracle: `MAILBOX_CRASH_AT` and its supervisor | done (§14.3, M2) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
@@ -38,8 +39,8 @@ than retrofitted.
 
 ### In progress: M2
 
-Writes, sending, and multi-account have landed. Still to come: the crash-only
-oracle, IMAP-side L3 scenarios, and widening L2 to Cyrus and Stalwart.
+Writes, sending, multi-account, and the crash-only oracle have landed. Still to
+come: IMAP-side L3 scenarios, and widening L2 to Cyrus and Stalwart.
 
 ### Not built yet
 
@@ -238,8 +239,18 @@ Under `MAILBOX_AGENT=1`, any state-changing command needs an explicit `--yes`.
 cargo test -p mailbox-api -p mailbox-core     # L0: µs, no server
 cargo test -p mailbox-cli --test contract     # the JSON contract, no server
 cargo test -p mailbox-cli --test l3_smtp      # L3: fault injection, no Docker
+cargo test -p mailbox-cli --test crash_only   # the crash-only oracle, no Docker
+cargo test -p mailbox-cli --test multi_account # several accounts, no Docker
 cargo test -p mailbox-cli --test l2_dovecot   # L2: a real Dovecot in Docker
 ```
+
+`MAILBOX_CRASH_AT=<event>[:n]` kills the process at a named trace event with no
+cleanup at all, which is what turns §14.3's crash-only oracle into a supervisor
+loop: send a message, kill the flush at every event a send emits in turn,
+restart, and check that no outbox entry was lost, no transaction was torn, the
+store still opens, and nothing was delivered twice — except in the one window
+§16 accepts, which is checked by asking the server how many copies it held
+*before* the restart rather than by naming events.
 
 L3 (`crates/mailbox-l3`) is our own server, in-tree, because real servers are
 too well-behaved to reach the recovery paths — no MTA will accept a message and

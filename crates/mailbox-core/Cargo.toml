@@ -25,6 +25,7 @@ toml = "0.9"
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
 getrandom = "0.3"
 nom = "7"
+libc = "0.2.189"
 
 [dev-dependencies]
 getrandom = "0.3"
