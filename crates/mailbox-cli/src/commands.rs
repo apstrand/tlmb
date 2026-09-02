@@ -29,7 +29,7 @@ pub struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn session(&self) -> Result<Session> {
+    pub(crate) fn session(&self) -> Result<Session> {
         Session::open(&self.opts, self.tracer.clone(), self.clock.clone())
     }
 
@@ -52,7 +52,7 @@ impl Ctx<'_> {
     /// do. Treating a non-TTY as a missing confirmation would break
     /// `mailbox sync` from cron, from a systemd timer, and from every script,
     /// which is most of the ways a sync is meant to be run.
-    fn confirm(&self, what: &str) -> Result<()> {
+    pub(crate) fn confirm(&self, what: &str) -> Result<()> {
         if self.global.yes || !self.agent_mode {
             return Ok(());
         }
@@ -66,7 +66,7 @@ impl Ctx<'_> {
     /// a previous invocation that it cannot see. That is a warning rather than
     /// an error — it works, and a human's muscle memory should not break when
     /// `MAILBOX_AGENT` happens to be set in the environment.
-    fn warn_if_positional(&self, id_ref: &IdRef) {
+    pub(crate) fn warn_if_positional(&self, id_ref: &IdRef) {
         if !self.agent_mode {
             return;
         }
@@ -725,6 +725,8 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
         "accounts" => schemars::schema_for!(Reply<AccountList>),
         "sync" => schemars::schema_for!(Reply<SyncResult>),
         "status" => schemars::schema_for!(Reply<Status>),
+        "send" | "compose" | "reply" => schemars::schema_for!(Reply<SendResult>),
+        "outbox" => schemars::schema_for!(Reply<OutboxList>),
         "error" => schemars::schema_for!(ErrorResponse),
         other => {
             return Err(Error::not_found("schema for command", other));

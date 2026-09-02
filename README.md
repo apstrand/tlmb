@@ -26,6 +26,10 @@ than retrofitted.
 | `folders --remote` — what the server holds, without syncing | done (§6.1) |
 | Optimistic writes: `flag`, `mv`, `cp`, `rm`, `archive`, `spam` | done (§5.3, M2) |
 | Operation queue with idempotent replay, backoff, and conflicts | done (§5.3, M2) |
+| SMTP submission, durable outbox, `Sent` upload | done (§5.5, M2) |
+| `send`, `compose`, `reply`, `outbox` | done (§6.1, M2) |
+| Idempotency keys, approval queue, `policy.toml` | done (§6.5, M2) |
+| L3 adversarial SMTP server and its fault matrix | done (§14.2, M2) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
@@ -33,15 +37,16 @@ than retrofitted.
 
 ### In progress: M2
 
-Flags and moves have landed. Still to come in M2: SMTP and the outbox, compose,
-reply, multi-account and the unified inbox, and the L3 fault-injection suite
-with the crash-only and double-send oracles.
+Writes and sending have landed. Still to come: multi-account and the unified
+inbox, the crash-only oracle, IMAP-side L3 scenarios, and widening L2 to Cyrus
+and Stalwart.
 
 ### Not built yet
 
-- **Sending.** SMTP, the outbox, `compose`, `send`, and `reply`.
 - **Multi-account.** The config takes several accounts, but one store is opened
   at a time; the unified inbox is one account's inbox.
+- **OAuth2 and `accounts add`.** Autoconfig discovery and the system-browser
+  PKCE flow.
 - **Instance coordination.** The owner lock and the Unix socket of §4.1 are
   designed but not built; today a write command opens the store directly.
   Reads already take the read-only path, which is the half that matters most.
@@ -118,7 +123,50 @@ mailbox sync --once
 mailbox ls
 mailbox search 'from:alice has:attachment after:-7d'
 mailbox show ^ --format=md --strip-quotes
+mailbox --json flag ^ +seen  # instant locally, pushed on the next sync
+mailbox archive ^
 ```
+
+### Sending
+
+Outgoing mail goes to a durable outbox first and only then to SMTP submission
+(§5.5), so a queued message survives a crash, a restart, and a week offline.
+
+```sh
+mailbox send --to alice@example.com --subject Hi --body 'Hello.'
+mailbox reply ^ --all
+mailbox compose --to alice@example.com    # opens $EDITOR
+mailbox outbox list
+mailbox outbox flush                      # or just `mailbox sync`
+```
+
+Add SMTP settings to the account stanza:
+
+```toml
+smtp_host = "smtp.example.com"
+smtp_port = 587                 # 587 implies STARTTLS, 465 implies TLS
+# smtp_user = "peter"           # only when it differs from imap_user
+```
+
+`--delay 30` holds a message for thirty seconds so `mailbox outbox cancel <id>`
+can stop it. `--dry-run` prints the exact bytes and touches no network.
+
+For agents, `policy.toml` beside `config.toml` sets the guardrails of §6.5:
+
+```toml
+[send]
+allow_recipients = ["*@example.com"]
+deny_recipients  = ["ceo@example.com"]
+max_recipients   = 10
+max_per_hour     = 20
+confirm_external = true
+internal_domains = ["example.com"]
+```
+
+Under `MAILBOX_AGENT=1`, `send` holds the message for approval and returns
+`{"status":"pending_approval","id":…}`; a human releases it with
+`mailbox outbox approve <id>`. `--idempotency-key` makes a retried `send`
+return the original result instead of queueing a second copy.
 
 `folders --remote` asks the server instead of reading the local store: it lists
 every folder with its message and unread counts, fetches nothing, and writes
@@ -179,8 +227,15 @@ Under `MAILBOX_AGENT=1`, any state-changing command needs an explicit `--yes`.
 ```sh
 cargo test -p mailbox-api -p mailbox-core     # L0: µs, no server
 cargo test -p mailbox-cli --test contract     # the JSON contract, no server
+cargo test -p mailbox-cli --test l3_smtp      # L3: fault injection, no Docker
 cargo test -p mailbox-cli --test l2_dovecot   # L2: a real Dovecot in Docker
 ```
+
+L3 (`crates/mailbox-l3`) is our own server, in-tree, because real servers are
+too well-behaved to reach the recovery paths — no MTA will accept a message and
+then hang up before saying so. It binds loopback on an ephemeral port and
+records every message it accepts, which is the only way to prove a retry did or
+did not duplicate. No test sends anywhere real.
 
 `cargo test` alone runs all three.
 

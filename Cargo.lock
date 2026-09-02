@@ -603,6 +603,7 @@ dependencies = [
  "jsonschema",
  "mailbox-api",
  "mailbox-core",
+ "mailbox-l3",
  "schemars",
  "serde",
  "serde_json",
@@ -632,6 +633,10 @@ dependencies = [
  "toml",
  "zstd",
 ]
+
+[[package]]
+name = "mailbox-l3"
+version = "0.1.0"
 
 [[package]]
 name = "memchr"

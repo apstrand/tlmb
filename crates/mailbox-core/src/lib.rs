@@ -6,6 +6,7 @@
 //! and rendering; the TUI, GUI, and web shells will be the same.
 
 pub mod clock;
+pub mod compose;
 pub mod config;
 pub mod credentials;
 pub mod error;
@@ -17,9 +18,12 @@ pub mod id;
 pub mod imap;
 pub mod mime;
 pub mod paths;
+pub mod policy;
 pub mod query;
 pub mod render;
+pub mod send;
 pub mod session;
+pub mod smtp;
 pub mod store;
 pub mod threading;
 pub mod trace;

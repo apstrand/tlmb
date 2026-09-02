@@ -12,6 +12,7 @@
 pub mod blobs;
 pub mod ingest;
 pub mod ops;
+pub mod outbox;
 pub mod read;
 pub mod schema;
 pub mod state;
@@ -27,6 +28,7 @@ use crate::trace::{event, Tracer};
 
 pub use blobs::Blobs;
 pub use ops::{FlagChange, Op, OpKind, OpState};
+pub use outbox::{NewOutboxEntry, OutboxEntry, OutboxState};
 pub use state::{FolderState, SyncState};
 pub use write::Written;
 

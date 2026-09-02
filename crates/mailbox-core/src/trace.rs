@@ -26,6 +26,15 @@ pub mod event {
     pub const REPLAY_BEGIN: &str = "replay.begin";
     pub const REPLAY_OP: &str = "replay.op";
     pub const REPLAY_END: &str = "replay.end";
+    pub const SMTP_CONNECT: &str = "smtp.connect";
+    pub const SMTP_SEND: &str = "smtp.send";
+    pub const SMTP_RECV: &str = "smtp.recv";
+    pub const SMTP_DATA: &str = "smtp.data";
+    pub const SMTP_DISCONNECT: &str = "smtp.disconnect";
+    pub const OUTBOX_ENQUEUE: &str = "outbox.enqueue";
+    pub const OUTBOX_ATTEMPT: &str = "outbox.attempt";
+    pub const OUTBOX_RESULT: &str = "outbox.result";
+    pub const OUTBOX_SENT_UPLOADED: &str = "outbox.sent_uploaded";
     pub const SYNC_BEGIN: &str = "sync.begin";
     pub const SYNC_FOLDER_BEGIN: &str = "sync.folder.begin";
     pub const SYNC_FOLDER_END: &str = "sync.folder.end";

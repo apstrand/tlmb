@@ -107,8 +107,18 @@ pub struct ShowResult {
     pub thread: Option<Thread>,
 }
 
+/// `outbox` payload.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OutboxList {
+    pub messages: Vec<OutboxItem>,
+}
+
 /// `sync` payload.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SyncResult {
     pub synced: Vec<SyncReport>,
+    /// What the outbox did during the pass (§5.5). Absent when it had nothing
+    /// to do, which is the common case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submitted: Option<SubmitReport>,
 }

@@ -126,6 +126,19 @@ pub struct AccountConfig {
     #[serde(default)]
     pub imap_user: Option<String>,
 
+    /// SMTP submission (§5.5). Discovered by autoconfig when absent, which
+    /// lands with `accounts add`; until then, set it.
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    #[serde(default)]
+    pub smtp_port: Option<u16>,
+    /// `starttls` (587) | `implicit` (465) | `none`.
+    #[serde(default)]
+    pub smtp_security: Option<String>,
+    /// The submission login, when it differs from `imap_user`.
+    #[serde(default)]
+    pub smtp_user: Option<String>,
+
     /// §9: a command that prints the password on stdout. This is the
     /// `pass`/`gpg`/`op` hook, and the reason no secret needs to live here.
     #[serde(default)]
@@ -155,6 +168,37 @@ impl AccountConfig {
             }
         }
         out
+    }
+
+    /// The submission login. Falls back through `imap_user` to the address,
+    /// because a provider that separates them usually uses the same name for
+    /// both halves.
+    pub fn smtp_login_user(&self) -> &str {
+        self.smtp_user
+            .as_deref()
+            .or(self.imap_user.as_deref())
+            .unwrap_or(&self.address)
+    }
+
+    pub fn smtp_port(&self) -> u16 {
+        self.smtp_port.unwrap_or(match self.smtp_security() {
+            crate::imap::Security::Implicit => 465,
+            _ => 587,
+        })
+    }
+
+    pub fn smtp_security(&self) -> crate::imap::Security {
+        match self.smtp_security.as_deref() {
+            Some("implicit") | Some("tls") | Some("ssl") => crate::imap::Security::Implicit,
+            Some("none") | Some("plain") => crate::imap::Security::None,
+            Some("starttls") => crate::imap::Security::StartTls,
+            // 465 is the implicit-TLS submission port; 587 and 25 are STARTTLS.
+            None => match self.smtp_port {
+                Some(465) => crate::imap::Security::Implicit,
+                _ => crate::imap::Security::StartTls,
+            },
+            Some(_) => crate::imap::Security::StartTls,
+        }
     }
 
     pub fn port(&self) -> u16 {

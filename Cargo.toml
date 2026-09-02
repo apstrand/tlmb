@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mailbox-api", "crates/mailbox-core", "crates/mailbox-cli"]
+members = ["crates/mailbox-api", "crates/mailbox-core", "crates/mailbox-cli", "crates/mailbox-l3"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ repository = "https://github.com/pstrand/mailbox"
 [workspace.dependencies]
 mailbox-api = { path = "crates/mailbox-api" }
 mailbox-core = { path = "crates/mailbox-core" }
+mailbox-l3 = { path = "crates/mailbox-l3" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

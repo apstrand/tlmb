@@ -1,0 +1,11 @@
+[package]
+name = "mailbox-l3"
+description = "The L3 adversarial server (§14.2): fault and latency injection, in-tree."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# Test infrastructure, never a dependency of the shipped binary.
+publish = false
+
+[dependencies]

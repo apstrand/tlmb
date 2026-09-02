@@ -121,6 +121,18 @@ pub enum Command {
     /// Add or remove flags and tags: `+seen`, `-flagged`, `+tag:invoices`.
     Flag(FlagArgs),
 
+    /// Send a message non-interactively (flags, or RFC5322/JSON on stdin).
+    Send(SendArgs),
+
+    /// Open $EDITOR on a new message, then queue it.
+    Compose(ComposeArgs),
+
+    /// Reply to, reply-all to, or forward a message.
+    Reply(ReplyArgs),
+
+    /// Inspect and manage queued outgoing mail.
+    Outbox(OutboxArgs),
+
     /// Move messages to a folder.
     #[command(visible_alias = "move")]
     Mv(MoveArgs),
@@ -208,6 +220,118 @@ pub struct FlagArgs {
     /// come before the subcommand: `mailbox --json flag 1 +seen`.
     #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
     pub args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SendArgs {
+    #[arg(long, short = 't', value_delimiter = ',')]
+    pub to: Vec<String>,
+    #[arg(long, value_delimiter = ',')]
+    pub cc: Vec<String>,
+    /// Blind copy. These reach the SMTP envelope and no header — which is the
+    /// whole of what makes a blind copy blind.
+    #[arg(long, value_delimiter = ',')]
+    pub bcc: Vec<String>,
+    #[arg(long, short = 's')]
+    pub subject: Option<String>,
+    /// The body. Read from stdin when absent.
+    #[arg(long, short = 'b')]
+    pub body: Option<String>,
+    /// Which identity to send as. Defaults to the account's address.
+    #[arg(long, short = 'f')]
+    pub from: Option<String>,
+    #[arg(long)]
+    pub reply_to: Option<String>,
+    /// Attach a file. Repeatable.
+    #[arg(long)]
+    pub attach: Vec<std::path::PathBuf>,
+
+    /// Read a complete RFC5322 message from stdin instead of building one
+    /// (§13, so `git send-email` and `sendmail`-style pipelines work).
+    #[arg(long, conflicts_with_all = ["subject", "body"])]
+    pub stdin: bool,
+
+    /// Hold the message for this many seconds before sending (§5.5's undo
+    /// window). Zero for the CLI unless given.
+    #[arg(long)]
+    pub delay: Option<u64>,
+
+    /// §6.5: a retry with the same key returns the original result instead of
+    /// sending twice.
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
+
+    /// Queue as a draft rather than for delivery.
+    #[arg(long)]
+    pub draft: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ComposeArgs {
+    #[arg(long, short = 't', value_delimiter = ',')]
+    pub to: Vec<String>,
+    #[arg(long, short = 's')]
+    pub subject: Option<String>,
+    #[arg(long, short = 'f')]
+    pub from: Option<String>,
+    #[arg(long)]
+    pub attach: Vec<std::path::PathBuf>,
+    #[arg(long)]
+    pub delay: Option<u64>,
+    /// Save as a draft rather than queueing it.
+    #[arg(long)]
+    pub draft: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ReplyArgs {
+    /// The message to reply to (§5.2's id forms).
+    pub id: String,
+    /// Reply to everyone, not just the sender.
+    #[arg(long)]
+    pub all: bool,
+    /// Forward instead of replying.
+    #[arg(long, conflicts_with = "all")]
+    pub forward: bool,
+    /// Recipients for a forward.
+    #[arg(long, short = 't', value_delimiter = ',')]
+    pub to: Vec<String>,
+    /// The reply text. Opens $EDITOR when absent and stdin is a terminal.
+    #[arg(long, short = 'b')]
+    pub body: Option<String>,
+    #[arg(long)]
+    pub attach: Vec<std::path::PathBuf>,
+    #[arg(long)]
+    pub delay: Option<u64>,
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
+    #[arg(long)]
+    pub draft: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct OutboxArgs {
+    #[command(subcommand)]
+    pub action: Option<OutboxAction>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum OutboxAction {
+    /// Show queued, failed, and recently sent mail.
+    List {
+        /// Only this state: draft, pending_approval, queued, sent, failed,
+        /// cancelled.
+        #[arg(long)]
+        state: Option<String>,
+    },
+    /// Release a message held by the approval queue (§6.5).
+    Approve { id: i64 },
+    /// Try a failed or cancelled message again.
+    Retry { id: i64 },
+    /// Stop a message going out. Only works before it is sent.
+    Cancel { id: i64 },
+    /// Send everything that is ready, without a full sync.
+    Flush,
 }
 
 #[derive(Debug, Args)]

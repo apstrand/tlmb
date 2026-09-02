@@ -44,6 +44,10 @@ pub struct Session {
     pub config: Config,
     pub account_id: String,
     pub clock: Clock,
+    /// The injected RNG of §6.7. Everything that needs unpredictability —
+    /// `Message-ID`s, MIME boundaries — draws from here, so a seeded run is
+    /// reproducible.
+    pub rng: crate::Rng,
     pub tracer: Tracer,
     pub agent_mode: bool,
     timeout_ms: u64,
@@ -107,6 +111,7 @@ impl Session {
             config,
             account_id,
             clock,
+            rng: crate::Rng::from_env(),
             tracer,
             agent_mode: opts.agent_mode,
             timeout_ms: opts.timeout_ms.unwrap_or(30_000),
@@ -120,6 +125,10 @@ impl Session {
 
     pub fn store_mut(&mut self) -> &mut Store {
         &mut self.store
+    }
+
+    pub fn timeout_ms(&self) -> u64 {
+        self.timeout_ms
     }
 
     pub fn account_config(&self) -> Result<&crate::config::AccountConfig> {
@@ -299,6 +308,7 @@ impl Session {
                 folders: self.store.folder_count()?,
                 owner: !self.store.is_read_only(),
                 queued_ops: self.store.queued_op_count()?,
+                outbox_pending: self.store.outbox_pending_count()?,
                 conflicts: self.conflicts()?,
                 last_sync: (state.last_full_sync > 0).then(|| format_rfc3339(state.last_full_sync)),
                 last_error: None,
@@ -384,15 +394,45 @@ impl Session {
     }
 
     /// One sync pass to quiescence (§6.7's `sync --once`).
+    ///
+    /// Sending comes first: a message queued a moment ago should go out on this
+    /// pass, and doing it before the IMAP session means the `Sent` copy can be
+    /// filed by the same connection rather than waiting for the next pass.
+    ///
+    /// A mail server that is down must not stop the mailbox from syncing, so a
+    /// submission failure is reported and swallowed rather than propagated.
     pub fn sync(&mut self, opts: &SyncOptions) -> Result<SyncResult> {
+        let mut submitted = None;
+        if self.store().outbox_pending_count()? > 0 {
+            match self.flush_outbox() {
+                Ok(report) => submitted = Some(report),
+                Err(e) if crate::smtp::submit::is_soft_failure(&e) => {
+                    self.tracer.emit1(
+                        crate::trace::event::OUTBOX_RESULT,
+                        "submission_unavailable",
+                        e.to_string(),
+                    );
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
         let mut client = self.connect()?;
         let clock = self.clock.clone();
         let report = sync_once(&mut client, &mut self.store, opts, &clock);
+
+        // File any Sent copies while the connection is already open (§5.5).
+        let uploaded = crate::smtp::upload_sent(&mut client, &mut self.store).unwrap_or(0);
+        if uploaded > 0 {
+            submitted.get_or_insert_with(Default::default).uploaded += uploaded;
+        }
+
         // Log out even when the pass failed: leaving a connection open counts
         // against the server's per-account cap (§4.1) long after we are gone.
         let _ = client.logout();
         Ok(SyncResult {
             synced: vec![report?],
+            submitted,
         })
     }
 
@@ -439,7 +479,7 @@ impl Session {
 
 /// §9: plaintext IMAP is refused unless the host is loopback and the user opted
 /// in explicitly. This is the loopback half.
-fn is_loopback(host: &str) -> bool {
+pub(crate) fn is_loopback(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]") || host.starts_with("127.")
 }
 

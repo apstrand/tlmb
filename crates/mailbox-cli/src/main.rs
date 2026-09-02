@@ -12,6 +12,7 @@ mod cli;
 mod commands;
 mod format;
 mod output;
+mod sending;
 mod table;
 
 use std::process::ExitCode;
@@ -96,6 +97,10 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Show(args) => commands::show(&ctx, args),
         Command::Search(args) => commands::search(&ctx, args),
         Command::Flag(args) => commands::flag(&ctx, args),
+        Command::Send(args) => sending::send(&ctx, args),
+        Command::Compose(args) => sending::compose(&ctx, args),
+        Command::Reply(args) => sending::reply(&ctx, args),
+        Command::Outbox(args) => sending::outbox(&ctx, args),
         Command::Mv(args) => commands::mv(&ctx, args, false),
         Command::Cp(args) => commands::mv(&ctx, args, true),
         Command::Rm(args) => commands::move_to_special(&ctx, args, "trash"),
@@ -125,7 +130,14 @@ fn needs_write(cmd: &Command) -> bool {
         | Command::Cp(_)
         | Command::Rm(_)
         | Command::Archive(_)
-        | Command::Spam(_) => true,
+        | Command::Spam(_)
+        | Command::Send(_)
+        | Command::Compose(_)
+        | Command::Reply(_) => true,
+        // Listing is a read; everything else the outbox does is a write.
+        Command::Outbox(args) => {
+            !matches!(args.action, None | Some(cli::OutboxAction::List { .. }))
+        }
         Command::Debug(args) => matches!(
             args.action,
             cli::DebugAction::Fixture { .. } | cli::DebugAction::Rethread

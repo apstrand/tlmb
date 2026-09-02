@@ -189,6 +189,64 @@ pub struct SyncReport {
     pub duration_ms: u64,
 }
 
+/// What `send`, `compose`, and `reply` report.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SendResult {
+    /// The outbox entry. Stable for the life of the entry, and what
+    /// `outbox approve|retry|cancel` takes.
+    pub id: i64,
+    /// The stable id of §5.2, so the sent message can be found once it is
+    /// filed in `Sent`.
+    pub message_id: String,
+    /// `queued` · `pending_approval` (§6.5) · `sent` · `dry_run`.
+    pub status: String,
+    /// The SMTP envelope — every address the message is actually delivered to,
+    /// including `Bcc`, which appears in no header.
+    pub recipients: Vec<String>,
+    pub bytes: u64,
+    /// RFC3339 of the end of the undo-send window (§5.5), when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_after: Option<String>,
+    /// True when an idempotency key matched an existing entry, so this call
+    /// sent nothing (§6.5).
+    pub duplicate: bool,
+    /// `--dry-run` only: the exact bytes that would have been transmitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<String>,
+}
+
+/// One message in the outbox.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OutboxItem {
+    pub id: i64,
+    pub message_id: String,
+    pub subject: String,
+    pub from: String,
+    pub recipients: Vec<String>,
+    /// `draft` · `pending_approval` · `queued` · `sent` · `failed` · `cancelled`.
+    pub state: String,
+    pub attempts: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    pub created: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sent_at: Option<String>,
+    /// Whether the `Sent` copy has been filed on the server (§5.5).
+    pub filed: bool,
+}
+
+/// What one outbox flush did.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SubmitReport {
+    pub attempted: u32,
+    pub sent: u32,
+    /// Refused temporarily, or lost in the double-send window (§16). Retried.
+    pub deferred: u32,
+    pub failed: u32,
+    /// `Sent` copies filed this pass.
+    pub uploaded: u32,
+}
+
 /// `mailbox status`: what the store holds and what is wrong with it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Status {
@@ -221,6 +279,8 @@ pub struct AccountStatus {
     pub owner: bool,
     /// Local writes not yet pushed (§5.3).
     pub queued_ops: u64,
+    /// Messages waiting in the outbox, including any waiting for approval.
+    pub outbox_pending: u64,
     /// Writes that were abandoned and lost to the server's version.
     pub conflicts: Vec<Conflict>,
     #[serde(skip_serializing_if = "Option::is_none")]

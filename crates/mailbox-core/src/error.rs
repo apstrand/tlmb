@@ -46,6 +46,12 @@ pub enum Error {
     #[error("timed out after {0} ms")]
     Timeout(u64),
 
+    /// §6.5: a `policy.toml` rule refused the operation. Carries the rule,
+    /// because "denied" without one leaves the user unable to tell whether the
+    /// policy or the message is wrong.
+    #[error("policy rule `{rule}` refused this: {detail}")]
+    PolicyDenied { rule: String, detail: String },
+
     #[error("{message}")]
     NeedsConfirmation { message: String, hint: String },
 
@@ -86,6 +92,7 @@ impl Error {
             Error::Usage(_) => ErrorCode::Usage,
             Error::Timeout(_) => ErrorCode::Timeout,
             Error::NeedsConfirmation { .. } => ErrorCode::NeedsConfirmation,
+            Error::PolicyDenied { .. } => ErrorCode::PolicyDenied,
         }
     }
 
@@ -101,6 +108,9 @@ impl Error {
             ),
             Error::Conflict(_) => Some("run `mailbox sync --once` and retry".into()),
             Error::NeedsConfirmation { hint, .. } => Some(hint.clone()),
+            Error::PolicyDenied { rule, .. } => Some(format!(
+                "relax or remove `{rule}` in policy.toml, or change the message"
+            )),
             _ => None,
         }
     }

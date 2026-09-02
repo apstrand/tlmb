@@ -28,4 +28,5 @@ base64 = "0.23.1"
 # schemas we never reference.
 jsonschema = { version = "0.52", default-features = false }
 mailbox-core.workspace = true
+mailbox-l3 = { path = "../mailbox-l3" }
 serde_json.workspace = true

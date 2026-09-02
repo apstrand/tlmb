@@ -29,3 +29,4 @@ nom = "7"
 [dev-dependencies]
 getrandom = "0.3"
 imap-proto = "0.16"
+toml = "0.9"

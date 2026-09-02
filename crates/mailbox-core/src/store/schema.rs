@@ -13,7 +13,7 @@ use crate::trace::{event, Tracer};
 /// Bumped whenever [`MIGRATIONS`] grows. A store from the future is refused
 /// rather than opened read-only: a newer version may have written columns this
 /// build would silently drop on the next write.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Each entry is applied in order inside one transaction. Migrations are
 /// append-only — editing an existing one changes what an already-migrated store
@@ -177,6 +177,49 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX ops_pending ON ops(state, next_attempt);
     CREATE INDEX ops_message ON ops(message_id);
+    "#,
+    // v3 — M2: the outbox (§5.5).
+    r#"
+    -- Outgoing mail goes here first and only then to SMTP submission. The point
+    -- is durability: an entry survives a restart, a crash, and a week offline,
+    -- because the alternative to a durable outbox is a composed message that
+    -- exists only in a process that has since died.
+    CREATE TABLE outbox (
+        id              INTEGER PRIMARY KEY,
+        -- The stable id (§5.2) of the built message.
+        message_id      TEXT    NOT NULL,
+        -- The RFC5322 bytes live in the same content-addressed store as
+        -- received mail (§5.1), so a sent message costs one copy whether it is
+        -- in the outbox, in Sent, or both.
+        blob_id         TEXT    NOT NULL,
+        -- The SMTP envelope, which is *not* the To/Cc headers: Bcc recipients
+        -- appear here and nowhere else, which is the whole of what makes Bcc
+        -- blind.
+        envelope_from   TEXT    NOT NULL,
+        envelope_to     TEXT    NOT NULL DEFAULT '[]',
+        -- draft | pending_approval | queued | sent | failed | cancelled
+        state           TEXT    NOT NULL DEFAULT 'queued',
+        -- §6.5. Unique while set, so a retry with the same key cannot enqueue a
+        -- second entry even if two processes race.
+        idempotency_key TEXT,
+        -- The reply the original call produced, returned verbatim to a repeat
+        -- of the same key rather than sending again.
+        result          TEXT,
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        created         INTEGER NOT NULL,
+        -- The undo-send window (§5.5): not eligible before this instant.
+        send_after      INTEGER NOT NULL DEFAULT 0,
+        next_attempt    INTEGER NOT NULL DEFAULT 0,
+        sent_at         INTEGER,
+        -- Whether the Sent copy has been APPENDed (§5.5). Separate from `state`
+        -- because a message can be delivered and not yet filed, and the second
+        -- half must not be able to un-send the first.
+        sent_uploaded   INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX outbox_state ON outbox(state, next_attempt);
+    CREATE UNIQUE INDEX outbox_idempotency ON outbox(idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE addresses (
         message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
