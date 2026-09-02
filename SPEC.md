@@ -648,11 +648,17 @@ Example-based tests will not find these three:
    are identical and that the server agrees. This is the test of §4.1 and §5.3.
 2. **Crash-only.** A supervisor `SIGKILL`s a process at a randomized trace
    event, restarts it, and asserts: no lost outbox entry, no duplicate send, no
-   torn transaction, no store that fails to open. Nightly, looped.
+   torn transaction, no store that fails to open. Nightly, looped. "No duplicate
+   send" holds everywhere except the one window §16 accepts — a crash between
+   the server taking `DATA` and the store recording it — which is the same
+   ambiguity as the dropped `250` and is resolved the same way.
 3. **The double-send window.** L3's submission side accepts `DATA` and drops the
    connection before `250`. This single fault is the entire justification for
    idempotency keys (§6.5) and gets a dedicated test rather than a property-test
-   hope.
+   hope. Per §16 the outbox retries here and a duplicate delivery is accepted,
+   so the test pins exactly that: the message is not lost, the caller's retry
+   with the same key does not enqueue a second entry, and the duplicate the
+   retry produces is asserted rather than wished away.
 
 Pairing (§8) adds two more: known-answer vectors for the PAKE and the AEAD, and
 a two-process end-to-end against an in-process relay including a MITM case that
@@ -743,6 +749,16 @@ Recorded so they are not relitigated. Each names what would justify reopening it
   *Reopen if* setup telemetry — which we do not collect — is replaced by actual
   user reports that camera-less, different-network pairing is common enough to
   hurt.
+- **The double-send window: retry, and accept the duplicate.** When SMTP
+  submission accepts `DATA` and the connection drops before the `250`, the
+  client cannot know whether the message was queued. The outbox retries. That
+  can deliver twice; the window is narrow, and a duplicate is a much smaller
+  harm than a silently lost message. Idempotency keys (§6.5) still cover the
+  other half — a caller re-invoking `mailbox send` gets the original result
+  rather than a second delivery. *Reopen if* duplicates turn out to be common
+  enough in practice to annoy, in which case the alternative is to mark the
+  entry uncertain and require an explicit retry.
+
 - **Snooze: local-only first, low priority.** A timer plus a local record; the
   message returns on the device that snoozed it. The UI states this rather than
   implying sync. Cross-device snooze rides the state folder in M8.
