@@ -384,7 +384,10 @@ fn sync_folder(
         let since = if opts.full {
             None
         } else {
-            opts.prefetch_days.map(|d| clock.now() - d * 86_400)
+            // Saturating, so a preposterous window is a wide one rather than an
+            // underflow that wraps into the future and matches nothing.
+            opts.prefetch_days
+                .map(|d| clock.now().saturating_sub(d.saturating_mul(86_400)))
         };
         // `--full` still takes a ceiling per pass: a mailbox with a million
         // messages should make progress on every run rather than open one

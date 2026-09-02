@@ -35,12 +35,32 @@ than retrofitted.
 | L3 adversarial IMAP server and the §14.2 recovery scenarios | done (§14.2, M2) |
 | L1 transcript record and replay | done (§14.2, M3) |
 | Generated 1M corpus and the §10 performance suite | done (§14.5, M3) |
+| Offline mode, lazy bodies, `attach` | done (§5.1, §6.1, §9, M3) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
 
 ### In progress: M2
+
+### Offline and attachments
+
+Bodies are fetched lazily (§5.1): headers and structure for everything, bodies
+for the last 30 days plus whatever you open. `offline` on the account picks the
+policy — `none` fetches no bodies ahead of time, `recent` is the default window,
+`full` downloads everything. `show --offline` and `attach --offline` show what is
+cached and go nowhere.
+
+```sh
+mailbox attach ^                 # what is in there
+mailbox attach ^ 2 > invoice.pdf # one part, to stdout
+mailbox attach ^ --all --extract --out ~/Downloads
+```
+
+Extraction treats the filename as hostile, because it is (§9): paths and
+traversals are stripped, extensions a desktop would execute get a `.bin` suffix,
+nothing is overwritten, and files are written `0600` with the executable bit
+clear.
 
 Everything M2 names is built: flags, moves, SMTP and the outbox, compose,
 multi-account, and the unified inbox — with L3 on both sides, the double-send

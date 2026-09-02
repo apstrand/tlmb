@@ -386,3 +386,163 @@ fn messages_added_during_a_fault_arrive_afterwards() {
         w.stored_subjects()
     );
 }
+
+// ---- M3: offline mode and lazy bodies (§5.1) ----
+
+impl World {
+    /// Rewrites the account's `offline` policy.
+    fn set_offline(&self, mode: &str) {
+        let text = std::fs::read_to_string(&self.config).unwrap();
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("offline"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&self.config, format!("{stripped}\noffline = \"{mode}\"\n")).unwrap();
+    }
+
+    /// Whether the store holds the message's raw bytes.
+    fn bodies_cached(&self) -> usize {
+        let run = self.run(&["debug", "store-dump"]);
+        assert_eq!(run.status, 0, "{}", run.stderr);
+        let dump: serde_json::Value = serde_json::from_str(&run.stdout).expect("dump");
+        dump["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["body_cached"] == true)
+            .count()
+    }
+}
+
+/// §5.1: "headers and structure for everything, bodies for what you read plus a
+/// configurable prefetch window". With the window off, a sync brings headers
+/// and no bodies.
+#[test]
+fn offline_none_syncs_headers_without_bodies() {
+    let w = World::three();
+    w.set_offline("none");
+
+    assert_eq!(w.sync().status, 0);
+    assert_eq!(w.stored_subjects().len(), 3, "headers arrive regardless");
+    assert_eq!(w.bodies_cached(), 0, "no body should have been fetched");
+}
+
+/// And "bodies for what you read": opening one fetches it.
+#[test]
+fn opening_a_message_fetches_its_body() {
+    let w = World::three();
+    w.set_offline("none");
+    assert_eq!(w.sync().status, 0);
+    assert_eq!(w.bodies_cached(), 0);
+
+    let id = {
+        let run = w.run(&["--json", "ls", "-n", "1"]);
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).expect("JSON");
+        v["messages"][0]["id"].as_str().unwrap().to_string()
+    };
+
+    let shown = w.run(&["--json", "show", &id]);
+    assert_eq!(shown.status, 0, "{}", shown.stderr);
+    let detail: serde_json::Value = serde_json::from_str(&shown.stdout).expect("JSON");
+    assert!(
+        detail["message"]["body"]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Body of"),
+        "the body should have been fetched on demand: {}",
+        detail["message"]["body"]
+    );
+
+    assert_eq!(w.bodies_cached(), 1, "and cached for next time");
+}
+
+/// `--offline` means what it says: show what is cached and go nowhere.
+#[test]
+fn show_offline_never_fetches() {
+    let w = World::three();
+    w.set_offline("none");
+    assert_eq!(w.sync().status, 0);
+
+    let id = {
+        let run = w.run(&["--json", "ls", "-n", "1"]);
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).expect("JSON");
+        v["messages"][0]["id"].as_str().unwrap().to_string()
+    };
+
+    let shown = w.run(&["--json", "show", &id, "--offline"]);
+    assert_eq!(
+        shown.status, 0,
+        "a missing body is not an error: {}",
+        shown.stderr
+    );
+    let detail: serde_json::Value = serde_json::from_str(&shown.stdout).expect("JSON");
+    assert!(
+        detail["message"]["body"].is_null(),
+        "an offline show must not have fetched anything"
+    );
+    // The headers are still there, which is the point of fetching them eagerly.
+    assert!(!detail["message"]["subject"].as_str().unwrap().is_empty());
+    assert_eq!(w.bodies_cached(), 0);
+}
+
+/// §5.1's `offline = "full"`: fetch everything, for offline use.
+///
+/// This is a regression test with teeth: the setting used to be expressed as a
+/// prefetch window near i64::MAX, which underflowed on subtraction and, having
+/// wrapped, matched nothing — so the setting that means "download everything"
+/// downloaded nothing at all.
+#[test]
+fn offline_full_fetches_every_body() {
+    let w = World::three();
+    w.set_offline("full");
+
+    assert_eq!(w.sync().status, 0);
+    assert_eq!(
+        w.bodies_cached(),
+        3,
+        "offline = full should have fetched every body"
+    );
+}
+
+/// The default window fetches recent mail eagerly. The L3 corpus is dated
+/// inside it, so all three arrive without anyone opening them.
+#[test]
+fn the_default_window_prefetches_recent_bodies() {
+    let w = World::three();
+    w.set_offline("recent");
+
+    assert_eq!(w.sync().status, 0);
+    assert_eq!(w.bodies_cached(), 3);
+}
+
+/// `attach` lists parts from what is cached, and fetches the message if it has
+/// to (§6.1).
+#[test]
+fn attach_lists_and_extracts_from_a_lazily_fetched_message() {
+    let w = World::three();
+    w.set_offline("none");
+    assert_eq!(w.sync().status, 0);
+
+    let id = {
+        let run = w.run(&["--json", "ls", "-n", "1"]);
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).expect("JSON");
+        v["messages"][0]["id"].as_str().unwrap().to_string()
+    };
+
+    // The L3 messages are single-part, so part 1 is the whole message body.
+    let listed = w.run(&["--json", "attach", &id]);
+    assert_eq!(listed.status, 0, "{}", listed.stderr);
+    let payload: serde_json::Value = serde_json::from_str(&listed.stdout).expect("JSON");
+    assert_eq!(payload["id"], id);
+    // Fetching happened as a side effect of needing the structure.
+    assert_eq!(w.bodies_cached(), 1);
+
+    let out = w.run(&["attach", &id, "1", "--offline"]);
+    assert_eq!(out.status, 0, "{}", out.stderr);
+    assert!(
+        out.stdout.contains("Body of"),
+        "the part should have come out on stdout: {:?}",
+        out.stdout
+    );
+}

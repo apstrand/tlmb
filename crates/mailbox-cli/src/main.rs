@@ -97,6 +97,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Show(args) => commands::show(&ctx, args),
         Command::Search(args) => commands::search(&ctx, args),
         Command::Flag(args) => commands::flag(&ctx, args),
+        Command::Attach(args) => commands::attach(&ctx, args),
         Command::Send(args) => sending::send(&ctx, args),
         Command::Compose(args) => sending::compose(&ctx, args),
         Command::Reply(args) => sending::reply(&ctx, args),
@@ -134,6 +135,10 @@ fn needs_write(cmd: &Command) -> bool {
         | Command::Send(_)
         | Command::Compose(_)
         | Command::Reply(_) => true,
+        // `show` and `attach` fetch a body they do not have (§5.1), which is a
+        // write to the blob store and the message row.
+        Command::Show(args) => !args.offline,
+        Command::Attach(args) => !args.offline,
         // Listing is a read; everything else the outbox does is a write.
         Command::Outbox(args) => {
             !matches!(args.action, None | Some(cli::OutboxAction::List { .. }))

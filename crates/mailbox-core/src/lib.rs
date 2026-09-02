@@ -5,6 +5,7 @@
 //! here, that logic belongs here. The CLI in `mailbox-cli` is argument parsing
 //! and rendering; the TUI, GUI, and web shells will be the same.
 
+pub mod attach;
 pub mod bench;
 pub mod clock;
 pub mod compose;

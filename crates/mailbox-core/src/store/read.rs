@@ -741,6 +741,40 @@ impl Store {
         Ok(rows.filter_map(std::result::Result::ok).collect())
     }
 
+    /// Where a message sits on the server: `(folder path, uid)`.
+    ///
+    /// The primary placement, since that is the folder every listing reports —
+    /// and the one a body fetch should use, because it is the one the user is
+    /// looking at.
+    pub fn server_location(&self, message_id: &str) -> Result<Option<(String, u32)>> {
+        let row: Option<(String, Option<u32>)> = self
+            .conn
+            .query_row(
+                "SELECT f.path, p.uid
+                 FROM messages m
+                 JOIN placements p ON p.folder_id = m.primary_folder AND p.message_rowid = m.rowid
+                 JOIN folders f ON f.id = p.folder_id
+                 WHERE m.id = ?1",
+                [message_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        Ok(row.and_then(|(path, uid)| uid.map(|u| (path, u))))
+    }
+
+    /// Whether the message's raw bytes are already in the blob store.
+    pub fn has_body(&self, message_id: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT blob_id IS NOT NULL FROM messages WHERE id = ?1",
+                [message_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n != 0)
+            .unwrap_or(false))
+    }
+
     /// The `Message-ID` header of a message, for a server-side lookup.
     ///
     /// `None` both when the message is unknown and when it never had one —

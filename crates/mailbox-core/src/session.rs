@@ -389,6 +389,50 @@ impl Session {
         refs.iter().map(|r| self.resolve(r)).collect()
     }
 
+    /// Makes sure a message's body is in the store, fetching it if not.
+    ///
+    /// §5.1 fetches bodies lazily — "bodies for what you read plus a
+    /// configurable prefetch window" — so opening older mail is the moment the
+    /// rest of it arrives. Offline, this fails and the caller shows what it
+    /// has; a message with headers and no body is a normal state, not an error.
+    pub fn ensure_body(&mut self, message_id: &str) -> Result<bool> {
+        if self.store.has_body(message_id)? {
+            return Ok(true);
+        }
+        let Some((folder, uid)) = self.store.server_location(message_id)? else {
+            // A message with no server placement — one moved locally and not
+            // yet pushed — has nowhere to be fetched from yet.
+            return Ok(false);
+        };
+
+        let mut client = self.connect()?;
+        client.examine(&folder, None)?;
+        let fetched = client.fetch_bodies(&[uid])?;
+        let _ = client.logout();
+
+        let Some(raw) = fetched
+            .into_iter()
+            .find(|f| f.uid == uid)
+            .and_then(|f| f.body)
+        else {
+            return Ok(false);
+        };
+        self.store.set_body(message_id, &raw)?;
+        Ok(true)
+    }
+
+    /// The decoded bytes of one MIME part, fetching the message if needed.
+    pub fn attachment(
+        &mut self,
+        message_id: &str,
+        part: &str,
+    ) -> Result<(String, String, Vec<u8>)> {
+        self.ensure_body(message_id)?;
+        let raw = self.store.raw_message(message_id)?;
+        crate::mime::extract_part(&raw, part)
+            .ok_or_else(|| Error::not_found("part", format!("{part} of {message_id}")))
+    }
+
     /// §5.3's conflicts: local writes that were abandoned, whose effect the
     /// next pull has undone.
     fn conflicts(&self) -> Result<Vec<mailbox_api::Conflict>> {
@@ -416,7 +460,21 @@ impl Session {
     ///
     /// A mail server that is down must not stop the mailbox from syncing, so a
     /// submission failure is reported and swallowed rather than propagated.
-    pub fn sync(&mut self, opts: &SyncOptions) -> Result<SyncResult> {
+    pub fn sync(&mut self, requested: &SyncOptions) -> Result<SyncResult> {
+        // §5.1's `offline` is per account, and a workspace syncs several at
+        // once — so the policy is applied here, against this account's config,
+        // rather than baked into the options the caller passed.
+        let account = self.account_config()?.clone();
+        let opts = &SyncOptions {
+            full: requested.full || account.wants_everything_offline(),
+            prefetch_days: if requested.full || account.wants_everything_offline() {
+                None
+            } else {
+                requested.prefetch_days.or_else(|| account.prefetch_days())
+            },
+            ..requested.clone()
+        };
+
         let mut submitted = None;
         if self.store().outbox_pending_count()? > 0 {
             match self.flush_outbox() {

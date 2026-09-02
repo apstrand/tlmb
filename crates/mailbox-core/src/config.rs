@@ -228,9 +228,18 @@ impl AccountConfig {
     pub fn prefetch_days(&self) -> Option<i64> {
         match self.offline.as_str() {
             "none" => None,
-            "full" => Some(i64::MAX / 86_400),
+            // `full` is not "a very large window": expressing it that way
+            // produced a cutoff near i64::MAX which underflowed on subtraction
+            // and, wrapping, matched nothing — so the setting that means
+            // "download everything" downloaded nothing. It is a separate flag.
+            "full" => None,
             _ => Some(30),
         }
+    }
+
+    /// §5.1's `offline = "full"`: fetch every body, for offline use.
+    pub fn wants_everything_offline(&self) -> bool {
+        self.offline == "full"
     }
 }
 

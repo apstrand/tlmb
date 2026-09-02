@@ -182,6 +182,49 @@ pub fn parse(raw: &[u8]) -> Parsed {
     p
 }
 
+/// Pulls one MIME part out of a message, decoded.
+///
+/// `part` is the IMAP part number (`2.1`) the contract hands out, so the same
+/// string works against a cached message and against a live `FETCH BODY[2.1]`.
+/// Returns the decoded bytes — base64 and quoted-printable already undone,
+/// because what a caller wants is the file, not the encoding it travelled in.
+pub fn extract_part(raw: &[u8], part: &str) -> Option<(String, String, Vec<u8>)> {
+    let msg = MessageParser::default().parse(raw)?;
+    let paths = part_paths(&msg);
+    let index = paths
+        .iter()
+        .find(|(_, path)| path.as_str() == part)
+        .map(|(i, _)| *i)?;
+    let found = msg.parts.get(index)?;
+
+    let bytes = match &found.body {
+        PartType::Text(t) | PartType::Html(t) => t.as_bytes().to_vec(),
+        PartType::Binary(b) | PartType::InlineBinary(b) => b.to_vec(),
+        // A nested message is returned as the bytes it occupies, which is what
+        // saving a `message/rfc822` attachment should produce.
+        PartType::Message(_) => raw
+            .get(found.offset_body as usize..found.offset_end as usize)?
+            .to_vec(),
+        PartType::Multipart(_) => return None,
+    };
+
+    let filename = found
+        .attachment_name()
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("part-{part}"));
+    Some((filename, mime_type_of(found), bytes))
+}
+
+/// Every part a message contains, whether or not it is an attachment.
+pub fn part_list(raw: &[u8]) -> Vec<String> {
+    let Some(msg) = MessageParser::default().parse(raw) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<String> = part_paths(&msg).into_values().collect();
+    paths.sort();
+    paths
+}
+
 /// The degenerate path: mail-parser refused the message entirely. Split the
 /// header block by hand so `ls` can still show a row.
 fn parse_headers_only(raw: &[u8]) -> Parsed {

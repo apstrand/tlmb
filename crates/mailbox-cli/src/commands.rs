@@ -14,8 +14,9 @@ use mailbox_core::Tracer;
 use mailbox_core::Workspace;
 
 use crate::cli::{
-    AccountsAction, AccountsArgs, DebugAction, DebugArgs, FixtureAction, FlagArgs, FoldersArgs,
-    Format, GlobalFlags, LsArgs, MoveArgs, SchemaArgs, SearchArgs, ShowArgs, SyncArgs, TargetArgs,
+    AccountsAction, AccountsArgs, AttachArgs, DebugAction, DebugArgs, FixtureAction, FlagArgs,
+    FoldersArgs, Format, GlobalFlags, LsArgs, MoveArgs, SchemaArgs, SearchArgs, ShowArgs, SyncArgs,
+    TargetArgs,
 };
 use crate::format;
 use crate::output::{maybe_page, Out, GREEN, YELLOW};
@@ -193,6 +194,145 @@ fn render_threads(ctx: &Ctx<'_>, workspace: &Workspace, list: &MessageList) -> R
             maybe_page(ctx.out, &format::thread_summary(ctx.out, &payload.threads));
         }
     }
+    Ok(())
+}
+
+/// `attach` (§6.1): list a message's parts, or write one to disk.
+pub fn attach(ctx: &Ctx<'_>, args: &AttachArgs) -> Result<()> {
+    let id_ref = IdRef::parse(&args.id);
+    ctx.warn_if_positional(&id_ref);
+
+    let (account, id) = {
+        let workspace = ctx.workspace()?;
+        let (index, id) = workspace.locate(&id_ref)?;
+        (workspace.sessions()[index].account_id.clone(), id)
+    };
+
+    let mut opts = ctx.opts.clone();
+    opts.account = Some(account);
+    opts.read_only = args.offline;
+    let mut session = Session::open(&opts, ctx.tracer.clone(), ctx.clock.clone())?;
+
+    if !args.offline {
+        session.ensure_body(&id)?;
+    }
+    let detail = session.store().message(&id, &Default::default())?;
+
+    // Listing is the default: `attach <id>` should say what is there before
+    // anything is written anywhere.
+    if args.part.is_none() && !args.all {
+        return list_attachments(ctx, &detail);
+    }
+
+    // An explicit part number is a direct request: it is extracted whether or
+    // not it appears in the attachment list, because the list is for discovery
+    // and a body part of a single-part message is legitimately part 1.
+    // `--all` is the other way round — it means "the attachments", which is
+    // exactly what the list is.
+    let wanted: Vec<String> = match &args.part {
+        Some(part) => vec![part.clone()],
+        None => detail
+            .attachments
+            .iter()
+            .filter(|a| a.is_attachment)
+            .map(|a| a.part.clone())
+            .collect(),
+    };
+    if wanted.is_empty() {
+        return Err(Error::not_found("part", "any attachment"));
+    }
+
+    let mut written = Vec::new();
+    for part in &wanted {
+        let (extracted_name, mime_type, bytes) = session.attachment(&id, part)?;
+        // The listed filename where there is one — it is what the sender
+        // called the file — falling back to what the part itself carries.
+        let name = detail
+            .attachments
+            .iter()
+            .find(|a| &a.part == part)
+            .and_then(|a| a.filename.clone())
+            .unwrap_or(extracted_name);
+
+        if !args.extract {
+            // Without `--extract` a single named part goes to stdout, so
+            // `mailbox attach 1 2 > invoice.pdf` works like every other
+            // Unix tool.
+            use std::io::Write;
+            std::io::stdout().write_all(&bytes)?;
+            return Ok(());
+        }
+
+        // §9: a filename from a message is attacker-controlled. `destination`
+        // strips paths, mangles extensions a desktop would run, and refuses to
+        // overwrite; `write` clears the executable bit.
+        let target = if args.out.is_dir() {
+            mailbox_core::attach::destination(&args.out, &name)
+        } else if wanted.len() == 1 {
+            args.out.clone()
+        } else {
+            mailbox_core::attach::destination(&args.out, &name)
+        };
+        mailbox_core::attach::write(&target, &bytes)?;
+        written.push(serde_json::json!({
+            "part": part,
+            "filename": name,
+            "mime_type": mime_type,
+            "bytes": bytes.len(),
+            "path": target.display().to_string(),
+        }));
+    }
+
+    if ctx.out.is_structured() {
+        ctx.out
+            .reply("attach", &serde_json::json!({ "extracted": written }))?;
+    } else {
+        for w in &written {
+            ctx.out.print(format!(
+                "{} {} ({})",
+                ctx.out.paint("✓", GREEN),
+                w["path"].as_str().unwrap_or_default(),
+                format::human_size(w["bytes"].as_u64().unwrap_or(0)),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn list_attachments(ctx: &Ctx<'_>, detail: &mailbox_api::MessageDetail) -> Result<()> {
+    if ctx.out.is_structured() {
+        ctx.out.reply(
+            "attach",
+            &serde_json::json!({
+                "id": detail.summary.id,
+                "attachments": detail.attachments,
+            }),
+        )?;
+        return Ok(());
+    }
+
+    if detail.attachments.is_empty() {
+        ctx.out.print(ctx.out.dim("no attachments"));
+        return Ok(());
+    }
+    use crate::table::{Column, Table};
+    let mut table = Table::new(vec![
+        Column::new("part").min(4),
+        Column::new("filename").flexible().min(20),
+        Column::new("type").min(20),
+        Column::new("size").right().min(7),
+    ]);
+    for a in &detail.attachments {
+        table.push(vec![
+            a.part.clone(),
+            a.filename
+                .clone()
+                .unwrap_or_else(|| ctx.out.dim("(inline)")),
+            a.mime_type.clone(),
+            format::human_size(a.size),
+        ]);
+    }
+    ctx.out.print(table.render(ctx.out));
     Ok(())
 }
 
@@ -389,6 +529,24 @@ pub fn show(ctx: &Ctx<'_>, args: &ShowArgs) -> Result<()> {
     let workspace = ctx.workspace()?;
     let id_ref = IdRef::parse(&args.id);
     ctx.warn_if_positional(&id_ref);
+
+    // §5.1: "bodies for what you read". Opening a message older than the
+    // prefetch window is the moment its body arrives — unless the caller said
+    // not to go looking, or there is no network, in which case the headers are
+    // still worth showing.
+    if !args.offline {
+        if let Ok((index, id)) = workspace.locate(&id_ref) {
+            let account = workspace.sessions()[index].account_id.clone();
+            let mut opts = ctx.opts.clone();
+            opts.account = Some(account);
+            opts.read_only = false;
+            if let Ok(mut session) = Session::open(&opts, ctx.tracer.clone(), ctx.clock.clone()) {
+                if let Err(e) = session.ensure_body(&id) {
+                    ctx.out.note(format!("could not fetch the body: {e}"));
+                }
+            }
+        }
+    }
 
     // `--raw` bypasses rendering entirely: §13 promises the exact RFC5322
     // bytes, and anything that decoded and re-encoded them would not be exact.
@@ -642,11 +800,13 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
         return Ok(());
     }
 
+    // The per-account `offline` policy is applied inside `Session::sync`,
+    // because a workspace syncs several accounts and they may differ.
     let opts = SyncOptions {
         full: args.full,
         folders: args.folder.clone(),
         since,
-        prefetch_days: if args.full { None } else { cfg.prefetch_days() },
+        prefetch_days: None,
         max_prefetch: 500,
     };
 

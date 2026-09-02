@@ -133,6 +133,9 @@ pub enum Command {
     /// Inspect and manage queued outgoing mail.
     Outbox(OutboxArgs),
 
+    /// List or extract a message's attachments.
+    Attach(AttachArgs),
+
     /// Move messages to a folder.
     #[command(visible_alias = "move")]
     Mv(MoveArgs),
@@ -335,6 +338,27 @@ pub enum OutboxAction {
 }
 
 #[derive(Debug, Args)]
+pub struct AttachArgs {
+    /// A message id, an unambiguous prefix, `^`, `@`, or a listing index.
+    pub id: String,
+    /// The MIME part to extract (`2`, `2.1`). Omit to list what is there.
+    pub part: Option<String>,
+    /// Write the part to disk. §9 clears the executable bit and mangles
+    /// extensions a desktop would run.
+    #[arg(long, short = 'x')]
+    pub extract: bool,
+    /// Where to write it. A directory, or a file path for a single part.
+    #[arg(long, short = 'o', default_value = ".")]
+    pub out: std::path::PathBuf,
+    /// Extract every attachment, not just one part.
+    #[arg(long, conflicts_with = "part")]
+    pub all: bool,
+    /// Never fetch from the server; use only what is cached.
+    #[arg(long)]
+    pub offline: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct MoveArgs {
     /// One or more message ids, then the destination folder.
     ///
@@ -370,6 +394,14 @@ pub struct ShowArgs {
     /// Never fall back to HTML when there is no text part.
     #[arg(long)]
     pub text_only: bool,
+
+    /// Never fetch from the server; show only what is cached.
+    ///
+    /// §5.1 fetches bodies lazily, so opening older mail normally goes and gets
+    /// it. This is for when there is no network, or when a command must not
+    /// make one.
+    #[arg(long)]
+    pub offline: bool,
 
     /// Drop quoted replies and signatures.
     #[arg(long)]
