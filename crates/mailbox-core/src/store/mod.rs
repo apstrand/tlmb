@@ -64,6 +64,9 @@ impl FolderRecord {
     }
 }
 
+/// The `Debug` impl deliberately shows the shape rather than the contents: a
+/// store's contents are the user's mail, and a stray `{store:?}` in a log or a
+/// test failure should not print it.
 pub struct Store {
     dir: PathBuf,
     account: String,
@@ -139,10 +142,30 @@ impl Store {
             &db,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        // A read never migrates: §4.1 makes reads the path that skips ownership
+        // entirely, and a read that writes would need it. So this refuses — but
+        // it has to say precisely what to run, because "a writing command" sends
+        // the reader looking for one.
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version != schema::SCHEMA_VERSION {
+        if version < schema::SCHEMA_VERSION {
             return Err(Error::store(format!(
-                "store schema is v{version}, this build speaks v{}; run any writing command once to migrate",
+                concat!(
+                    "this store is from an older mailbox (schema v{}, this build ",
+                    "speaks v{}). Run `mailbox sync` once to upgrade it — reads do ",
+                    "not migrate, so that a read never needs to become a writer."
+                ),
+                version,
+                schema::SCHEMA_VERSION
+            )));
+        }
+        if version > schema::SCHEMA_VERSION {
+            return Err(Error::store(format!(
+                concat!(
+                    "this store was written by a newer mailbox (schema v{}, this ",
+                    "build speaks v{}); upgrade mailbox, or delete the store and ",
+                    "re-sync"
+                ),
+                version,
                 schema::SCHEMA_VERSION
             )));
         }
@@ -333,6 +356,16 @@ impl Store {
 
     pub fn save_sync_state(&self, s: &SyncState) -> Result<()> {
         s.save(&self.dir)
+    }
+}
+
+impl std::fmt::Debug for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Store")
+            .field("account", &self.account)
+            .field("dir", &self.dir)
+            .field("read_only", &self.read_only)
+            .finish()
     }
 }
 

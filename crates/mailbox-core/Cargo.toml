@@ -30,4 +30,5 @@ libc = "0.2.189"
 [dev-dependencies]
 getrandom = "0.3"
 imap-proto = "0.16"
+rusqlite = { version = "0.40", features = ["bundled"] }
 toml = "0.9"

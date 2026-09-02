@@ -105,6 +105,63 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (folder_id, uid)
     ) WITHOUT ROWID;
     CREATE INDEX placements_msg ON placements(message_rowid);
+
+    CREATE TABLE addresses (
+        message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
+        -- from | to | cc | bcc | reply_to
+        field         TEXT    NOT NULL,
+        name          TEXT    NOT NULL DEFAULT '',
+        addr          TEXT    NOT NULL,
+        -- Position in the header, so rendering can restore the original order.
+        ord           INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX addresses_msg  ON addresses(message_rowid);
+    CREATE INDEX addresses_addr ON addresses(addr);
+
+    CREATE TABLE attachments (
+        message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
+        -- IMAP part number (`2.1`), which is what `attach <id> <part>` takes.
+        part          TEXT    NOT NULL,
+        filename      TEXT,
+        -- Lowercased filename, because `filename:*.PDF` and `filename:*.pdf`
+        -- are the same question and GLOB is case-sensitive.
+        filename_lc   TEXT,
+        mime_type     TEXT    NOT NULL DEFAULT 'application/octet-stream',
+        size          INTEGER NOT NULL DEFAULT 0,
+        content_id    TEXT,
+        is_attachment INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX attachments_msg ON attachments(message_rowid);
+
+    -- Local tags (§5.4). Local-only until M8 gives them the state folder.
+    CREATE TABLE tags (
+        message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
+        tag           TEXT    NOT NULL,
+        PRIMARY KEY (message_rowid, tag)
+    ) WITHOUT ROWID;
+
+    -- The address book of §5.1: derived from mail traffic, never from a
+    -- contacts server (§2).
+    CREATE TABLE contacts (
+        addr        TEXT    PRIMARY KEY,
+        name        TEXT    NOT NULL DEFAULT '',
+        -- How often we have seen it, and when last, so completion can rank.
+        seen_count  INTEGER NOT NULL DEFAULT 0,
+        last_seen   INTEGER NOT NULL DEFAULT 0,
+        -- Counted separately: someone you write to outranks someone who writes
+        -- to you.
+        sent_count  INTEGER NOT NULL DEFAULT 0
+    ) WITHOUT ROWID;
+
+    -- Contentless FTS5 keyed on messages.rowid. Contentless keeps the index
+    -- from duplicating every body, and `contentless_delete` is what lets a
+    -- message be removed without a full rebuild.
+    CREATE VIRTUAL TABLE messages_fts USING fts5(
+        body,
+        content='',
+        contentless_delete=1,
+        tokenize='unicode61 remove_diacritics 2'
+    );
     "#,
     // v2 — M2: the write path.
     //
@@ -130,6 +187,24 @@ const MIGRATIONS: &[&str] = &[
     );
     INSERT INTO placements_v2 (folder_id, uid, message_rowid, flags, modseq, internaldate)
         SELECT folder_id, uid, message_rowid, flags, modseq, internaldate FROM placements;
+
+    -- v1 keyed placements on (folder_id, uid), which let one message sit in one
+    -- folder twice under different UIDs — a re-`APPEND`, or a rescan after a
+    -- `UIDVALIDITY` change, produced exactly that. The new key is
+    -- (folder_id, message_rowid), so those rows have to be collapsed before the
+    -- unique index exists or the migration fails on perfectly ordinary data.
+    --
+    -- The highest UID wins: it is the most recent thing the server said about
+    -- the message, and the lower one is the stale copy.
+    DELETE FROM placements_v2 WHERE id NOT IN (
+        SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+                PARTITION BY folder_id, message_rowid ORDER BY uid DESC
+            ) AS rn
+            FROM placements_v2
+        ) WHERE rn = 1
+    );
+
     DROP TABLE placements;
     ALTER TABLE placements_v2 RENAME TO placements;
 
@@ -221,62 +296,6 @@ const MIGRATIONS: &[&str] = &[
     CREATE UNIQUE INDEX outbox_idempotency ON outbox(idempotency_key)
         WHERE idempotency_key IS NOT NULL;
 
-    CREATE TABLE addresses (
-        message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
-        -- from | to | cc | bcc | reply_to
-        field         TEXT    NOT NULL,
-        name          TEXT    NOT NULL DEFAULT '',
-        addr          TEXT    NOT NULL,
-        -- Position in the header, so rendering can restore the original order.
-        ord           INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE INDEX addresses_msg  ON addresses(message_rowid);
-    CREATE INDEX addresses_addr ON addresses(addr);
-
-    CREATE TABLE attachments (
-        message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
-        -- IMAP part number (`2.1`), which is what `attach <id> <part>` takes.
-        part          TEXT    NOT NULL,
-        filename      TEXT,
-        -- Lowercased filename, because `filename:*.PDF` and `filename:*.pdf`
-        -- are the same question and GLOB is case-sensitive.
-        filename_lc   TEXT,
-        mime_type     TEXT    NOT NULL DEFAULT 'application/octet-stream',
-        size          INTEGER NOT NULL DEFAULT 0,
-        content_id    TEXT,
-        is_attachment INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE INDEX attachments_msg ON attachments(message_rowid);
-
-    -- Local tags (§5.4). Local-only until M8 gives them the state folder.
-    CREATE TABLE tags (
-        message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
-        tag           TEXT    NOT NULL,
-        PRIMARY KEY (message_rowid, tag)
-    ) WITHOUT ROWID;
-
-    -- The address book of §5.1: derived from mail traffic, never from a
-    -- contacts server (§2).
-    CREATE TABLE contacts (
-        addr        TEXT    PRIMARY KEY,
-        name        TEXT    NOT NULL DEFAULT '',
-        -- How often we have seen it, and when last, so completion can rank.
-        seen_count  INTEGER NOT NULL DEFAULT 0,
-        last_seen   INTEGER NOT NULL DEFAULT 0,
-        -- Counted separately: someone you write to outranks someone who writes
-        -- to you.
-        sent_count  INTEGER NOT NULL DEFAULT 0
-    ) WITHOUT ROWID;
-
-    -- Contentless FTS5 keyed on messages.rowid. Contentless keeps the index
-    -- from duplicating every body, and `contentless_delete` is what lets a
-    -- message be removed without a full rebuild.
-    CREATE VIRTUAL TABLE messages_fts USING fts5(
-        body,
-        content='',
-        contentless_delete=1,
-        tokenize='unicode61 remove_diacritics 2'
-    );
     "#,
 ];
 
@@ -293,7 +312,11 @@ pub fn migrate(conn: &mut Connection, tracer: &Tracer) -> Result<()> {
     let current: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if current > SCHEMA_VERSION {
         return Err(crate::Error::store(format!(
-            "this store was written by a newer mailbox (schema v{current}, this build speaks v{SCHEMA_VERSION})"
+            concat!(
+                "this store was written by a newer mailbox (schema v{}, this build speaks v{}); ",
+                "upgrade mailbox, or delete the store and re-sync"
+            ),
+            current, SCHEMA_VERSION
         )));
     }
     if current == SCHEMA_VERSION {
@@ -307,7 +330,20 @@ pub fn migrate(conn: &mut Connection, tracer: &Tracer) -> Result<()> {
             serde_json::json!({ "from": current, "to": to }),
         );
         let tx = conn.transaction()?;
-        tx.execute_batch(ddl)?;
+        // A migration is all-or-nothing: a half-applied one would leave a store
+        // that neither opens nor can be repaired. The cost of that guarantee is
+        // that a failure leaves the store at its old version, so the same
+        // failure recurs — which is why the error says what to do about it.
+        tx.execute_batch(ddl).map_err(|e| {
+            crate::Error::store(format!(
+                concat!(
+                    "upgrading the store from v{} to v{} failed: {}. The store is a cache of ",
+                    "what is on the server, so deleting the account's directory and re-syncing ",
+                    "is a safe repair."
+                ),
+                current, to, e
+            ))
+        })?;
         tx.pragma_update(None, "user_version", to)?;
         tx.commit()?;
     }
