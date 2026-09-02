@@ -11,6 +11,8 @@
 //! Nothing here is a dependency of the shipped binary: this crate exists to be
 //! a `dev-dependency` of the test suites.
 
+pub mod imap;
 pub mod smtp;
 
+pub use imap::{ImapFault, ImapServer, Message};
 pub use smtp::{Fault, ReceivedMessage, SmtpServer, Stage};

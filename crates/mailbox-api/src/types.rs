@@ -186,6 +186,11 @@ pub struct SyncReport {
     pub ops_conflicted: u32,
     /// Folders whose `UIDVALIDITY` changed, forcing a rescan.
     pub uidvalidity_resets: Vec<String>,
+    /// Folders this pass could not sync. One broken folder does not abort a
+    /// pass (§5.3), but it is not silent either.
+    pub folders_failed: u32,
+    /// What went wrong, per folder.
+    pub errors: Vec<FolderError>,
     pub duration_ms: u64,
 }
 
@@ -245,6 +250,13 @@ pub struct SubmitReport {
     pub failed: u32,
     /// `Sent` copies filed this pass.
     pub uploaded: u32,
+}
+
+/// A folder a sync pass could not complete.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FolderError {
+    pub folder: String,
+    pub error: String,
 }
 
 /// `mailbox status`: what the store holds and what is wrong with it.

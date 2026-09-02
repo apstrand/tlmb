@@ -158,13 +158,33 @@ pub fn sync_once(
             Err(e) => {
                 // One unselectable or broken folder must not abort the pass:
                 // the inbox is usually the folder the user cares about, and it
-                // is usually not the broken one.
+                // is usually not the broken one. It is not silent, though —
+                // see the check after the loop.
+                report.folders_failed += 1;
+                report.errors.push(mailbox_api::FolderError {
+                    folder: path.clone(),
+                    error: e.to_string(),
+                });
                 tracer.emit(
                     event::SYNC_FOLDER_END,
                     serde_json::json!({ "folder": path, "error": e.to_string() }),
                 );
             }
         }
+    }
+
+    // A pass in which *every* folder failed is a failed pass. Reporting
+    // success because the loop completed would tell an agent the mailbox is up
+    // to date when nothing was fetched at all — the one lie a sync must never
+    // tell.
+    if report.folders_examined == 0 && report.folders_failed > 0 {
+        let first = report
+            .errors
+            .first()
+            .map(|e| format!("{}: {}", e.folder, e.error))
+            .unwrap_or_else(|| "every folder failed".to_string());
+        tracer.emit1(event::SYNC_END, "failed", &first);
+        return Err(crate::Error::Network(first));
     }
 
     store.refresh_folder_counts()?;
