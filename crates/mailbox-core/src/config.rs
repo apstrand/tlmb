@@ -1,0 +1,264 @@
+//! `config.toml` (§12). Everything optional, few knobs, all of them documented.
+//!
+//! Two properties are load-bearing:
+//!
+//! - **No credentials.** §9 is categorical: they never land in the config file
+//!   or in `meta.db`. What can appear here is *how to obtain* one — a command
+//!   to run, a keychain entry to look up — never the secret itself.
+//! - **Every default is compiled in.** A missing file is a valid
+//!   configuration, and `mailbox config explain` can therefore always say where
+//!   a value came from.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::{Error, Result};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    #[serde(default)]
+    pub general: General,
+    /// Keyed by account id — the short name `--account` takes.
+    #[serde(default)]
+    pub accounts: BTreeMap<String, AccountConfig>,
+    #[serde(default)]
+    pub threading: Threading,
+    #[serde(default)]
+    pub pair: Pair,
+    /// Keymap overrides. Passed through to the TUI (M3) without interpretation
+    /// here, so an unknown key is that frontend's problem to report.
+    #[serde(default)]
+    pub keys: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct General {
+    #[serde(default = "default_editor")]
+    pub editor: String,
+    #[serde(default = "default_true")]
+    pub unified_inbox: bool,
+    /// `immediate` | `approve` (§6.5). Defaults to `approve` under
+    /// `MAILBOX_AGENT=1`, which [`Config::send_policy`] resolves.
+    #[serde(default = "default_send_policy")]
+    pub send_policy: String,
+    /// §5.4. Effective from M8; recorded now so a user who sets it early is
+    /// honoured rather than surprised later.
+    #[serde(default = "default_true")]
+    pub state_sync: bool,
+    /// Default page size for `ls` and `search`.
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        General {
+            editor: default_editor(),
+            unified_inbox: true,
+            send_policy: default_send_policy(),
+            state_sync: true,
+            limit: default_limit(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Threading {
+    /// §5.6: JWZ's subject-based grouping of otherwise unlinked messages.
+    #[serde(default = "default_true")]
+    pub subject: bool,
+    /// How far apart two same-subject messages may be and still be grouped.
+    #[serde(default = "default_subject_days")]
+    pub subject_window_days: i64,
+}
+
+impl Default for Threading {
+    fn default() -> Self {
+        Threading {
+            subject: true,
+            subject_window_days: default_subject_days(),
+        }
+    }
+}
+
+impl Threading {
+    pub fn options(&self) -> crate::threading::ThreadingOptions {
+        crate::threading::ThreadingOptions {
+            subject_grouping: self.subject,
+            subject_window: self.subject_window_days * 86_400,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pair {
+    /// §8.2. Unused until M8; parsed now so a config written for a later
+    /// version does not fail to load on this one.
+    #[serde(default)]
+    pub relay: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountConfig {
+    pub address: String,
+    /// Every address this account answers to, for `to:me` and for compose's
+    /// From selector. The primary address is implied.
+    #[serde(default)]
+    pub identities: Vec<String>,
+
+    /// Discovered by autoconfig when absent (§9). Required for M1, which has no
+    /// discovery yet.
+    #[serde(default)]
+    pub imap_host: Option<String>,
+    #[serde(default)]
+    pub imap_port: Option<u16>,
+    /// `implicit` (993) | `starttls` (143) | `none`.
+    #[serde(default)]
+    pub imap_security: Option<String>,
+    /// The login name, when it differs from `address`.
+    #[serde(default)]
+    pub imap_user: Option<String>,
+
+    /// §9: a command that prints the password on stdout. This is the
+    /// `pass`/`gpg`/`op` hook, and the reason no secret needs to live here.
+    #[serde(default)]
+    pub credential_command: Option<String>,
+
+    /// §9. Turning this off is only honoured for a loopback host.
+    #[serde(default = "default_true")]
+    pub require_tls: bool,
+
+    /// `none` | `recent` | `full` (§5.1).
+    #[serde(default = "default_offline")]
+    pub offline: String,
+}
+
+impl AccountConfig {
+    pub fn login_user(&self) -> &str {
+        self.imap_user.as_deref().unwrap_or(&self.address)
+    }
+
+    /// Every address the account answers to, primary first, deduplicated.
+    pub fn all_identities(&self) -> Vec<String> {
+        let mut out = vec![self.address.to_ascii_lowercase()];
+        for i in &self.identities {
+            let lower = i.to_ascii_lowercase();
+            if !out.contains(&lower) {
+                out.push(lower);
+            }
+        }
+        out
+    }
+
+    pub fn port(&self) -> u16 {
+        self.imap_port.unwrap_or(match self.security() {
+            crate::imap::Security::Implicit => 993,
+            _ => 143,
+        })
+    }
+
+    pub fn security(&self) -> crate::imap::Security {
+        match self.imap_security.as_deref() {
+            Some("starttls") => crate::imap::Security::StartTls,
+            Some("none") | Some("plain") => crate::imap::Security::None,
+            Some("implicit") | Some("tls") | Some("ssl") => crate::imap::Security::Implicit,
+            // Infer from the port when unset: 143 is the STARTTLS port and 993
+            // the implicit one, and guessing wrong produces a confusing TLS
+            // handshake failure rather than a useful message.
+            None => match self.imap_port {
+                Some(143) => crate::imap::Security::StartTls,
+                _ => crate::imap::Security::Implicit,
+            },
+            Some(_) => crate::imap::Security::Implicit,
+        }
+    }
+
+    /// The prefetch window in days, from `offline` (§5.1).
+    pub fn prefetch_days(&self) -> Option<i64> {
+        match self.offline.as_str() {
+            "none" => None,
+            "full" => Some(i64::MAX / 86_400),
+            _ => Some(30),
+        }
+    }
+}
+
+impl Config {
+    /// Loads the config, or returns defaults when the file does not exist.
+    pub fn load(path: &Path) -> Result<Config> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => toml::from_str(&text).map_err(|e| {
+                // A config error must say where: a user staring at a rejected
+                // file needs the line, not the fact.
+                Error::usage(format!("{}: {e}", path.display()))
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn load_default() -> Result<Config> {
+        Config::load(&crate::paths::config_file())
+    }
+
+    pub fn account(&self, id: &str) -> Result<&AccountConfig> {
+        self.accounts
+            .get(id)
+            .ok_or_else(|| Error::not_found("account", id))
+    }
+
+    /// The account a command acts on when `--account` was not given.
+    ///
+    /// With exactly one configured account, that one. With several, `default`
+    /// if it exists, else the alphabetically first — deterministic, so a script
+    /// that omits `--account` behaves the same on every run.
+    pub fn default_account(&self) -> Result<&str> {
+        if self.accounts.is_empty() {
+            return Err(Error::not_found("account", "any"));
+        }
+        if self.accounts.len() == 1 {
+            return Ok(self.accounts.keys().next().unwrap());
+        }
+        if self.accounts.contains_key("default") {
+            return Ok("default");
+        }
+        Ok(self.accounts.keys().next().unwrap())
+    }
+
+    /// §6.5: `approve` is the default under `MAILBOX_AGENT=1` even when the
+    /// config says `immediate`, because an agent that can send unsupervised is
+    /// a liability the config file should have to opt *into*, not out of.
+    pub fn send_policy(&self, agent_mode: bool) -> &str {
+        if agent_mode && self.general.send_policy == "immediate" {
+            "approve"
+        } else {
+            &self.general.send_policy
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_editor() -> String {
+    "$EDITOR".to_string()
+}
+fn default_send_policy() -> String {
+    "immediate".to_string()
+}
+fn default_limit() -> usize {
+    50
+}
+fn default_subject_days() -> i64 {
+    14
+}
+fn default_offline() -> String {
+    "recent".to_string()
+}

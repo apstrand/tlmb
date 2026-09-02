@@ -1,0 +1,306 @@
+//! Argument definitions (§6.1).
+//!
+//! The CLI is the reference interface: the TUI and GUI are conveniences over
+//! it, and its `--json` output *is* the API contract (§4). So the flags here
+//! are not a convenience layer over a library — they are the API's surface, and
+//! adding one is the same kind of commitment as adding a JSON field.
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "mailbox",
+    version,
+    about = "A self-contained IMAP & SMTP client",
+    // Human help stays short; the JSON contract is the documentation agents
+    // read, via `mailbox schema`.
+    max_term_width = 100
+)]
+pub struct Cli {
+    #[command(flatten)]
+    pub global: GlobalFlags,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct GlobalFlags {
+    /// Emit exactly one JSON document (§6.4).
+    #[arg(long, global = true)]
+    pub json: bool,
+
+    /// Emit one JSON object per line, for streaming lists.
+    #[arg(long, global = true, conflicts_with = "json")]
+    pub ndjson: bool,
+
+    /// Restrict JSON output to these fields, comma-separated.
+    #[arg(long, global = true, value_delimiter = ',')]
+    pub fields: Option<Vec<String>>,
+
+    /// Which account to act on. Defaults to the only one configured.
+    #[arg(long, short = 'a', global = true)]
+    pub account: Option<String>,
+
+    /// Maximum rows to return.
+    #[arg(long, short = 'n', global = true)]
+    pub limit: Option<usize>,
+
+    /// Continue a previous page (§6.4). Opaque; comes from a prior `cursor`.
+    #[arg(long, global = true)]
+    pub cursor: Option<String>,
+
+    /// Show what would happen without doing it.
+    #[arg(long, global = true)]
+    pub dry_run: bool,
+
+    /// Answer yes to any confirmation.
+    #[arg(long, short = 'y', global = true)]
+    pub yes: bool,
+
+    /// Suppress non-essential output.
+    #[arg(long, short = 'q', global = true)]
+    pub quiet: bool,
+
+    #[arg(long, global = true, value_enum, default_value_t = ColorChoice::Auto)]
+    pub color: ColorChoice,
+
+    /// Give up after this many milliseconds.
+    #[arg(long, global = true)]
+    pub timeout: Option<u64>,
+
+    /// Use this config file instead of the default.
+    #[arg(long, global = true)]
+    pub config: Option<std::path::PathBuf>,
+
+    /// `agent` makes state-changing commands require `--yes` (§6.4).
+    #[arg(long, global = true)]
+    pub profile: Option<String>,
+
+    /// Write an NDJSON trace of every IMAP exchange and store transaction
+    /// (§6.7). Defaults to `mailbox.trace.ndjson`.
+    #[arg(long, global = true, num_args = 0..=1, default_missing_value = "mailbox.trace.ndjson")]
+    pub trace: Option<std::path::PathBuf>,
+
+    /// Include message bodies in the trace. Off by default so a trace can be
+    /// attached to a bug report.
+    #[arg(long, global = true, requires = "trace")]
+    pub trace_bodies: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ColorChoice {
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Format {
+    /// Plain text, HTML flattened when there is no text part.
+    Text,
+    /// HTML converted to Markdown, for LLM consumers (§6.4).
+    Md,
+    /// Sanitized HTML.
+    Html,
+    /// Exact RFC5322 bytes (§13).
+    Raw,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// List messages (default: the inbox, unread first).
+    Ls(LsArgs),
+
+    /// Render a message or a thread.
+    Show(ShowArgs),
+
+    /// Full-text and structured search (§6.2).
+    Search(SearchArgs),
+
+    /// List folders with counts.
+    Folders,
+
+    /// List accounts, or test one.
+    Accounts(AccountsArgs),
+
+    /// Run a sync pass.
+    Sync(SyncArgs),
+
+    /// Queues, errors, connectivity, store size.
+    Status,
+
+    /// Emit the JSON Schema for a command's output (§6.4).
+    Schema(SchemaArgs),
+
+    /// Introspection hooks (§6.7). Hidden: they exist for tests and bug
+    /// reports, not for daily use.
+    #[command(hide = true)]
+    Debug(DebugArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct LsArgs {
+    /// A query in the §6.2 grammar. Defaults to `in:inbox`.
+    pub query: Option<String>,
+
+    /// Group the results into threads.
+    #[arg(long, short = 't')]
+    pub threads: bool,
+
+    /// Order by date rather than unread-first.
+    #[arg(long)]
+    pub by_date: bool,
+
+    /// Oldest first.
+    #[arg(long, conflicts_with = "by_date")]
+    pub reverse: bool,
+
+    /// Include the total match count. Costs a second pass over the match set.
+    #[arg(long)]
+    pub total: bool,
+
+    /// Print full ids rather than the 7-character short form.
+    #[arg(long)]
+    pub full_ids: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SearchArgs {
+    /// A query in the §6.2 grammar.
+    #[arg(required = true, num_args = 1..)]
+    pub query: Vec<String>,
+
+    #[arg(long)]
+    pub total: bool,
+
+    #[arg(long)]
+    pub full_ids: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ShowArgs {
+    /// A message id, an unambiguous prefix, `^`, `@`, or an index into the
+    /// last listing (§5.2).
+    pub id: String,
+
+    /// Show the whole thread.
+    #[arg(long, short = 't')]
+    pub thread: bool,
+
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
+
+    /// Emit the exact RFC5322 bytes (§13). Implies `--format=raw`.
+    #[arg(long)]
+    pub raw: bool,
+
+    /// Never fall back to HTML when there is no text part.
+    #[arg(long)]
+    pub text_only: bool,
+
+    /// Drop quoted replies and signatures.
+    #[arg(long)]
+    pub strip_quotes: bool,
+
+    /// Truncate the body, setting `"truncated": true`.
+    #[arg(long)]
+    pub max_body_bytes: Option<usize>,
+
+    /// Omit the attachment list.
+    #[arg(long)]
+    pub no_attachments: bool,
+
+    /// Print headers only.
+    #[arg(long)]
+    pub headers_only: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AccountsArgs {
+    #[command(subcommand)]
+    pub action: Option<AccountsAction>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountsAction {
+    /// List configured accounts.
+    List,
+    /// Connect, authenticate, and report what the server offers.
+    Test {
+        /// Which account. Defaults to `--account` or the only one configured.
+        account: Option<String>,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct SyncArgs {
+    /// Run exactly one pass to quiescence and exit (§6.7).
+    ///
+    /// M1 has no background loop, so this is the only mode; it is a flag rather
+    /// than the absence of one because later milestones add the loop and this
+    /// spelling must keep meaning what it means now.
+    #[arg(long, default_value_t = true)]
+    pub once: bool,
+
+    /// Fetch every body, for offline use.
+    #[arg(long)]
+    pub full: bool,
+
+    /// Restrict to these folders.
+    #[arg(long, value_delimiter = ',')]
+    pub folder: Option<Vec<String>>,
+
+    /// Only look at messages newer than this date (§6.2 date syntax).
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// Stop at a named trace event, for mid-operation assertions (§6.7).
+    #[arg(long, requires = "trace")]
+    pub until: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SchemaArgs {
+    /// Which command's output schema. Omit to list the commands that have one.
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct DebugArgs {
+    #[command(subcommand)]
+    pub action: DebugAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DebugAction {
+    /// Canonical, ordered dump of derived state, for golden-file comparison.
+    StoreDump {
+        /// Restrict the message set. Folders and counts are always whole.
+        query: Option<String>,
+    },
+    /// Print the clock the process is using, and where it came from.
+    Clock,
+    /// Seed a store from a fixture manifest (§14.1).
+    Fixture {
+        #[command(subcommand)]
+        action: FixtureAction,
+    },
+    /// Parse a query and print the AST, for grammar tests.
+    Query { query: String },
+    /// Rebuild every thread from scratch.
+    Rethread,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FixtureAction {
+    /// Seed the local store directly, with no server in the loop.
+    Load { path: std::path::PathBuf },
+    /// Render the manifest to RFC5322 bytes, for seeding a server.
+    Render {
+        path: std::path::PathBuf,
+        /// One message by name. Omit for all of them.
+        #[arg(long)]
+        name: Option<String>,
+    },
+}

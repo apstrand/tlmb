@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/mailbox-api", "crates/mailbox-core", "crates/mailbox-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pstrand/mailbox"
+
+[workspace.dependencies]
+mailbox-api = { path = "crates/mailbox-api" }
+mailbox-core = { path = "crates/mailbox-core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+schemars = "1"
+thiserror = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

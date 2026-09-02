@@ -1,0 +1,31 @@
+[package]
+name = "mailbox-cli"
+description = "The mailbox command-line interface — the reference frontend (§6)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mailbox"
+path = "src/main.rs"
+
+[dependencies]
+mailbox-api.workspace = true
+mailbox-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+terminal_size = "0.4.4"
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros", "local-offset"] }
+base64 = "0.23.1"
+
+[dev-dependencies]
+# Schema conformance for §14.4. `default-features = false` drops the remote
+# `$ref` resolver, which would pull an HTTP stack into the dev tree to fetch
+# schemas we never reference.
+jsonschema = { version = "0.52", default-features = false }
+mailbox-core.workspace = true
+serde_json.workspace = true

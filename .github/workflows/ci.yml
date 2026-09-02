@@ -1,0 +1,83 @@
+# The verification levels of §14.2. A level, once required, stays required
+# (§15) — so this file only ever grows.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # L0 (§14.2): MIME parsing, JWZ threading, the query parser, and the small
+  # primitives. Microseconds, no server, gates every PR.
+  l0:
+    name: L0 — parsers, threading, query, contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --all-features
+
+      # The L2 suite skips itself without Docker, so it is excluded here rather
+      # than passing vacuously.
+      - name: L0
+        run: cargo test -p mailbox-api -p mailbox-core
+
+      # Schema conformance (§14.4) runs here rather than with L2: it needs the
+      # binary, not a server.
+      - name: JSON contract
+        run: cargo test -p mailbox-cli --test contract
+
+  # L2 (§14.2): a real Dovecot in a container, seeded from fixtures (§14.1).
+  # M1 is not done until this is green (§15).
+  l2:
+    name: L2 — Dovecot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the test server
+        run: docker build -t mailbox-test-dovecot tests/dovecot
+
+      # MAILBOX_L2_REQUIRED turns the harness's "skip when Docker is missing"
+      # into a failure. A suite that silently skips is a suite nobody notices
+      # has stopped running.
+      - name: L2
+        env:
+          MAILBOX_L2_REQUIRED: "1"
+        run: cargo test -p mailbox-cli --test l2_dovecot
+
+  # §10's binary-size budget. Not a benchmark — those need a dedicated runner
+  # (§14.5) and arrive with M3's perf suite — but the one budget a shared runner
+  # can measure honestly.
+  size:
+    name: Binary size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Check against the §10 budget
+        run: |
+          bytes=$(stat -c%s target/release/mailbox)
+          budget=$((25 * 1024 * 1024))
+          echo "mailbox: $bytes bytes (budget $budget)"
+          if [ "$bytes" -gt "$budget" ]; then
+            echo "::error::the binary exceeds the §10 budget of 25 MB"
+            exit 1
+          fi

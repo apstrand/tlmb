@@ -1,0 +1,31 @@
+[package]
+name = "mailbox-core"
+description = "Store, sync engine, query, threading, and MIME. No I/O policy, no UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mailbox-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+rusqlite = { version = "0.40", features = ["bundled", "blob"] }
+mail-parser = "0.11"
+imap-proto = "0.16"
+blake3 = "1"
+zstd = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = "1"
+base64 = "0.22"
+toml = "0.9"
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
+getrandom = "0.3"
+nom = "7"
+
+[dev-dependencies]
+getrandom = "0.3"
+imap-proto = "0.16"
