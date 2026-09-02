@@ -6,18 +6,32 @@
 
 use mailbox_api::{Address, MessageDetail, MessageSummary, Thread};
 
-use crate::output::{Out, BLUE, BOLD, CYAN, DIM, GREEN, YELLOW};
+use crate::output::{Out, BLUE, BOLD, CYAN, DIM, GREEN, MAGENTA, YELLOW};
 use crate::table::{Column, Table};
 
 /// One row per message: flags, date, sender, subject.
+///
+/// An account column appears only when the listing actually spans more than
+/// one (§7: "multi-account is invisible until you want it"). Self-configuring
+/// rather than flag-driven, so a single-account mailbox never pays for it.
 pub fn message_table(out: &Out, messages: &[MessageSummary], full_ids: bool) -> String {
-    let mut table = Table::new(vec![
+    let accounts: std::collections::BTreeSet<&str> =
+        messages.iter().map(|m| m.account.as_str()).collect();
+    let show_account = accounts.len() > 1;
+
+    let mut columns = vec![
         Column::new("").min(2),
         Column::new("id").min(if full_ids { 64 } else { 7 }),
+    ];
+    if show_account {
+        columns.push(Column::new("acct").min(4));
+    }
+    columns.extend([
         Column::new("date").min(11),
         Column::new("from").min(14),
         Column::new("subject").flexible().min(20),
     ]);
+    let mut table = Table::new(columns);
 
     for m in messages {
         let unread = !m.flags.iter().any(|f| f == "seen");
@@ -31,15 +45,35 @@ pub fn message_table(out: &Out, messages: &[MessageSummary], full_ids: bool) -> 
         } else {
             subject.to_string()
         };
-        table.push(vec![
+        let mut row = vec![
             marks(out, m),
             out.dim(if full_ids { &m.id } else { short(&m.id) }),
+        ];
+        if show_account {
+            row.push(out.paint(&m.account, account_color(&m.account)));
+        }
+        row.extend([
             out.paint(&relative_date(&m.date), DIM),
             out.paint(&truncate_addr(&m.from), CYAN),
             subject,
         ]);
+        table.push(row);
     }
     table.render(out)
+}
+
+/// §7's "per-message account color": a stable colour per account name.
+///
+/// Derived from the name rather than from the account's position in the config,
+/// so an account keeps its colour when another is added or removed — the point
+/// of a colour is that it is recognisable, and one that shifts is worse than
+/// none.
+fn account_color(account: &str) -> &'static str {
+    const PALETTE: &[&str] = &[CYAN, GREEN, YELLOW, MAGENTA, BLUE];
+    let hash = account.bytes().fold(0u32, |acc, b| {
+        acc.wrapping_mul(31).wrapping_add(u32::from(b))
+    });
+    PALETTE[hash as usize % PALETTE.len()]
 }
 
 /// The flag column: unread, flagged, attachment. Three characters, because a

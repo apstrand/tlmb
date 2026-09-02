@@ -588,6 +588,24 @@ fn summary_from_row(r: &Row<'_>, account: &str) -> MessageSummary {
     }
 }
 
+/// Builds the cursor that resumes after `last` under `sort`.
+///
+/// Public because the multi-account merge needs it: the union of several
+/// stores' pages is paginated by one cursor, and minting it is the same
+/// operation whether one store or several produced the row.
+pub fn encode_cursor(last: &MessageSummary, sort: Sort) -> Result<String> {
+    let lead = match sort {
+        Sort::UnreadFirst => i64::from(last.flags.iter().any(|f| f == flags::SEEN)),
+        _ => 0,
+    };
+    Ok(Cursor {
+        lead,
+        date: parse_rfc3339_to_unix(&last.date),
+        id: last.id.clone(),
+    }
+    .encode())
+}
+
 /// The opaque page cursor of §6.4.
 ///
 /// It carries the whole sort key, not an offset. An offset re-reads the same

@@ -30,6 +30,7 @@ than retrofitted.
 | `send`, `compose`, `reply`, `outbox` | done (§6.1, M2) |
 | Idempotency keys, approval queue, `policy.toml` | done (§6.5, M2) |
 | L3 adversarial SMTP server and its fault matrix | done (§14.2, M2) |
+| Multi-account and the unified inbox | done (§1.5, §7, M2) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
@@ -37,14 +38,11 @@ than retrofitted.
 
 ### In progress: M2
 
-Writes and sending have landed. Still to come: multi-account and the unified
-inbox, the crash-only oracle, IMAP-side L3 scenarios, and widening L2 to Cyrus
-and Stalwart.
+Writes, sending, and multi-account have landed. Still to come: the crash-only
+oracle, IMAP-side L3 scenarios, and widening L2 to Cyrus and Stalwart.
 
 ### Not built yet
 
-- **Multi-account.** The config takes several accounts, but one store is opened
-  at a time; the unified inbox is one account's inbox.
 - **OAuth2 and `accounts add`.** Autoconfig discovery and the system-browser
   PKCE flow.
 - **Instance coordination.** The owner lock and the Unix socket of §4.1 are
@@ -172,6 +170,18 @@ return the original result instead of queueing a second copy.
 every folder with its message and unread counts, fetches nothing, and writes
 nothing — so it works on an account that has never synced. `folders` without it
 reads the local store, which is empty until the first sync.
+
+### Several accounts
+
+Add another `[accounts.*]` stanza and they become one mailbox: `ls` merges them
+newest-first, rows gain an account column, and `account:home` splits them again.
+`--account work` narrows any command to one, and `unified_inbox = false` under
+`[general]` makes that the default.
+
+Writes route themselves — a message id names its account (§5.2), so
+`mailbox archive <work-id> <home-id>` reaches both servers and resolves each
+one's own archive folder. `send --from` picks the account that owns the
+identity.
 
 To keep a test account away from your real one, set `MAILBOX_CONFIG` and
 `MAILBOX_STATE_DIR`: they relocate every path the process touches (§6.7), so

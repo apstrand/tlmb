@@ -11,7 +11,7 @@ use mailbox_api::{Address, OutboxList, SendResult};
 use mailbox_core::compose::{Attachment, Draft};
 use mailbox_core::error::{Error, Result};
 use mailbox_core::send::{ReplyMode, SendRequest};
-use mailbox_core::session::IdRef;
+use mailbox_core::session::{IdRef, Session};
 use mailbox_core::store::OutboxState;
 
 use crate::cli::{ComposeArgs, OutboxAction, OutboxArgs, ReplyArgs, SendArgs};
@@ -20,7 +20,7 @@ use crate::output::{GREEN, YELLOW};
 
 pub fn send(ctx: &Ctx<'_>, args: &SendArgs) -> Result<()> {
     ctx.confirm("send")?;
-    let mut session = ctx.session()?;
+    let mut session = session_for(ctx, args.from.as_deref())?;
 
     let draft = if args.stdin {
         // §13: `mailbox send --stdin` takes exact RFC5322 bytes, which is what
@@ -60,7 +60,7 @@ pub fn send(ctx: &Ctx<'_>, args: &SendArgs) -> Result<()> {
 
 pub fn compose(ctx: &Ctx<'_>, args: &ComposeArgs) -> Result<()> {
     ctx.confirm("compose")?;
-    let mut session = ctx.session()?;
+    let mut session = session_for(ctx, args.from.as_deref())?;
 
     let template = format!(
         "To: {}\nSubject: {}\n\n",
@@ -94,7 +94,21 @@ pub fn reply(ctx: &Ctx<'_>, args: &ReplyArgs) -> Result<()> {
     let id_ref = IdRef::parse(&args.id);
     ctx.warn_if_positional(&id_ref);
 
-    let mut session = ctx.session()?;
+    // A reply goes out from the account that holds the original — the identity
+    // it was addressed to is in that account, and so is the thread.
+    let (id_ref, account) = {
+        let workspace = ctx.workspace()?;
+        let (index, full_id) = workspace.locate(&id_ref)?;
+        (
+            IdRef::Id(full_id),
+            workspace.sessions()[index].account_id.clone(),
+        )
+    };
+
+    let mut opts = ctx.opts.clone();
+    opts.account = Some(account);
+    let mut session = Session::open(&opts, ctx.tracer.clone(), ctx.clock.clone())?;
+
     let mode = if args.forward {
         ReplyMode::Forward
     } else if args.all {
@@ -300,6 +314,33 @@ fn report_send(ctx: &Ctx<'_>, command: &str, result: &SendResult) -> Result<()> 
         }
     }
     Ok(())
+}
+
+/// Which account a new message goes out from.
+///
+/// `--from` picks the account that owns that identity, which is what makes
+/// `--from work@example.com` do the obvious thing in a unified mailbox (§7).
+/// Without it, the account `--account` named, or the first configured one.
+fn session_for(ctx: &Ctx<'_>, from: Option<&str>) -> Result<Session> {
+    let Some(from) = from else {
+        return ctx.session();
+    };
+    let address = parse_address(from)?
+        .map(|a| a.address)
+        .unwrap_or_else(|| from.to_string());
+
+    let account = {
+        let workspace = ctx.workspace()?;
+        workspace
+            .session_for_identity(&address)
+            .map(|s| s.account_id.clone())
+    };
+
+    let mut opts = ctx.opts.clone();
+    if let Some(account) = account {
+        opts.account = Some(account);
+    }
+    Session::open(&opts, ctx.tracer.clone(), ctx.clock.clone())
 }
 
 // ---- input helpers ----

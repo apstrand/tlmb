@@ -11,6 +11,7 @@ use mailbox_core::session::{FlagSpec, IdRef, Session, SessionOptions};
 use mailbox_core::store::read::{ListOptions, Sort};
 use mailbox_core::store::Written;
 use mailbox_core::Tracer;
+use mailbox_core::Workspace;
 
 use crate::cli::{
     AccountsAction, AccountsArgs, DebugAction, DebugArgs, FixtureAction, FlagArgs, FoldersArgs,
@@ -31,6 +32,12 @@ pub struct Ctx<'a> {
 impl Ctx<'_> {
     pub(crate) fn session(&self) -> Result<Session> {
         Session::open(&self.opts, self.tracer.clone(), self.clock.clone())
+    }
+
+    /// Every configured account as one mailbox (§1.5), or just the one
+    /// `--account` named.
+    pub(crate) fn workspace(&self) -> Result<Workspace> {
+        Workspace::open(&self.opts, self.tracer.clone(), self.clock.clone())
     }
 
     fn list_options(&self, sort: Sort, with_total: bool) -> ListOptions {
@@ -80,7 +87,7 @@ impl Ctx<'_> {
 }
 
 pub fn ls(ctx: &Ctx<'_>, args: &LsArgs) -> Result<()> {
-    let session = ctx.session()?;
+    let workspace = ctx.workspace()?;
     let sort = if args.reverse {
         Sort::DateAsc
     } else if args.by_date {
@@ -88,27 +95,27 @@ pub fn ls(ctx: &Ctx<'_>, args: &LsArgs) -> Result<()> {
     } else {
         Sort::UnreadFirst
     };
-    let list = session.ls(args.query.as_deref(), ctx.list_options(sort, args.total))?;
+    let list = workspace.ls(args.query.as_deref(), &ctx.list_options(sort, args.total))?;
 
     if args.threads {
-        return render_threads(ctx, &session, &list);
+        return render_threads(ctx, &workspace, &list);
     }
-    render_messages(ctx, &session, "ls", &list, args.full_ids)
+    render_messages(ctx, &workspace, "ls", &list, args.full_ids)
 }
 
 pub fn search(ctx: &Ctx<'_>, args: &SearchArgs) -> Result<()> {
-    let session = ctx.session()?;
+    let workspace = ctx.workspace()?;
     let query = args.query.join(" ");
     // Search orders by date: relevance is not a thing we can honestly rank
     // across a structured-plus-full-text query, and unread-first would bury the
     // match the user was looking for.
-    let list = session.search(&query, ctx.list_options(Sort::DateDesc, args.total))?;
-    render_messages(ctx, &session, "search", &list, args.full_ids)
+    let list = workspace.search(&query, &ctx.list_options(Sort::DateDesc, args.total))?;
+    render_messages(ctx, &workspace, "search", &list, args.full_ids)
 }
 
 fn render_messages(
     ctx: &Ctx<'_>,
-    session: &Session,
+    workspace: &Workspace,
     command: &str,
     list: &MessageList,
     full_ids: bool,
@@ -117,7 +124,7 @@ fn render_messages(
     // (§5.2). Done for structured output too: a script that pipes `--json` into
     // a human's terminal should not break the human's shorthand.
     let ids: Vec<String> = list.messages.iter().map(|m| m.id.clone()).collect();
-    History::save(&session.account_id, &ids);
+    History::save(&workspace.history_scope(), &ids);
 
     match ctx.out.mode {
         crate::output::Mode::Json => ctx.out.reply(command, list)?,
@@ -146,7 +153,7 @@ fn render_messages(
     Ok(())
 }
 
-fn render_threads(ctx: &Ctx<'_>, session: &Session, list: &MessageList) -> Result<()> {
+fn render_threads(ctx: &Ctx<'_>, workspace: &Workspace, list: &MessageList) -> Result<()> {
     // Group the page's messages into their threads, preserving the page's
     // order. Deliberately *not* a second query: the page is the unit the cursor
     // paginates, and expanding it server-side would make the cursor lie.
@@ -157,8 +164,13 @@ fn render_threads(ctx: &Ctx<'_>, session: &Session, list: &MessageList) -> Resul
             continue;
         }
         seen.push(m.thread_id.clone());
-        if let Ok(t) = session.store().thread(&m.thread_id) {
-            threads.push(t);
+        // A thread belongs to the account that holds its messages, so it is
+        // fetched from the store that owns this row rather than from a
+        // notional shared one.
+        if let Ok((i, _)) = workspace.locate(&IdRef::Id(m.id.clone())) {
+            if let Ok(t) = workspace.sessions()[i].store().thread(&m.thread_id) {
+                threads.push(t);
+            }
         }
     }
 
@@ -219,11 +231,11 @@ pub fn flag(ctx: &Ctx<'_>, args: &FlagArgs) -> Result<()> {
         ctx.warn_if_positional(r);
     }
 
-    let mut session = ctx.session()?;
+    let mut workspace = ctx.workspace()?;
     if ctx.global.dry_run {
-        return report_dry_run(ctx, "flag", &session, &refs, None, Some(&spec));
+        return report_dry_run(ctx, "flag", &workspace, &refs, None, Some(&spec));
     }
-    let written = session.flag(&refs, &spec)?;
+    let written = workspace.write_each(&refs, |session, ids| session.flag(ids, &spec))?;
     report_written(ctx, "flag", &written)
 }
 
@@ -245,15 +257,17 @@ pub fn mv(ctx: &Ctx<'_>, args: &MoveArgs, copy: bool) -> Result<()> {
         ctx.warn_if_positional(r);
     }
 
-    let mut session = ctx.session()?;
+    let mut workspace = ctx.workspace()?;
     if ctx.global.dry_run {
-        return report_dry_run(ctx, command, &session, &refs, Some(&target), None);
+        return report_dry_run(ctx, command, &workspace, &refs, Some(&target), None);
     }
-    let written = if copy {
-        session.copy_to(&refs, &target)?
-    } else {
-        session.move_to(&refs, &target)?
-    };
+    let written = workspace.write_each(&refs, |session, ids| {
+        if copy {
+            session.copy_to(ids, &target)
+        } else {
+            session.move_to(ids, &target)
+        }
+    })?;
     report_written(ctx, command, &written)
 }
 
@@ -272,12 +286,17 @@ pub fn move_to_special(ctx: &Ctx<'_>, args: &TargetArgs, use_name: &str) -> Resu
         ctx.warn_if_positional(r);
     }
 
-    let mut session = ctx.session()?;
-    let target = session.special_folder(use_name)?;
+    let mut workspace = ctx.workspace()?;
     if ctx.global.dry_run {
-        return report_dry_run(ctx, command, &session, &refs, Some(&target), None);
+        let target = workspace.primary()?.special_folder(use_name)?;
+        return report_dry_run(ctx, command, &workspace, &refs, Some(&target), None);
     }
-    let written = session.move_to(&refs, &target)?;
+    // Resolved per account: `archive` is a different folder path on different
+    // servers, and in a unified mailbox the messages may span both.
+    let written = workspace.write_each(&refs, |session, ids| {
+        let target = session.special_folder(use_name)?;
+        session.move_to(ids, &target)
+    })?;
     report_written(ctx, command, &written)
 }
 
@@ -324,17 +343,18 @@ fn report_written(ctx: &Ctx<'_>, command: &str, written: &[Written]) -> Result<(
 fn report_dry_run(
     ctx: &Ctx<'_>,
     command: &str,
-    session: &Session,
+    workspace: &Workspace,
     refs: &[IdRef],
     target: Option<&str>,
     spec: Option<&FlagSpec>,
 ) -> Result<()> {
     let mut messages = Vec::new();
     for r in refs {
-        let id = session.resolve(r)?;
-        let summary = session.store().summary(&id)?;
+        let (i, id) = workspace.locate(r)?;
+        let summary = workspace.sessions()[i].store().summary(&id)?;
         messages.push(serde_json::json!({
             "id": id,
+            "account": summary.account,
             "subject": summary.subject,
             "folder": summary.folder,
             "flags": summary.flags,
@@ -366,14 +386,14 @@ fn report_dry_run(
 }
 
 pub fn show(ctx: &Ctx<'_>, args: &ShowArgs) -> Result<()> {
-    let session = ctx.session()?;
+    let workspace = ctx.workspace()?;
     let id_ref = IdRef::parse(&args.id);
     ctx.warn_if_positional(&id_ref);
 
     // `--raw` bypasses rendering entirely: §13 promises the exact RFC5322
     // bytes, and anything that decoded and re-encoded them would not be exact.
     if args.raw || args.format == Format::Raw {
-        let bytes = session.raw(&id_ref)?;
+        let bytes = workspace.raw(&id_ref)?;
         use std::io::Write;
         std::io::stdout().write_all(&bytes)?;
         return Ok(());
@@ -391,7 +411,7 @@ pub fn show(ctx: &Ctx<'_>, args: &ShowArgs) -> Result<()> {
         max_body_bytes: args.max_body_bytes,
     };
 
-    let mut result = session.show(&id_ref, &render, args.thread)?;
+    let mut result = workspace.show(&id_ref, &render, args.thread)?;
     if args.no_attachments {
         if let Some(m) = &mut result.message {
             m.attachments.clear();
@@ -405,7 +425,10 @@ pub fn show(ctx: &Ctx<'_>, args: &ShowArgs) -> Result<()> {
 
     // The message just shown becomes `^`.
     if let Some(m) = &result.message {
-        History::save(&session.account_id, std::slice::from_ref(&m.summary.id));
+        History::save(
+            &workspace.history_scope(),
+            std::slice::from_ref(&m.summary.id),
+        );
     }
 
     match ctx.out.mode {
@@ -431,7 +454,7 @@ fn render_show_human(ctx: &Ctx<'_>, result: &ShowResult, args: &ShowArgs) {
 }
 
 pub fn folders(ctx: &Ctx<'_>, args: &FoldersArgs) -> Result<()> {
-    let session = ctx.session()?;
+    let session = ctx.workspace()?;
     // `--remote` asks the server. It reads nothing from the store and writes
     // nothing to it, so it is not gated by agent mode.
     let list = if args.remote {
@@ -486,8 +509,7 @@ pub fn accounts(ctx: &Ctx<'_>, args: &AccountsArgs) -> Result<()> {
 }
 
 fn accounts_list(ctx: &Ctx<'_>) -> Result<()> {
-    let session = ctx.session()?;
-    let list = session.accounts()?;
+    let list = ctx.workspace()?.accounts()?;
     match ctx.out.mode {
         crate::output::Mode::Json => ctx.out.reply("accounts", &list)?,
         crate::output::Mode::Ndjson => ctx.out.ndjson_list("accounts", &list.accounts, None)?,
@@ -588,8 +610,8 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
     // gates it (§6.4).
     ctx.confirm("sync")?;
 
-    let mut session = ctx.session()?;
-    let cfg = session.account_config()?.clone();
+    let mut workspace = ctx.workspace()?;
+    let cfg = workspace.primary()?.account_config()?.clone();
 
     let since = match &args.since {
         Some(s) => Some(
@@ -602,7 +624,7 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
     if ctx.global.dry_run {
         // §6.5: `--dry-run` exits 0 without touching the network.
         let payload = serde_json::json!({
-            "account": session.account_id,
+            "accounts": mailbox_core::workspace::account_ids(&workspace),
             "would_sync": true,
             "server": format!("{}:{}", cfg.imap_host.clone().unwrap_or_default(), cfg.port()),
             "full": args.full,
@@ -614,7 +636,7 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
         } else {
             ctx.out.print(format!(
                 "would sync {} (no network touched)",
-                session.account_id
+                mailbox_core::workspace::account_ids(&workspace).join(", ")
             ));
         }
         return Ok(());
@@ -628,11 +650,19 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
         max_prefetch: 500,
     };
 
-    let result = session.sync(&opts)?;
+    let result = workspace.sync(&opts)?;
 
     if ctx.out.is_structured() {
         ctx.out.reply("sync", &result)?;
     } else {
+        if let Some(s) = &result.submitted {
+            if s.attempted > 0 || s.uploaded > 0 {
+                ctx.out.print(format!(
+                    "outbox: {} sent, {} deferred, {} failed, {} filed",
+                    s.sent, s.deferred, s.failed, s.uploaded
+                ));
+            }
+        }
         for r in &result.synced {
             ctx.out.print(format!(
                 "{}: {} folders, +{} messages, ~{} updated, -{} removed, {} bodies in {} ms",
@@ -654,8 +684,7 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
 }
 
 pub fn status(ctx: &Ctx<'_>) -> Result<()> {
-    let session = ctx.session()?;
-    let status = session.status()?;
+    let status = ctx.workspace()?.status()?;
     if ctx.out.is_structured() {
         ctx.out.reply("status", &status)?;
         return Ok(());
@@ -739,8 +768,7 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
 pub fn debug(ctx: &Ctx<'_>, args: &DebugArgs) -> Result<()> {
     match &args.action {
         DebugAction::StoreDump { query } => {
-            let session = ctx.session()?;
-            let dump = session.store_dump(query.as_deref())?;
+            let dump = ctx.workspace()?.store_dump(query.as_deref())?;
             // Always JSON: this is a golden-file oracle (§14.3), and a
             // human-readable variant would just be a second thing to keep
             // stable.
@@ -775,8 +803,11 @@ pub fn debug(ctx: &Ctx<'_>, args: &DebugArgs) -> Result<()> {
         }
 
         DebugAction::Rethread => {
-            let mut session = ctx.session()?;
-            let n = session.store_mut().rebuild_threads(None)?;
+            let mut workspace = ctx.workspace()?;
+            let mut n = 0;
+            for session in workspace.sessions_mut() {
+                n += session.store_mut().rebuild_threads(None)?;
+            }
             let payload = serde_json::json!({ "rethreaded": n });
             if ctx.out.is_structured() {
                 ctx.out.reply("debug rethread", &payload)?;

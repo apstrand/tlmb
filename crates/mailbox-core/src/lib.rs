@@ -27,9 +27,11 @@ pub mod smtp;
 pub mod store;
 pub mod threading;
 pub mod trace;
+pub mod workspace;
 
 pub use clock::{Clock, Rng, Timestamp};
 pub use error::{Error, Result};
 pub use session::Session;
 pub use store::Store;
 pub use trace::Tracer;
+pub use workspace::Workspace;
