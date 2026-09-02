@@ -473,6 +473,23 @@ pub enum DebugAction {
     Query { query: String },
     /// Rebuild every thread from scratch.
     Rethread,
+    /// Replay a recorded IMAP conversation against the sync engine (§14.2, L1).
+    ///
+    /// No network, no server: the engine under test is the same code that talks
+    /// to a real one.
+    Replay {
+        transcript: std::path::PathBuf,
+        /// Fail if the client's commands differ from the recording. On by
+        /// default — a replay that only checked responses would let the engine
+        /// send anything at all and still pass.
+        #[arg(long, default_value_t = true)]
+        strict: bool,
+        /// Refuse a recording older than this many days. §14.2: a stale
+        /// transcript is a test that passes about a server that no longer
+        /// exists.
+        #[arg(long)]
+        max_age_days: Option<i64>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

@@ -23,6 +23,7 @@ time = { version = "0.3.55", features = ["formatting", "parsing", "macros", "loc
 base64 = "0.23.1"
 
 [dev-dependencies]
+base64 = "0.23.1"
 # Schema conformance for §14.4. `default-features = false` drops the remote
 # `$ref` resolver, which would pull an HTTP stack into the dev tree to fetch
 # schemas we never reference.

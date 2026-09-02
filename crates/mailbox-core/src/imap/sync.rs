@@ -29,7 +29,7 @@ use crate::trace::event;
 /// How many bodies one `--full` pass will fetch per folder.
 const FULL_FETCH_CHUNK: usize = 100_000;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncOptions {
     /// `sync --full`: fetch every body, for offline use (§5.1).
     pub full: bool,
@@ -71,6 +71,11 @@ pub fn sync_once(
     clock: &Clock,
 ) -> Result<SyncReport> {
     let started = std::time::Instant::now();
+    // An L1 recording is of a pass made with particular options (§14.2), and
+    // replaying it with different ones would ask for bytes the recording does
+    // not contain. Recording them makes the replay ask the same questions.
+    client.record_sync_options(opts);
+
     let tracer = store.tracer().clone();
     tracer.emit(
         event::SYNC_BEGIN,

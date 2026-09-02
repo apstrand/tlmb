@@ -33,6 +33,7 @@ than retrofitted.
 | Multi-account and the unified inbox | done (§1.5, §7, M2) |
 | Crash-only oracle: `MAILBOX_CRASH_AT` and its supervisor | done (§14.3, M2) |
 | L3 adversarial IMAP server and the §14.2 recovery scenarios | done (§14.2, M2) |
+| L1 transcript record and replay | done (§14.2, M3) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
@@ -247,10 +248,30 @@ cargo test -p mailbox-api -p mailbox-core     # L0: µs, no server
 cargo test -p mailbox-cli --test contract     # the JSON contract, no server
 cargo test -p mailbox-cli --test l3_smtp      # L3: SMTP faults, no Docker
 cargo test -p mailbox-cli --test l3_imap      # L3: IMAP faults, no Docker
+cargo test -p mailbox-cli --test l1_replay    # L1: transcript replay, no server
 cargo test -p mailbox-cli --test crash_only   # the crash-only oracle, no Docker
 cargo test -p mailbox-cli --test multi_account # several accounts, no Docker
 cargo test -p mailbox-cli --test l2_dovecot   # L2: a real Dovecot in Docker
 ```
+
+L1 replays a recorded IMAP conversation against the sync engine with no server
+at all. `MAILBOX_RECORD=<scenario> MAILBOX_RECORD_PATH=<file> mailbox sync`
+records one from whatever server is in front of it; `mailbox debug replay <file>`
+plays it back. Recording starts *after* authentication, so a transcript is the
+sync conversation and carries no credential — and replay checks what the client
+**sent**, not just what it read, because a replay that only fed responses back
+would let the engine send anything at all and still pass.
+
+The committed corpus lives in `crates/mailbox-cli/tests/transcripts/` and is
+re-recorded with:
+
+```sh
+cargo test -p mailbox-cli --test record_corpus -- --ignored
+```
+
+Those recordings came from the in-tree L3 server, because Docker is not reachable
+here; §14.2 wants them from real servers, and re-recording against Dovecot is a
+one-command job once it is.
 
 `MAILBOX_CRASH_AT=<event>[:n]` kills the process at a named trace event with no
 cleanup at all, which is what turns §14.3's crash-only oracle into a supervisor

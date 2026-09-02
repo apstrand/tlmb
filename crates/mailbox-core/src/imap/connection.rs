@@ -65,6 +65,8 @@ pub enum Credential {
 enum Transport {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    /// A recorded conversation played back (§14.2's L1). No socket exists.
+    Replay(Box<crate::imap::transcript::Replay>),
     /// Held only during the `STARTTLS` upgrade.
     Upgrading,
 }
@@ -74,6 +76,7 @@ impl Read for Transport {
         match self {
             Transport::Plain(s) => s.read(buf),
             Transport::Tls(s) => s.read(buf),
+            Transport::Replay(r) => r.read(buf),
             Transport::Upgrading => Ok(0),
         }
     }
@@ -84,6 +87,7 @@ impl Write for Transport {
         match self {
             Transport::Plain(s) => s.write(buf),
             Transport::Tls(s) => s.write(buf),
+            Transport::Replay(r) => r.write(buf),
             Transport::Upgrading => Ok(0),
         }
     }
@@ -91,6 +95,7 @@ impl Write for Transport {
         match self {
             Transport::Plain(s) => s.flush(),
             Transport::Tls(s) => s.flush(),
+            Transport::Replay(r) => r.flush(),
             Transport::Upgrading => Ok(()),
         }
     }
@@ -102,6 +107,8 @@ pub struct Connection {
     tag: u64,
     tracer: Tracer,
     host: String,
+    /// Set when this conversation is being recorded for L1 (§14.2).
+    recorder: Option<crate::imap::transcript::Recorder>,
     pub capabilities: BTreeSet<String>,
     /// Set once `ENABLE QRESYNC` has been accepted.
     pub qresync_enabled: bool,
@@ -145,6 +152,71 @@ impl CommandResult {
 }
 
 impl Connection {
+    /// Replays a recorded conversation instead of opening a socket (§14.2's
+    /// L1).
+    ///
+    /// The client cannot tell the difference, which is the point: the sync
+    /// engine under test is the same code that talks to a real server, not a
+    /// mocked variant of it.
+    pub fn replay(
+        transcript: crate::imap::transcript::Transcript,
+        tracer: Tracer,
+    ) -> Result<(Connection, std::sync::Arc<std::sync::Mutex<Option<String>>>)> {
+        // A transcript begins after authentication, so the capabilities and the
+        // enabled extensions come from its header rather than from a greeting.
+        // Seeding them is not a shortcut: they decide which of §5.3's paths the
+        // engine takes, and replaying without them would exercise a different
+        // engine than the one that was recorded.
+        let capabilities = transcript.capabilities.iter().cloned().collect();
+        let qresync_enabled = transcript.qresync;
+        let tag = transcript.start_tag;
+
+        let replay = crate::imap::transcript::Replay::new(transcript);
+        let divergence = replay.divergence();
+
+        Ok((
+            Connection {
+                transport: Transport::Replay(Box::new(replay)),
+                buf: Vec::with_capacity(16 * 1024),
+                tag,
+                tracer,
+                host: "transcript".to_string(),
+                recorder: None,
+                capabilities,
+                qresync_enabled,
+            },
+            divergence,
+        ))
+    }
+
+    /// Begins recording, once authentication is done.
+    pub fn begin_recording(&self) {
+        if let Some(recorder) = &self.recorder {
+            recorder.start(
+                self.capabilities.iter().cloned().collect(),
+                self.qresync_enabled,
+                self.tag,
+            );
+        }
+    }
+
+    /// Notes the sync options of the pass being recorded.
+    pub fn record_sync_options(&self, opts: &crate::imap::sync::SyncOptions) {
+        if let Some(recorder) = &self.recorder {
+            recorder.set_sync_options(opts);
+        }
+    }
+
+    /// Where the client's tag counter should resume, for a recorded connection.
+    pub fn tag_counter(&self) -> u64 {
+        self.tag
+    }
+
+    /// Resumes the tag counter at a recorded value.
+    pub fn set_tag_counter(&mut self, tag: u64) {
+        self.tag = tag;
+    }
+
     /// Opens a connection and reads the greeting.
     pub fn connect(cfg: &ConnectionConfig, tracer: Tracer) -> Result<Connection> {
         if cfg.security == Security::None && cfg.require_tls {
@@ -173,12 +245,21 @@ impl Connection {
             Security::StartTls | Security::None => Transport::Plain(tcp),
         };
 
+        // §14.2: L1 transcripts are recorded from L2 and L4 runs. Arming it
+        // here rather than in the test harness means a recording captures the
+        // real client's real conversation, byte for byte.
+        let recorder = std::env::var("MAILBOX_RECORD")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(|scenario| crate::imap::transcript::Recorder::new("", &scenario, clock_now()));
+
         let mut conn = Connection {
             transport,
             buf: Vec::with_capacity(16 * 1024),
             tag: 0,
             tracer,
             host: cfg.host.clone(),
+            recorder,
             capabilities: BTreeSet::new(),
             qresync_enabled: false,
         };
@@ -196,6 +277,9 @@ impl Connection {
                 "server said goodbye immediately: {}",
                 information.clone().unwrap_or_default()
             )));
+        }
+        if let (Some(recorder), Response::Data { information, .. }) = (&conn.recorder, &greeting) {
+            recorder.set_server(information.as_deref().unwrap_or("unknown"));
         }
         conn.absorb_capabilities(std::slice::from_ref(&greeting));
 
@@ -362,6 +446,9 @@ impl Connection {
                 redact_command(line)
             },
         );
+        if let Some(recorder) = &self.recorder {
+            recorder.sent(format!("{line}\r\n").as_bytes());
+        }
         let mut w = BufWriter::new(&mut self.transport);
         w.write_all(line.as_bytes())?;
         w.write_all(b"\r\n")?;
@@ -458,8 +545,16 @@ impl Connection {
                     self.host
                 )));
             }
+            if let Some(recorder) = &self.recorder {
+                recorder.received(&chunk[..n]);
+            }
             self.buf.extend_from_slice(&chunk[..n]);
         }
+    }
+
+    /// The transcript recorded so far, when recording is on.
+    pub fn transcript(&self) -> Option<crate::imap::transcript::Transcript> {
+        self.recorder.as_ref().map(|r| r.finish())
     }
 
     fn try_parse(&self) -> Parsed {
@@ -594,6 +689,15 @@ pub fn salvage_line(line: &str) -> Option<Response<'static>> {
         code: None,
         information: Some(std::borrow::Cow::Owned(information)),
     })
+}
+
+/// The clock the recorder stamps a transcript with.
+///
+/// Read from the environment rather than threaded through, because a recorder
+/// is armed by an environment variable and lives for one connection; wiring a
+/// `Clock` down here would put a test hook in the signature of every caller.
+fn clock_now() -> crate::clock::Timestamp {
+    crate::clock::Clock::from_env().now()
 }
 
 /// A one-line description of a response for the trace: enough to follow the

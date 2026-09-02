@@ -243,6 +243,21 @@ impl Session {
         })
     }
 
+    /// Writes out an L1 transcript when `MAILBOX_RECORD_PATH` asked for one.
+    ///
+    /// §14.2 records L1 transcripts from L2 and L4 runs, so this lives on the
+    /// ordinary sync path rather than in a test harness: what gets recorded is
+    /// the real client's real conversation.
+    fn save_transcript(&self, client: &Client) -> Result<()> {
+        let Some(path) = std::env::var_os("MAILBOX_RECORD_PATH").filter(|v| !v.is_empty()) else {
+            return Ok(());
+        };
+        let Some(transcript) = client.transcript() else {
+            return Ok(());
+        };
+        transcript.save(std::path::Path::new(&path))
+    }
+
     /// Opens an authenticated connection for this account.
     ///
     /// Shared by `sync`, `accounts test`, and `folders --remote`, so the TLS
@@ -430,6 +445,7 @@ impl Session {
         // Log out even when the pass failed: leaving a connection open counts
         // against the server's per-account cap (§4.1) long after we are gone.
         let _ = client.logout();
+        self.save_transcript(&client)?;
         Ok(SyncResult {
             synced: vec![report?],
             submitted,

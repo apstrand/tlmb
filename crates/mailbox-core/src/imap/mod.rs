@@ -9,6 +9,7 @@
 pub mod connection;
 pub mod replay;
 pub mod sync;
+pub mod transcript;
 pub mod utf7;
 
 use std::collections::BTreeSet;
@@ -133,6 +134,36 @@ impl Client {
         })
     }
 
+    /// Replays a recorded conversation instead of connecting (§14.2's L1).
+    ///
+    /// Returns the client and a handle to the first place the client's
+    /// behaviour diverged from the recording, if it did.
+    pub fn replay(
+        transcript: transcript::Transcript,
+        tracer: Tracer,
+    ) -> Result<(Client, std::sync::Arc<std::sync::Mutex<Option<String>>>)> {
+        let (conn, divergence) = Connection::replay(transcript, tracer)?;
+        let utf8_accepted = conn.has_capability("UTF8=ACCEPT");
+        Ok((
+            Client {
+                conn,
+                current: None,
+                utf8_accepted,
+            },
+            divergence,
+        ))
+    }
+
+    /// Notes the sync options of the pass being recorded, for L1.
+    pub fn record_sync_options(&self, opts: &sync::SyncOptions) {
+        self.conn.record_sync_options(opts);
+    }
+
+    /// The conversation recorded so far, when `MAILBOX_RECORD` armed one.
+    pub fn transcript(&self) -> Option<transcript::Transcript> {
+        self.conn.transcript()
+    }
+
     pub fn login(&mut self, user: &str, credential: &Credential) -> Result<()> {
         self.conn.authenticate(user, credential)?;
 
@@ -151,6 +182,9 @@ impl Client {
         }
         self.conn.enable(&wanted)?;
         self.utf8_accepted = self.conn.has_capability("UTF8=ACCEPT");
+        // From here on the conversation is the sync itself, which is what an L1
+        // transcript is a recording of (§14.2).
+        self.conn.begin_recording();
         Ok(())
     }
 

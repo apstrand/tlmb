@@ -140,7 +140,9 @@ fn needs_write(cmd: &Command) -> bool {
         }
         Command::Debug(args) => matches!(
             args.action,
-            cli::DebugAction::Fixture { .. } | cli::DebugAction::Rethread
+            cli::DebugAction::Fixture { .. }
+                | cli::DebugAction::Rethread
+                | cli::DebugAction::Replay { .. }
         ),
         _ => false,
     }

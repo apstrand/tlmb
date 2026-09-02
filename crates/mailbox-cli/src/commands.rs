@@ -817,6 +817,12 @@ pub fn debug(ctx: &Ctx<'_>, args: &DebugArgs) -> Result<()> {
             Ok(())
         }
 
+        DebugAction::Replay {
+            transcript,
+            strict,
+            max_age_days,
+        } => replay(ctx, transcript, *strict, *max_age_days),
+
         DebugAction::Fixture { action } => {
             if matches!(action, FixtureAction::Load { .. }) {
                 ctx.confirm("debug fixture load")?;
@@ -824,6 +830,75 @@ pub fn debug(ctx: &Ctx<'_>, args: &DebugArgs) -> Result<()> {
             fixture(ctx, action)
         }
     }
+}
+
+/// `debug replay` (§14.2's L1): a sync pass driven by a recording.
+fn replay(
+    ctx: &Ctx<'_>,
+    path: &std::path::Path,
+    strict: bool,
+    max_age_days: Option<i64>,
+) -> Result<()> {
+    use mailbox_core::imap::transcript::Transcript;
+
+    ctx.confirm("debug replay")?;
+    let transcript = Transcript::load(path)?;
+
+    // §14.2: a stale transcript is a test that passes about a server that no
+    // longer exists. Refusing one is opt-in, because deciding what counts as
+    // stale is the suite's business rather than this command's.
+    let age = transcript.age_days(ctx.clock.now());
+    if let Some(max) = max_age_days {
+        if age > max {
+            return Err(Error::usage(format!(
+                "this transcript was recorded {age} days ago against {:?};                  re-record it or raise --max-age-days",
+                transcript.server
+            )));
+        }
+    }
+
+    let mut session = ctx.session()?;
+    let (mut client, divergence) =
+        mailbox_core::imap::Client::replay(transcript.clone(), ctx.tracer.clone())?;
+
+    let clock = ctx.clock.clone();
+    // The options the recording was made with, so the replayed pass asks the
+    // same questions. Falling back to the defaults keeps an older transcript,
+    // recorded before the header carried them, replayable.
+    let opts = transcript.sync_options.clone().unwrap_or_default();
+    let result =
+        mailbox_core::imap::sync::sync_once(&mut client, session.store_mut(), &opts, &clock);
+
+    let diverged = divergence.lock().expect("divergence lock").clone();
+    if strict {
+        if let Some(what) = &diverged {
+            return Err(Error::protocol(format!(
+                "the engine diverged from the recording: {what}"
+            )));
+        }
+    }
+
+    let report = result?;
+    let payload = serde_json::json!({
+        "transcript": path.display().to_string(),
+        "server": transcript.server,
+        "recorded_at": transcript.recorded_at,
+        "age_days": age,
+        "commands": transcript.commands(),
+        "diverged": diverged,
+        "synced": [report],
+    });
+
+    if ctx.out.is_structured() {
+        ctx.out.reply("debug replay", &payload)?;
+    } else {
+        ctx.out.print(format!(
+            "replayed {} commands recorded {age} days ago against {}",
+            transcript.commands(),
+            transcript.server
+        ));
+    }
+    Ok(())
 }
 
 fn fixture(ctx: &Ctx<'_>, action: &FixtureAction) -> Result<()> {
