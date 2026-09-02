@@ -40,8 +40,14 @@ than retrofitted.
 
 ### In progress: M2
 
-Writes, sending, multi-account, the crash-only oracle, and both sides of L3 have
-landed. Still to come: widening L2 to Cyrus and Stalwart.
+Everything M2 names is built: flags, moves, SMTP and the outbox, compose,
+multi-account, and the unified inbox — with L3 on both sides, the double-send
+test, and the crash-only oracle.
+
+One verification item is outstanding: **L2 has not been widened to Cyrus and
+Stalwart**, and the existing Dovecot suite is currently skipping, because the
+Docker daemon on this machine is not reachable from this user. Everything else
+runs without it.
 
 ### Not built yet
 
@@ -267,7 +273,7 @@ real.
 
 `cargo test` alone runs all three.
 
-**L2 needs nothing but a working Docker.** The harness builds
+**L2 needs nothing but a reachable Docker.** The harness builds
 `tests/dovecot` on first use, starts it as a container named `mailbox-l2` on
 port 21430, and reuses it on later runs — so the first invocation takes a
 minute and the rest take seconds. Each test mints a fresh account rather than
