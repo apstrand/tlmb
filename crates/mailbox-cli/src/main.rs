@@ -112,6 +112,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Sync(args) => commands::sync(&ctx, args),
         Command::Status => commands::status(&ctx),
         Command::Notify(args) => commands::notify(&ctx, args),
+        Command::Tui => commands::tui(&ctx),
         Command::Schema(args) => commands::schema(&ctx, args),
         Command::Debug(args) => commands::debug(&ctx, args),
     }
@@ -136,6 +137,8 @@ fn needs_write(cmd: &Command) -> bool {
         | Command::Send(_)
         | Command::Compose(_)
         | Command::Reply(_) => true,
+        // The TUI writes: flags, moves, and a sync it starts itself.
+        Command::Tui => true,
         // `show` and `attach` fetch a body they do not have (§5.1), which is a
         // write to the blob store and the message row.
         Command::Show(args) => !args.offline,

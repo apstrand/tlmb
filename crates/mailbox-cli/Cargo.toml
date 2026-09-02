@@ -21,6 +21,7 @@ clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 terminal_size = "0.4.4"
 time = { version = "0.3.55", features = ["formatting", "parsing", "macros", "local-offset"] }
 base64 = "0.23.1"
+mailbox-tui = { version = "0.1.0", path = "../mailbox-tui" }
 
 [dev-dependencies]
 base64 = "0.23.1"

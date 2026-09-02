@@ -888,6 +888,21 @@ pub fn status(ctx: &Ctx<'_>) -> Result<()> {
     Ok(())
 }
 
+/// `tui` (§6.1): launch the terminal interface.
+pub fn tui(ctx: &Ctx<'_>) -> Result<()> {
+    if ctx.out.is_structured() {
+        return Err(Error::usage(
+            "the TUI is an interactive interface; it has no --json form",
+        ));
+    }
+    // Its own store handle, opened writable: the interface flags, moves, and
+    // syncs, and the read-only fast path of §4.1 is for commands that only
+    // list.
+    let mut opts = ctx.opts.clone();
+    opts.read_only = false;
+    mailbox_tui::run(opts, ctx.tracer.clone(), ctx.clock.clone())
+}
+
 /// `notify` (§11): what the platform offers, and what is waiting.
 pub fn notify(ctx: &Ctx<'_>, args: &NotifyArgs) -> Result<()> {
     // `--test` checks the platform mechanism and nothing else, so it reads the

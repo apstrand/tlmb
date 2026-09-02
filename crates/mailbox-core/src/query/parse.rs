@@ -307,9 +307,16 @@ impl Parser<'_> {
                     _ => Err(self.err_at(self.pos, "missing ')'")),
                 }
             }
-            Some(Tok::Word { text, .. }) => {
+            Some(Tok::Word { text, quoted, .. }) => {
                 self.pos += 1;
-                Ok(Node::Text(text))
+                // Quoting defeats it, as it defeats the operators: `"foo*"`
+                // searches for a word with an asterisk in it.
+                match text.strip_suffix('*') {
+                    Some(stem) if !quoted && !stem.is_empty() => {
+                        Ok(Node::TextPrefix(stem.to_string()))
+                    }
+                    _ => Ok(Node::Text(text)),
+                }
             }
             Some(Tok::Term { key, value, offset }) => {
                 self.pos += 1;

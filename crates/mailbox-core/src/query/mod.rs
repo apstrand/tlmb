@@ -34,6 +34,13 @@ pub enum Node {
 
     /// A bare word or quoted phrase: full-text over headers and body.
     Text(String),
+    /// A bare word ending in `*`: full-text, matching any word that starts
+    /// with it.
+    ///
+    /// What makes search-as-you-type useful — `postm` should find
+    /// `postmortem` rather than nothing, because a half-typed word matching
+    /// nothing is not a useful thing to show someone mid-keystroke.
+    TextPrefix(String),
 
     /// `from:`, `to:`, `cc:`, `bcc:`. Matches display name or address,
     /// substring, case-insensitively.

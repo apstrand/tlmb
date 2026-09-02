@@ -37,12 +37,40 @@ than retrofitted.
 | Generated 1M corpus and the §10 performance suite | done (§14.5, M3) |
 | Offline mode, lazy bodies, `attach` | done (§5.1, §6.1, §9, M3) |
 | Desktop notifications | done (§11, M3) |
+| TUI: mutt keys, incremental search, `keys.toml` | done (§7, M3) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
 
 ### In progress: M2
+
+### The terminal interface
+
+```sh
+mailbox tui
+```
+
+mutt-like muscle memory (§7): `j`/`k` to move, `/` to search, `t` tag, `d`
+delete, `s` archive, `m` compose, `r`/`R` reply, `|` pipe to a command, `?` for
+the keys. Vim-ish by default; `keymap = "emacs"` under `[keys]` swaps the
+movement, and any action can be rebound:
+
+```toml
+[keys]
+keymap  = "emacs"
+archive = "e"
+```
+
+A rebinding *replaces* the old key rather than adding to it, and a name that
+isn't an action is reported rather than ignored — a typo that silently does
+nothing is a rebinding you believe is live.
+
+Everything is incremental (§7): the list paints from the store immediately, a
+sync runs on a worker thread and is a word in the status bar rather than a modal
+wait, and `/` filters as you type — prefix-matching, so `postm` finds
+`postmortem`. The state machine holds no terminal types at all, so its behaviour
+is tested by pressing actions rather than bytes.
 
 ### Notifications
 

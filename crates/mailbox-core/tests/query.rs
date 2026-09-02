@@ -360,3 +360,34 @@ fn parse_errors_carry_an_offset() {
     assert_eq!(e.offset, 11, "the caret should point at the bad key");
     assert_eq!(e.unknown_key.as_deref(), Some("form"));
 }
+
+// ---- prefix search, for filtering as you type (§7) ----
+
+/// A half-typed word should match what it is the start of. `postm` finding
+/// nothing is not a useful thing to show someone mid-keystroke.
+#[test]
+fn a_trailing_star_is_a_prefix_search() {
+    assert_eq!(p("postm*"), Node::TextPrefix("postm".into()));
+    assert_eq!(
+        p("from:alice postm*"),
+        Node::And(vec![
+            Node::Addr {
+                field: AddrField::From,
+                value: "alice".into()
+            },
+            Node::TextPrefix("postm".into()),
+        ])
+    );
+}
+
+/// Quoting defeats it, as it defeats the operators: a phrase means itself.
+#[test]
+fn a_quoted_star_is_a_literal() {
+    assert_eq!(p("\"postm*\""), Node::Text("postm*".into()));
+}
+
+/// A bare `*` is a word, not a prefix of everything.
+#[test]
+fn a_lone_star_is_not_a_prefix() {
+    assert_eq!(p("*"), Node::Text("*".into()));
+}

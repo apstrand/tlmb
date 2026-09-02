@@ -167,6 +167,9 @@ pub enum Command {
     /// Inspect or exercise desktop notifications (§11).
     Notify(NotifyArgs),
 
+    /// Launch the terminal interface (§7).
+    Tui,
+
     /// Emit the JSON Schema for a command's output (§6.4).
     Schema(SchemaArgs),
 

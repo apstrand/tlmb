@@ -68,6 +68,13 @@ impl Compiler<'_> {
                 format!("(NOT COALESCE({inner}, 0))")
             }
 
+            Node::TextPrefix(s) => {
+                let p = self.push(fts_prefix(s));
+                format!(
+                    "(m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH {p}))"
+                )
+            }
+
             Node::Text(s) => {
                 let p = self.push(fts_phrase(s));
                 format!(
@@ -214,6 +221,14 @@ impl Compiler<'_> {
 /// never promised.
 pub fn fts_phrase(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// An FTS5 prefix query: `"postm"*`.
+///
+/// The stem is still quoted, so the user's own text cannot become FTS5 syntax;
+/// the `*` outside the quotes is ours.
+pub fn fts_prefix(s: &str) -> String {
+    format!("{}*", fts_phrase(s))
 }
 
 fn like_contains(s: &str) -> String {
