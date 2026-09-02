@@ -36,12 +36,36 @@ than retrofitted.
 | L1 transcript record and replay | done (§14.2, M3) |
 | Generated 1M corpus and the §10 performance suite | done (§14.5, M3) |
 | Offline mode, lazy bodies, `attach` | done (§5.1, §6.1, §9, M3) |
+| Desktop notifications | done (§11, M3) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
 
 ### In progress: M2
+
+### Notifications
+
+New mail raises a desktop notification after each sync, filtered by a query
+(§11):
+
+```toml
+[notify]
+enabled      = true
+query        = "is:unread in:inbox NOT tag:muted"
+max_per_sync = 5
+# command    = "/usr/local/bin/my-notifier"   # optional override
+```
+
+`mailbox notify --test` checks the platform mechanism works — it needs no store,
+so it can be run before the first sync. `mailbox notify` shows what is waiting
+without raising or consuming it.
+
+Delivery runs the platform's own command (`notify-send`, `osascript`) rather
+than binding to D-Bus or Cocoa — the same choice as the keychain, and it keeps
+a platform dependency out of the static binary. A first sync announces nothing,
+a backlog collapses to one "43 new messages", and agent mode raises nothing at
+all.
 
 ### Offline and attachments
 

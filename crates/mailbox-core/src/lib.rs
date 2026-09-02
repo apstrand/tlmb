@@ -19,6 +19,7 @@ pub mod history;
 pub mod id;
 pub mod imap;
 pub mod mime;
+pub mod notify;
 pub mod paths;
 pub mod policy;
 pub mod query;

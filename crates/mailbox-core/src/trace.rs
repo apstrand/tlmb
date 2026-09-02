@@ -35,6 +35,8 @@ pub mod event {
     pub const OUTBOX_ATTEMPT: &str = "outbox.attempt";
     pub const OUTBOX_RESULT: &str = "outbox.result";
     pub const OUTBOX_SENT_UPLOADED: &str = "outbox.sent_uploaded";
+    pub const NOTIFY_SENT: &str = "notify.sent";
+    pub const NOTIFY_FAILED: &str = "notify.failed";
     pub const SYNC_BEGIN: &str = "sync.begin";
     pub const SYNC_FOLDER_BEGIN: &str = "sync.folder.begin";
     pub const SYNC_FOLDER_END: &str = "sync.folder.end";

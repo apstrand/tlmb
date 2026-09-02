@@ -264,6 +264,31 @@ impl Store {
         })
     }
 
+    /// Marks messages as announced (§11), so they are not announced twice.
+    pub fn mark_notified(&mut self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.transaction("mark_notified", |tx| {
+            let mut st = tx.prepare("UPDATE messages SET notified = 1 WHERE id = ?1")?;
+            for id in ids {
+                st.execute([id])?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Marks everything as already announced.
+    ///
+    /// Used after a first sync: a mailbox that has just been added should not
+    /// produce a notification for every message it has ever received.
+    pub fn mark_all_notified(&mut self) -> Result<u64> {
+        self.transaction("mark_all_notified", |tx| {
+            let n = tx.execute("UPDATE messages SET notified = 1 WHERE notified = 0", [])?;
+            Ok(n as u64)
+        })
+    }
+
     /// Records the UID the server assigned to a placement created locally.
     pub fn confirm_placement(&mut self, message_id: &str, folder: &str, uid: u32) -> Result<()> {
         self.transaction("confirm_placement", |tx| {

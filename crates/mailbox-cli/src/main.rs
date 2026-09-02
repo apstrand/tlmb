@@ -111,6 +111,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Accounts(args) => commands::accounts(&ctx, args),
         Command::Sync(args) => commands::sync(&ctx, args),
         Command::Status => commands::status(&ctx),
+        Command::Notify(args) => commands::notify(&ctx, args),
         Command::Schema(args) => commands::schema(&ctx, args),
         Command::Debug(args) => commands::debug(&ctx, args),
     }

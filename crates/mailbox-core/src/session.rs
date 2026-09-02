@@ -243,6 +243,51 @@ impl Session {
         })
     }
 
+    /// Raises desktop notifications for mail that has just arrived (§11).
+    ///
+    /// On the very first sync of an account everything is marked announced and
+    /// nothing is raised: adding a mailbox should not produce a notification
+    /// for every message it has ever received.
+    fn announce_new_mail(&mut self, first_ever_sync: bool) -> Result<()> {
+        if first_ever_sync {
+            self.store.mark_all_notified()?;
+            return Ok(());
+        }
+        let config = self.config.notify.clone();
+        if !config.enabled || self.agent_mode {
+            // An agent driving the binary is not sitting at the desktop, and
+            // should not be able to make something pop up on one (§6.4).
+            self.store.mark_all_notified()?;
+            return Ok(());
+        }
+
+        let node = self.parse_query(&config.query)?;
+        let total = self.store.unnotified_count(&node)?;
+        if total == 0 {
+            return Ok(());
+        }
+        let pending = self.store.unnotified(&node, config.max_per_sync)?;
+
+        let notifier = crate::notify::Notifier::discover(config.command.as_deref());
+        if notifier.is_available() {
+            if total as usize > config.max_per_sync {
+                notifier.send(&crate::notify::Notification::for_many(total as usize))?;
+            } else {
+                for message in &pending {
+                    notifier.send(&crate::notify::Notification::for_message(message))?;
+                }
+            }
+        }
+
+        // Marked regardless of whether a notifier existed. Leaving them unmarked
+        // on a headless machine would make every later sync reconsider the same
+        // mail forever.
+        self.store.mark_all_notified()?;
+        self.tracer
+            .emit1(crate::trace::event::NOTIFY_SENT, "count", total);
+        Ok(())
+    }
+
     /// Writes out an L1 transcript when `MAILBOX_RECORD_PATH` asked for one.
     ///
     /// §14.2 records L1 transcripts from L2 and L4 runs, so this lives on the
@@ -475,6 +520,10 @@ impl Session {
             ..requested.clone()
         };
 
+        // §11: whether this account has ever synced decides whether new mail is
+        // *news*. Read before the pass, because the pass sets it.
+        let first_ever_sync = self.store.sync_state().last_full_sync == 0;
+
         let mut submitted = None;
         if self.store().outbox_pending_count()? > 0 {
             match self.flush_outbox() {
@@ -504,8 +553,17 @@ impl Session {
         // against the server's per-account cap (§4.1) long after we are gone.
         let _ = client.logout();
         self.save_transcript(&client)?;
+        let report = report?;
+
+        // A notification that fails must not fail the sync: the mail arrived,
+        // the popup did not.
+        if let Err(e) = self.announce_new_mail(first_ever_sync) {
+            self.tracer
+                .emit1(crate::trace::event::NOTIFY_FAILED, "error", e.to_string());
+        }
+
         Ok(SyncResult {
-            synced: vec![report?],
+            synced: vec![report],
             submitted,
         })
     }

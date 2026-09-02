@@ -15,8 +15,8 @@ use mailbox_core::Workspace;
 
 use crate::cli::{
     AccountsAction, AccountsArgs, AttachArgs, DebugAction, DebugArgs, FixtureAction, FlagArgs,
-    FoldersArgs, Format, GlobalFlags, LsArgs, MoveArgs, SchemaArgs, SearchArgs, ShowArgs, SyncArgs,
-    TargetArgs,
+    FoldersArgs, Format, GlobalFlags, LsArgs, MoveArgs, NotifyArgs, SchemaArgs, SearchArgs,
+    ShowArgs, SyncArgs, TargetArgs,
 };
 use crate::format;
 use crate::output::{maybe_page, Out, GREEN, YELLOW};
@@ -883,6 +883,96 @@ pub fn status(ctx: &Ctx<'_>) -> Result<()> {
                 c.folder.clone().unwrap_or_default(),
                 c.reason,
             ));
+        }
+    }
+    Ok(())
+}
+
+/// `notify` (§11): what the platform offers, and what is waiting.
+pub fn notify(ctx: &Ctx<'_>, args: &NotifyArgs) -> Result<()> {
+    // `--test` checks the platform mechanism and nothing else, so it reads the
+    // config and stops there. Requiring a store would mean a user could not
+    // check their notifications work until after their first sync — and could
+    // not check at all while a store was waiting to be upgraded.
+    let config = match &ctx.global.config {
+        Some(path) => mailbox_core::config::Config::load(path)?,
+        None => mailbox_core::config::Config::load_default()?,
+    }
+    .notify;
+    let notifier = mailbox_core::notify::Notifier::discover(config.command.as_deref());
+
+    if args.test {
+        let sample = mailbox_core::notify::Notification {
+            summary: "mailbox".into(),
+            body: "Notifications are working.".into(),
+        };
+        notifier.send(&sample)?;
+        let payload = serde_json::json!({
+            "notifier": notifier.describe(),
+            "available": notifier.is_available(),
+            "sent": notifier.is_available(),
+        });
+        if ctx.out.is_structured() {
+            ctx.out.reply("notify", &payload)?;
+        } else if notifier.is_available() {
+            ctx.out.print(format!(
+                "sent a test notification via {}",
+                notifier.describe()
+            ));
+        } else {
+            ctx.out.print(ctx.out.dim(
+                "no desktop notifier found — set notify.command in config.toml to use another",
+            ));
+        }
+        return Ok(());
+    }
+
+    // What would be announced, without announcing it or marking anything.
+    let workspace = ctx.workspace()?;
+    let session = workspace.primary()?;
+    let node = session.parse_query(&config.query)?;
+    let mut waiting = Vec::new();
+    for s in workspace.sessions() {
+        let node = s
+            .parse_query(&config.query)
+            .unwrap_or_else(|_| node.clone());
+        for m in s.store().unnotified(&node, config.max_per_sync)? {
+            waiting.push(m);
+        }
+    }
+
+    let payload = serde_json::json!({
+        "enabled": config.enabled,
+        "query": config.query,
+        "notifier": notifier.describe(),
+        "available": notifier.is_available(),
+        "max_per_sync": config.max_per_sync,
+        "pending": waiting,
+    });
+
+    if ctx.out.is_structured() {
+        ctx.out.reply("notify", &payload)?;
+        return Ok(());
+    }
+
+    ctx.out.print(format!(
+        "{} via {}\n  query: {}",
+        if config.enabled {
+            ctx.out.paint("enabled", GREEN)
+        } else {
+            ctx.out.dim("disabled")
+        },
+        notifier.describe(),
+        config.query,
+    ));
+    if waiting.is_empty() {
+        ctx.out
+            .print(ctx.out.dim("  nothing waiting to be announced"));
+    } else {
+        ctx.out.print(format!("  {} waiting:", waiting.len()));
+        for m in &waiting {
+            let n = mailbox_core::notify::Notification::for_message(m);
+            ctx.out.print(format!("    {} — {}", n.summary, n.body));
         }
     }
     Ok(())

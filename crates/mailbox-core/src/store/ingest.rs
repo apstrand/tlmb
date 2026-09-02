@@ -370,6 +370,41 @@ fn apply_in_tx(tx: &Transaction<'_>, account: &str, incoming: &Incoming) -> Resu
     }
     index_fts(tx, rowid, &parsed)?;
 
+    // The server is authoritative about what a UID means. If it says this UID
+    // now names a different message, whatever we had there is stale — a UID
+    // reused without a UIDVALIDITY bump is a server misbehaving, but the
+    // recovery is obvious and the alternative is a raw constraint failure that
+    // aborts the whole pass.
+    let displaced: Option<i64> = tx
+        .query_row(
+            "SELECT message_rowid FROM placements
+             WHERE folder_id = ?1 AND uid = ?2 AND message_rowid <> ?3",
+            params![incoming.folder_id, incoming.uid, rowid],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(displaced) = displaced {
+        tx.execute(
+            "DELETE FROM placements WHERE folder_id = ?1 AND message_rowid = ?2",
+            params![incoming.folder_id, displaced],
+        )?;
+        // Losing its last placement means the message is nowhere, and a message
+        // that is nowhere is gone — the same rule `remove_placement` follows.
+        // Without this the row survives with no folder, showing up in listings
+        // as mail that exists on no server.
+        let remaining: i64 = tx.query_row(
+            "SELECT count(*) FROM placements WHERE message_rowid = ?1",
+            [displaced],
+            |r| r.get(0),
+        )?;
+        if remaining == 0 {
+            tx.execute("DELETE FROM messages_fts WHERE rowid = ?1", [displaced])?;
+            tx.execute("DELETE FROM messages WHERE rowid = ?1", [displaced])?;
+        } else {
+            refresh_primary(tx, displaced)?;
+        }
+    }
+
     // Keyed on (folder, message), not (folder, uid): a message appears at most
     // once in a folder, and a placement created by a local move (§5.3) is
     // already there without a UID. Upserting on the UID would insert a second

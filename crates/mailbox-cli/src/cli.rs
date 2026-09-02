@@ -164,6 +164,9 @@ pub enum Command {
     /// Queues, errors, connectivity, store size.
     Status,
 
+    /// Inspect or exercise desktop notifications (§11).
+    Notify(NotifyArgs),
+
     /// Emit the JSON Schema for a command's output (§6.4).
     Schema(SchemaArgs),
 
@@ -473,6 +476,17 @@ pub struct SyncArgs {
     /// Stop at a named trace event, for mid-operation assertions (§6.7).
     #[arg(long, requires = "trace")]
     pub until: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct NotifyArgs {
+    /// Raise a sample notification, to check the platform mechanism works.
+    #[arg(long)]
+    pub test: bool,
+    /// Show what would be announced without announcing it, and without marking
+    /// anything as seen.
+    #[arg(long)]
+    pub pending: bool,
 }
 
 #[derive(Debug, Args)]

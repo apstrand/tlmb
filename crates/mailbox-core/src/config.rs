@@ -27,6 +27,8 @@ pub struct Config {
     #[serde(default)]
     pub threading: Threading,
     #[serde(default)]
+    pub notify: Notify,
+    #[serde(default)]
     pub pair: Pair,
     /// Keymap overrides. Passed through to the TUI (M3) without interpretation
     /// here, so an unknown key is that frontend's problem to report.
@@ -91,6 +93,42 @@ impl Threading {
         crate::threading::ThreadingOptions {
             subject_grouping: self.subject,
             subject_window: self.subject_window_days * 86_400,
+        }
+    }
+}
+
+/// Desktop notifications (§11).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Notify {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Which mail is worth interrupting someone for. §11's default.
+    #[serde(default = "default_notify_query")]
+    pub query: String,
+    /// The command to run. Discovered from the platform when unset.
+    ///
+    /// A command rather than a D-Bus or Cocoa binding, for the same reason as
+    /// the keychain (§9): it keeps a platform dependency out of the static
+    /// binary of §4, and it is the same thing a user can run by hand to see
+    /// what we will do.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Most notifications one sync pass will raise.
+    ///
+    /// A mailbox that has been offline for a week should not produce two
+    /// hundred popups; past a handful the right message is "43 new messages".
+    #[serde(default = "default_notify_max")]
+    pub max_per_sync: usize,
+}
+
+impl Default for Notify {
+    fn default() -> Self {
+        Notify {
+            enabled: true,
+            query: default_notify_query(),
+            command: None,
+            max_per_sync: default_notify_max(),
         }
     }
 }
@@ -311,6 +349,12 @@ fn default_limit() -> usize {
 }
 fn default_subject_days() -> i64 {
     14
+}
+fn default_notify_query() -> String {
+    "is:unread in:inbox NOT tag:muted".to_string()
+}
+fn default_notify_max() -> usize {
+    5
 }
 fn default_offline() -> String {
     "recent".to_string()

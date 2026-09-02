@@ -741,6 +741,56 @@ impl Store {
         Ok(rows.filter_map(std::result::Result::ok).collect())
     }
 
+    /// Messages matching `node` the user has not been told about yet (§11).
+    ///
+    /// Newest first, because if the cap trims the list the newest are the ones
+    /// worth showing.
+    pub fn unnotified(&self, node: &Node, limit: usize) -> Result<Vec<MessageSummary>> {
+        let compiled = compile(
+            node,
+            &CompileOptions {
+                account: self.account.clone(),
+                identities: Vec::new(),
+            },
+        );
+        let mut sql = format!(
+            "SELECT {SUMMARY_COLS} FROM messages m
+             LEFT JOIN folders f ON f.id = m.primary_folder
+             WHERE m.notified = 0 AND ({})
+             ORDER BY m.date DESC, m.id DESC LIMIT ?",
+            compiled.sql
+        );
+        let mut params = compiled.params.clone();
+        params.push(Value::Integer(limit as i64));
+        sql.push(' ');
+        sql.pop();
+
+        let mut st = self.conn.prepare(&sql)?;
+        let rows = st.query_map(params_from_iter(params), |r| {
+            Ok(summary_from_row(r, &self.account))
+        })?;
+        Ok(rows.filter_map(std::result::Result::ok).collect())
+    }
+
+    /// How many messages are waiting to be announced, whatever the cap.
+    pub fn unnotified_count(&self, node: &Node) -> Result<u64> {
+        let compiled = compile(
+            node,
+            &CompileOptions {
+                account: self.account.clone(),
+                identities: Vec::new(),
+            },
+        );
+        let sql = format!(
+            "SELECT count(*) FROM messages m
+             LEFT JOIN folders f ON f.id = m.primary_folder
+             WHERE m.notified = 0 AND ({})",
+            compiled.sql
+        );
+        let mut st = self.conn.prepare(&sql)?;
+        Ok(st.query_row(params_from_iter(compiled.params), |r| r.get::<_, i64>(0))? as u64)
+    }
+
     /// Where a message sits on the server: `(folder path, uid)`.
     ///
     /// The primary placement, since that is the folder every listing reports —

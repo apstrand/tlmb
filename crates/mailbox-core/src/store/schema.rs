@@ -13,7 +13,7 @@ use crate::trace::{event, Tracer};
 /// Bumped whenever [`MIGRATIONS`] grows. A store from the future is refused
 /// rather than opened read-only: a newer version may have written columns this
 /// build would silently drop on the next write.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Each entry is applied in order inside one transaction. Migrations are
 /// append-only — editing an existing one changes what an already-migrated store
@@ -322,6 +322,16 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE placements
         ADD COLUMN seen INTEGER GENERATED ALWAYS AS (instr(flags, ' seen ') > 0) VIRTUAL;
     CREATE INDEX placements_unread ON placements(folder_id, seen);
+    "#,
+    // v5 — M3: desktop notifications (§11).
+    r#"
+    -- Whether the user has already been told about this message.
+    --
+    -- A column rather than a high-water mark, because mail does not arrive in
+    -- date order: a message delivered late but dated last week would slip under
+    -- any timestamp watermark and never be announced.
+    ALTER TABLE messages ADD COLUMN notified INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX messages_unnotified ON messages(notified, date DESC) WHERE notified = 0;
 
     "#,
 ];

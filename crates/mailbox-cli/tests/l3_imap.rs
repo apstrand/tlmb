@@ -546,3 +546,322 @@ fn attach_lists_and_extracts_from_a_lazily_fetched_message() {
         out.stdout
     );
 }
+
+// ---- M3: desktop notifications (§11) ----
+
+impl World {
+    /// Points `notify.command` at a script that records what it was asked to
+    /// raise, so the whole feature is testable without a desktop.
+    ///
+    /// This is the payoff for delivering notifications by running a command
+    /// rather than by binding to D-Bus: the seam is already there.
+    fn capture_notifications(&self) -> PathBuf {
+        let log = self.dir.join("notifications.log");
+        let script = self.dir.join("notifier.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\t%s\\n' \"$1\" \"$2\" >> {}\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+
+        let text = std::fs::read_to_string(&self.config).unwrap();
+        std::fs::write(
+            &self.config,
+            format!("{text}\n[notify]\ncommand = \"{}\"\n", script.display()),
+        )
+        .unwrap();
+        log
+    }
+
+    fn notifications(&self, log: &std::path::Path) -> Vec<(String, String)> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+}
+
+/// §11: adding a mailbox must not announce every message it has ever received.
+#[test]
+fn a_first_sync_announces_nothing() {
+    let w = World::three();
+    let log = w.capture_notifications();
+
+    assert_eq!(w.sync().status, 0);
+    assert_eq!(w.stored_subjects().len(), 3);
+    assert!(
+        w.notifications(&log).is_empty(),
+        "a first sync should be silent: {:?}",
+        w.notifications(&log)
+    );
+}
+
+/// Mail that arrives afterwards is news, and gets announced.
+#[test]
+fn new_mail_is_announced_with_sender_and_subject() {
+    let w = World::three();
+    let log = w.capture_notifications();
+    assert_eq!(w.sync().status, 0);
+
+    w.server.set_messages(vec![
+        Message::simple(1, "First", "one@example.com"),
+        Message::simple(2, "Second", "two@example.com"),
+        Message::simple(3, "Third", "three@example.com"),
+        Message::simple(4, "Fourth", "four@example.com"),
+    ]);
+    assert_eq!(w.sync().status, 0);
+
+    let raised = w.notifications(&log);
+    assert_eq!(
+        raised.len(),
+        1,
+        "one new message, one notification: {raised:?}"
+    );
+    // Sender first: it is what decides whether a notification is worth looking
+    // at.
+    assert_eq!(raised[0].0, "Alice");
+    assert_eq!(raised[0].1, "Fourth");
+}
+
+/// The same message must not be announced twice, however many passes run.
+#[test]
+fn a_message_is_announced_once() {
+    let w = World::three();
+    let log = w.capture_notifications();
+    assert_eq!(w.sync().status, 0);
+
+    w.server.set_messages(vec![
+        Message::simple(1, "First", "one@example.com"),
+        Message::simple(2, "Second", "two@example.com"),
+        Message::simple(3, "Third", "three@example.com"),
+        Message::simple(4, "Fourth", "four@example.com"),
+    ]);
+    assert_eq!(w.sync().status, 0);
+    assert_eq!(w.sync().status, 0);
+    assert_eq!(w.sync().status, 0);
+
+    assert_eq!(w.notifications(&log).len(), 1, "announced more than once");
+}
+
+/// §11's cap: a mailbox that has been offline for a while should say "43 new
+/// messages", not raise forty-three popups.
+#[test]
+fn a_backlog_is_summarised_rather_than_swarming() {
+    let w = World::three();
+    let log = w.capture_notifications();
+    assert_eq!(w.sync().status, 0);
+
+    let mut messages: Vec<Message> = vec![
+        Message::simple(1, "First", "one@example.com"),
+        Message::simple(2, "Second", "two@example.com"),
+        Message::simple(3, "Third", "three@example.com"),
+    ];
+    for i in 4..=20 {
+        messages.push(Message::simple(
+            i,
+            &format!("New {i}"),
+            &format!("new{i}@example.com"),
+        ));
+    }
+    w.server.set_messages(messages);
+    let run = w.sync();
+    assert_eq!(
+        run.status, 0,
+        "sync failed:\n{}\n{}",
+        run.stdout, run.stderr
+    );
+
+    let raised = w.notifications(&log);
+    assert_eq!(
+        raised.len(),
+        1,
+        "a backlog should be one notification: {raised:?}"
+    );
+    assert_eq!(raised[0].0, "17 new messages");
+}
+
+/// A server that hands back a UID we already hold, carrying a *different*
+/// message, without bumping UIDVALIDITY.
+///
+/// A UID is immutable in IMAP, so a client never re-fetches one to check — it
+/// only sees this when the server volunteers the row in a `FETCH` it did not
+/// ask for, which is exactly the kind of thing L3 exists to produce. The server
+/// is authoritative about what a UID means, so the stale placement goes and the
+/// new message takes it. Before the guard, the pass aborted mid-way with a raw
+/// SQLite constraint failure and the whole sync was lost.
+#[test]
+fn a_reused_uid_replaces_the_message_that_held_it() {
+    let w = World::three();
+    assert_eq!(w.sync().status, 0);
+    assert_eq!(w.stored_subjects().len(), 3);
+
+    // Different messages at the UIDs already held, plus one genuinely new UID
+    // so the client issues a fetch at all. The L3 server answers a fetch with
+    // everything it has, which is how the reused UIDs arrive.
+    w.server.set_messages(vec![
+        Message::simple(1, "Replacement one", "new1@example.com"),
+        Message::simple(2, "Replacement two", "new2@example.com"),
+        Message::simple(3, "Replacement three", "new3@example.com"),
+        Message::simple(4, "Genuinely new", "new4@example.com"),
+    ]);
+
+    let run = w.sync();
+    assert_eq!(
+        run.status, 0,
+        "a reused UID must not abort the pass:\n{}",
+        run.stderr
+    );
+    w.assert_store_is_sound("reused uid");
+
+    // Each UID holds one message, and it is the server's version.
+    assert_eq!(
+        w.stored_subjects(),
+        vec![
+            "Genuinely new".to_string(),
+            "Replacement one".into(),
+            "Replacement three".into(),
+            "Replacement two".into(),
+        ],
+        "the server's version of each UID should have won"
+    );
+}
+
+/// §11's default query is `is:unread in:inbox NOT tag:muted`, so mail that
+/// arrives already read is not news.
+#[test]
+fn mail_that_arrives_read_is_not_announced() {
+    let w = World::three();
+    let log = w.capture_notifications();
+    assert_eq!(w.sync().status, 0);
+
+    let mut seen = Message::simple(4, "Already read", "read@example.com");
+    seen.flags = vec!["\\Seen".to_string()];
+    w.server.set_messages(vec![
+        Message::simple(1, "First", "one@example.com"),
+        Message::simple(2, "Second", "two@example.com"),
+        Message::simple(3, "Third", "three@example.com"),
+        seen,
+    ]);
+    assert_eq!(w.sync().status, 0);
+
+    assert!(
+        w.notifications(&log).is_empty(),
+        "a message that arrived seen is not news: {:?}",
+        w.notifications(&log)
+    );
+}
+
+/// §6.4: an agent driving the binary is not sitting at the desktop and must not
+/// be able to make something pop up on one.
+#[test]
+fn agent_mode_raises_nothing() {
+    let w = World::three();
+    let log = w.capture_notifications();
+    assert_eq!(w.sync().status, 0);
+
+    w.server.set_messages(vec![
+        Message::simple(1, "First", "one@example.com"),
+        Message::simple(2, "Second", "two@example.com"),
+        Message::simple(3, "Third", "three@example.com"),
+        Message::simple(4, "Fourth", "four@example.com"),
+    ]);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_mailbox"))
+        .args(["--json", "sync", "--once", "--yes"])
+        .env("MAILBOX_CONFIG", &w.config)
+        .env("MAILBOX_STATE_DIR", &w.state)
+        .env("MAILBOX_PASSWORD_TEST", "testpass")
+        .env("MAILBOX_AGENT", "1")
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(
+        w.notifications(&log).is_empty(),
+        "agent mode should not notify: {:?}",
+        w.notifications(&log)
+    );
+}
+
+/// `notify --pending` shows what would be raised without raising it or marking
+/// anything, so it can be run twice with the same answer.
+#[test]
+fn notify_pending_is_read_only() {
+    let w = World::three();
+    let log = w.capture_notifications();
+    assert_eq!(w.sync().status, 0);
+
+    w.server.set_messages(vec![
+        Message::simple(1, "First", "one@example.com"),
+        Message::simple(2, "Second", "two@example.com"),
+        Message::simple(3, "Third", "three@example.com"),
+        Message::simple(4, "Fourth", "four@example.com"),
+    ]);
+
+    // Bring the message in without announcing it, by syncing in agent mode.
+    Command::new(env!("CARGO_BIN_EXE_mailbox"))
+        .args(["--json", "sync", "--once", "--yes"])
+        .env("MAILBOX_CONFIG", &w.config)
+        .env("MAILBOX_STATE_DIR", &w.state)
+        .env("MAILBOX_PASSWORD_TEST", "testpass")
+        .env("MAILBOX_AGENT", "1")
+        .output()
+        .expect("run");
+
+    // Agent mode marked them, so nothing is pending — and asking twice gives
+    // the same answer either way.
+    let first = w.run(&["--json", "notify", "--pending"]);
+    assert_eq!(first.status, 0, "{}", first.stderr);
+    let second = w.run(&["--json", "notify", "--pending"]);
+    assert_eq!(first.stdout, second.stdout, "--pending changed something");
+    assert!(
+        w.notifications(&log).is_empty(),
+        "--pending must not raise anything"
+    );
+}
+
+/// A notifier that fails must not fail the sync: the mail arrived, the popup
+/// did not.
+#[test]
+fn a_broken_notifier_does_not_fail_the_sync() {
+    let w = World::three();
+    let text = std::fs::read_to_string(&w.config).unwrap();
+    std::fs::write(
+        &w.config,
+        format!("{text}\n[notify]\ncommand = \"/nonexistent/notifier\"\n"),
+    )
+    .unwrap();
+
+    assert_eq!(w.sync().status, 0);
+    w.server.set_messages(vec![
+        Message::simple(1, "First", "one@example.com"),
+        Message::simple(2, "Second", "two@example.com"),
+        Message::simple(3, "Third", "three@example.com"),
+        Message::simple(4, "Fourth", "four@example.com"),
+    ]);
+
+    let run = w.sync();
+    assert_eq!(
+        run.status, 0,
+        "a broken notifier failed the sync:\n{}",
+        run.stderr
+    );
+    assert!(w.stored_subjects().contains(&"Fourth".to_string()));
+}
