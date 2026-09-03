@@ -26,9 +26,15 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-
 getrandom = "0.3"
 nom = "7"
 libc = "0.2.189"
+chacha20poly1305 = "0.11.0"
+hkdf = "0.13.0"
+sha2 = "0.11.0"
+argon2 = "0.6.0"
 
 [dev-dependencies]
 getrandom = "0.3"
+hkdf = "0.13.0"
 imap-proto = "0.16"
 rusqlite = { version = "0.40", features = ["bundled"] }
+sha2 = "0.11.0"
 toml = "0.9"

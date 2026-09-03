@@ -170,6 +170,9 @@ pub enum Command {
     /// Launch the terminal interface (§7).
     Tui,
 
+    /// Move accounts and credentials to another device (§8).
+    Pair(PairArgs),
+
     /// Emit the JSON Schema for a command's output (§6.4).
     Schema(SchemaArgs),
 
@@ -479,6 +482,56 @@ pub struct SyncArgs {
     /// Stop at a named trace event, for mid-operation assertions (§6.7).
     #[arg(long, requires = "trace")]
     pub until: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct PairArgs {
+    #[command(subcommand)]
+    pub action: Option<PairAction>,
+
+    /// Write the payload to an encrypted file instead, for an air-gapped move.
+    ///
+    /// Mutually exclusive with `send` and `--import-file`; clap cannot express a
+    /// conflict against a subcommand, so `pair` checks it and says which.
+    #[arg(long)]
+    pub export_file: Option<std::path::PathBuf>,
+
+    /// Read a payload from an encrypted file.
+    #[arg(long)]
+    pub import_file: Option<std::path::PathBuf>,
+
+    /// Add the incoming accounts to this device's. The default (§8.3).
+    #[arg(long, conflicts_with = "replace")]
+    pub merge: bool,
+
+    /// Wipe this device's accounts first. Requires `--yes` (§8.3).
+    #[arg(long)]
+    pub replace: bool,
+
+    /// The passphrase for an export or import. Prompted for when absent, or
+    /// read from `MAILBOX_PAIR_PASSPHRASE`.
+    #[arg(long)]
+    pub passphrase: Option<String>,
+
+    /// Print the pairing link as text only, without the QR block.
+    #[arg(long)]
+    pub no_qr: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PairAction {
+    /// Send this device's accounts to one that is waiting.
+    ///
+    /// Takes the `mailbox://pair#…` link the other device is showing — scanned
+    /// from its QR, or pasted.
+    Send {
+        link: String,
+        /// Skip the confirmation prompt. §8.1's short authentication string is
+        /// what defends against an active attacker, so this is for scripts that
+        /// have already established trust some other way.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Args)]

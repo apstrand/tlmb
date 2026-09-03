@@ -12,6 +12,7 @@ mod cli;
 mod commands;
 mod format;
 mod output;
+mod pairing;
 mod sending;
 mod table;
 
@@ -113,6 +114,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Status => commands::status(&ctx),
         Command::Notify(args) => commands::notify(&ctx, args),
         Command::Tui => commands::tui(&ctx),
+        Command::Pair(args) => pairing::pair(&ctx, args),
         Command::Schema(args) => commands::schema(&ctx, args),
         Command::Debug(args) => commands::debug(&ctx, args),
     }
@@ -139,6 +141,8 @@ fn needs_write(cmd: &Command) -> bool {
         | Command::Reply(_) => true,
         // The TUI writes: flags, moves, and a sync it starts itself.
         Command::Tui => true,
+        // Receiving a pairing rewrites the config, and may create a store.
+        Command::Pair(_) => true,
         // `show` and `attach` fetch a body they do not have (§5.1), which is a
         // write to the blob store and the message row.
         Command::Show(args) => !args.offline,

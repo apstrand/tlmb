@@ -38,12 +38,37 @@ than retrofitted.
 | Offline mode, lazy bodies, `attach` | done (§5.1, §6.1, §9, M3) |
 | Desktop notifications | done (§11, M3) |
 | TUI: mutt keys, incremental search, `keys.toml` | done (§7, M3) |
+| Pairing: QR, LAN, encrypted export file | done (§8, M4) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
 
 ### In progress: M2
+
+### Moving to another device
+
+`mailbox pair` on the new device shows a QR and a link; `mailbox pair send
+<link>` on the old one sends the accounts, credentials, and identities across
+the LAN. Both devices display the same four words, and nothing is written until
+you confirm they match — that confirmation is what defends against someone
+between the two machines (§8.1).
+
+```
+  █▀▀▀▀▀█ █  ▄▄ ▀█▄▀▀ █▀▄▄▄ ██  █▀▀▀▀▀█
+  █ ███ █ ██▄ █▄▀▄▄█▄▀▀▀█▄▀▀ ▄  █ ███ █
+  …
+
+  mailbox pair send mailbox://pair/192.168.68.78:37485#544d…
+```
+
+Pairing is additive; `--replace` wipes this device's accounts first and needs
+`--yes`. For an air-gapped move, `--export-file` writes the same payload sealed
+under a passphrase and `--import-file` reads it back. **The mail store never
+moves** — the new device syncs that from IMAP.
+
+The relay and the short code are M8: a 45-bit code guarded by an unreviewed
+PAKE is a credential leak rather than a convenience (§16).
 
 ### The terminal interface
 
