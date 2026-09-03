@@ -31,6 +31,12 @@ pub enum View {
     Message,
     /// The whole thread the selection belongs to.
     Thread,
+    /// The open message's links, to pick one from.
+    ///
+    /// A separate view rather than a prompt asking for a number: the numbers
+    /// mean nothing without the URLs beside them, and a reader deciding whether
+    /// to follow a link in mail needs to see where it goes first (§9).
+    Links,
     Help,
 }
 
@@ -91,6 +97,9 @@ pub enum Effect {
     Suspend(SuspendedTask),
     /// Start a sync on a worker thread.
     StartSync,
+    /// Hand a URL to the desktop's browser. Never automatic: this is only ever
+    /// the result of someone selecting a link they can see (§9).
+    OpenUrl(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +134,8 @@ pub struct App {
     pub page_size: usize,
     /// Set when the list no longer matches the store and should be reloaded.
     pub dirty: bool,
+    /// Which link is highlighted in [`View::Links`].
+    pub link_selected: usize,
 }
 
 impl App {
@@ -141,7 +152,17 @@ impl App {
             syncing: false,
             page_size: DEFAULT_PAGE,
             dirty: false,
+            link_selected: 0,
         }
+    }
+
+    /// The links in the open message, in the numbering its text uses.
+    pub fn links(&self) -> &[String] {
+        self.open
+            .as_ref()
+            .and_then(|m| m.body.as_ref())
+            .map(|b| b.links.as_slice())
+            .unwrap_or_default()
     }
 
     /// The message under the cursor.
@@ -265,7 +286,7 @@ impl App {
                 // `q` in a sub-view goes back rather than quitting: losing a
                 // session because you wanted to close a message is the classic
                 // way to make people distrust a TUI.
-                View::Message | View::Thread | View::Help => {
+                View::Message | View::Thread | View::Links | View::Help => {
                     self.back();
                     Effect::None
                 }
@@ -321,6 +342,12 @@ impl App {
             }
 
             Action::Open => {
+                if self.view == View::Links {
+                    return match self.links().get(self.link_selected) {
+                        Some(url) => Effect::OpenUrl(url.clone()),
+                        None => Effect::None,
+                    };
+                }
                 if self.view == View::List && self.current().is_some() {
                     self.view = View::Message;
                     self.body_scroll = 0;
@@ -335,6 +362,18 @@ impl App {
             }
             Action::Help => {
                 self.view = View::Help;
+                Effect::None
+            }
+
+            // A message with no links says so rather than opening an empty
+            // pane — an empty list looks like a failure to load.
+            Action::Links => {
+                if self.links().is_empty() {
+                    self.status = "no links in this message".to_string();
+                } else {
+                    self.link_selected = 0;
+                    self.view = View::Links;
+                }
                 Effect::None
             }
 
@@ -380,6 +419,12 @@ impl App {
 
     fn back(&mut self) {
         match self.view {
+            // The picker was opened from the message, so it goes back to it —
+            // closing the mail because you looked at its links and changed your
+            // mind would lose your place.
+            View::Links => {
+                self.view = View::Message;
+            }
             View::Message | View::Thread | View::Help => {
                 self.view = View::List;
                 self.open = None;
@@ -397,6 +442,18 @@ impl App {
     }
 
     fn move_by(&mut self, delta: isize) {
+        // In the link picker the cursor moves over links, not messages: the
+        // same keys, because they are the same gesture.
+        if self.view == View::Links {
+            let links = self.links().len();
+            if links == 0 {
+                self.link_selected = 0;
+                return;
+            }
+            let next = self.link_selected as isize + delta;
+            self.link_selected = next.clamp(0, links as isize - 1) as usize;
+            return;
+        }
         if self.messages.is_empty() {
             self.selected = 0;
             return;

@@ -432,3 +432,83 @@ fn every_action_has_a_key_and_a_description() {
         );
     }
 }
+
+// ---- following a link (§7, §9) ----
+
+fn opened_with_links(links: &[&str]) -> App {
+    use mailbox_api::{Body, BodyFormat, MessageDetail};
+    let mut app = app_with(2);
+    app.view = View::Message;
+    app.open = Some(MessageDetail {
+        summary: message("id00", "Subject 0", true),
+        message_id: None,
+        in_reply_to: None,
+        references: Vec::new(),
+        reply_to: Vec::new(),
+        bcc: Vec::new(),
+        headers: Vec::new(),
+        body: Some(Body {
+            format: BodyFormat::Text,
+            content: "see [1] and [2]".into(),
+            truncated: false,
+            links: links.iter().map(|s| s.to_string()).collect(),
+        }),
+        attachments: Vec::new(),
+    });
+    app
+}
+
+#[test]
+fn a_link_is_opened_only_by_picking_it() {
+    let mut app = opened_with_links(&["https://one.example/a", "https://two.example/b"]);
+
+    assert_eq!(
+        app.handle(Action::Links),
+        Effect::None,
+        "opening the picker opens nothing"
+    );
+    assert_eq!(app.view, View::Links);
+
+    app.handle(Action::Down);
+    assert_eq!(
+        app.handle(Action::Open),
+        Effect::OpenUrl("https://two.example/b".into()),
+        "Enter opens the highlighted link, and only then"
+    );
+}
+
+#[test]
+fn the_link_cursor_is_clamped_like_every_other() {
+    let mut app = opened_with_links(&["https://one.example/a", "https://two.example/b"]);
+    app.handle(Action::Links);
+
+    app.handle(Action::Up);
+    assert_eq!(app.link_selected, 0);
+    for _ in 0..5 {
+        app.handle(Action::Down);
+    }
+    assert_eq!(app.link_selected, 1);
+}
+
+/// An empty pane looks like a failure to load, so a message with no links says
+/// so and stays where it was.
+#[test]
+fn a_message_with_no_links_says_so() {
+    let mut app = opened_with_links(&[]);
+
+    app.handle(Action::Links);
+    assert_eq!(app.view, View::Message);
+    assert!(app.status.contains("no links"), "{}", app.status);
+}
+
+/// The picker was opened from the message; backing out returns there rather
+/// than closing the mail and losing the reader's place.
+#[test]
+fn leaving_the_picker_returns_to_the_message() {
+    let mut app = opened_with_links(&["https://one.example/a"]);
+    app.handle(Action::Links);
+
+    app.handle(Action::Back);
+    assert_eq!(app.view, View::Message);
+    assert!(app.open.is_some(), "the message must still be open");
+}

@@ -57,7 +57,7 @@ impl Parsed {
     pub fn preview(&self, max: usize) -> Option<String> {
         let body = match (&self.text, &self.html) {
             (Some(t), _) => t.clone(),
-            (None, Some(h)) => mail_parser::decoders::html::html_to_text(h),
+            (None, Some(h)) => crate::render::html_to_plain(h),
             (None, None) => return None,
         };
         let mut s = String::with_capacity(max);
@@ -101,7 +101,7 @@ impl Parsed {
         }
         match (&self.text, &self.html) {
             (Some(t), _) => s.push_str(t),
-            (None, Some(h)) => s.push_str(&mail_parser::decoders::html::html_to_text(h)),
+            (None, Some(h)) => s.push_str(&crate::render::html_to_plain(h)),
             (None, None) => {}
         }
         s
@@ -136,8 +136,19 @@ pub fn parse(raw: &[u8]) -> Parsed {
     // The first text and HTML alternatives. Later ones are duplicates of the
     // same content in nested `multipart/alternative`s far more often than they
     // are additional prose.
-    p.text = msg.body_text(0).map(|c| c.into_owned());
-    p.html = msg.body_html(0).map(|c| c.into_owned());
+    // An empty `text/plain` alternative is not a rendering of the message, it
+    // is a placeholder — and senders emit them, either as a stub their template
+    // never filled or as a deliberate nudge towards the HTML. Treating one as
+    // the body renders the mail as a blank page while its whole content sits in
+    // the part next to it.
+    p.text = msg
+        .body_text(0)
+        .map(|c| c.into_owned())
+        .filter(|t| !t.trim().is_empty());
+    p.html = msg
+        .body_html(0)
+        .map(|c| c.into_owned())
+        .filter(|h| !h.trim().is_empty());
     p.text_is_derived = msg
         .text_body
         .first()

@@ -46,6 +46,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, keymap: &Keymap) {
         View::List => draw_list(frame, areas[0], app),
         View::Message => draw_message(frame, areas[0], app),
         View::Thread => draw_thread(frame, areas[0], app),
+        View::Links => draw_links(frame, areas[0], app),
         View::Help => draw_help(frame, areas[0], keymap),
     }
     draw_status(frame, areas[1], app);
@@ -211,6 +212,41 @@ fn draw_message(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
+/// The open message's links, one per line, numbered as the body numbers them.
+///
+/// The whole URL is shown, never a shortened or prettified form. A link in mail
+/// is exactly the case where the displayed text and the destination disagree on
+/// purpose, so the destination is what gets displayed here (§9).
+fn draw_links(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let links = app.links();
+    let mut lines: Vec<Line<'_>> = vec![
+        Line::from(Span::styled(
+            "  links in this message — Enter to open, q to go back",
+            Style::default().fg(theme::DIM),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, url) in links.iter().enumerate() {
+        let selected = i == app.link_selected;
+        let marker = if selected { "> " } else { "  " };
+        let style = if selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{marker}[{}] ", i + 1),
+                Style::default().fg(theme::DIM),
+            ),
+            Span::styled(url.clone(), style),
+        ]));
+    }
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
 fn draw_thread(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let Some(current) = app.current() else { return };
     let thread_id = current.thread_id.clone();
@@ -268,6 +304,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, keymap: &Keymap) {
         Action::ReplyAll,
         Action::Forward,
         Action::Compose,
+        Action::Links,
         Action::Pipe,
         Action::Sync,
         Action::Help,

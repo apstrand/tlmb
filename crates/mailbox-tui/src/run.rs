@@ -319,6 +319,15 @@ fn apply_effect(
             start_sync(opts.clone(), tracer.clone(), clock.clone(), tx.clone());
             Ok(false)
         }
+        // Not suspended: the opener detaches and its output is discarded, so
+        // the interface never loses the terminal for it.
+        Effect::OpenUrl(url) => {
+            app.status = match mailbox_core::open::open_url(&url) {
+                Ok(()) => format!("opened {url}"),
+                Err(e) => format!("{e}"),
+            };
+            Ok(false)
+        }
         Effect::Suspend(task) => {
             run_suspended(app, opts, tracer, clock, task)?;
             app.dirty = true;

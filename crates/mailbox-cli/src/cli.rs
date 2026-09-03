@@ -427,6 +427,13 @@ pub struct ShowArgs {
     /// Print headers only.
     #[arg(long)]
     pub headers_only: bool,
+
+    /// List the links in the body instead of the body.
+    ///
+    /// The numbering is the one the rendered text uses, so `[2]` in a message
+    /// is the second line here.
+    #[arg(long)]
+    pub links: bool,
 }
 
 #[derive(Debug, Args)]

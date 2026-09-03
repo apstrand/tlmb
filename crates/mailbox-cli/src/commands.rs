@@ -599,6 +599,23 @@ pub fn show(ctx: &Ctx<'_>, args: &ShowArgs) -> Result<()> {
 }
 
 fn render_show_human(ctx: &Ctx<'_>, result: &ShowResult, args: &ShowArgs) {
+    if args.links {
+        let links = result
+            .message
+            .as_ref()
+            .and_then(|m| m.body.as_ref())
+            .map(|b| b.links.as_slice())
+            .unwrap_or_default();
+        if links.is_empty() {
+            ctx.out.print(ctx.out.dim("no links in this message"));
+            return;
+        }
+        for (i, url) in links.iter().enumerate() {
+            ctx.out
+                .print(format!("{} {}", ctx.out.dim(&format!("[{}]", i + 1)), url));
+        }
+        return;
+    }
     if let Some(t) = &result.thread {
         maybe_page(ctx.out, &format::thread_detail(ctx.out, t));
         return;

@@ -46,6 +46,8 @@ pub enum Action {
     Compose,
     /// Pipe the raw message to a command (§7's `|`).
     Pipe,
+    /// List the open message's links, to follow one.
+    Links,
     Sync,
     Help,
     /// Scroll a message body without moving the selection.
@@ -79,6 +81,7 @@ impl Action {
             Action::Forward => "forward",
             Action::Compose => "compose",
             Action::Pipe => "pipe to a command",
+            Action::Links => "follow a link",
             Action::Sync => "sync now",
             Action::Help => "help",
             Action::ScrollDown => "scroll down",
@@ -132,6 +135,7 @@ impl Keymap {
             ("f", Action::Forward),
             ("m", Action::Compose),
             ("|", Action::Pipe),
+            ("o", Action::Links),
             ("@", Action::Sync),
             ("?", Action::Help),
             ("C-d", Action::ScrollDown),

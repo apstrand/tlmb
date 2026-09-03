@@ -76,6 +76,15 @@ pub struct Body {
     pub content: String,
     /// True when `--max-body-bytes` cut the content short (§6.4).
     pub truncated: bool,
+    /// Every destination the body refers to, deduplicated, in reading order.
+    ///
+    /// The numbering is the one in the text: a flattened HTML body marks its
+    /// links `[1]`, `[2]`, … and those are these, in order. Present so an
+    /// interface — or an agent — can act on a link without parsing a rendering
+    /// back into data, and so a reader of the text form is not left with a
+    /// destination they can see but cannot follow.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
 }
 
 /// One MIME part worth naming: an attachment, or an inline image.

@@ -128,7 +128,12 @@ fn send(ctx: &Ctx<'_>, link: &str, skip_confirmation: bool) -> Result<()> {
     }
 
     let rng = mailbox_core::Rng::from_env();
-    let payload = Payload::build(&config, &device_name(), &ctx.clock, &rng);
+    let payload = Payload::build(
+        &config,
+        &mailbox_core::paths::device_name(),
+        &ctx.clock,
+        &rng,
+    );
     let missing: Vec<&str> = payload
         .accounts
         .iter()
@@ -194,7 +199,12 @@ fn export(ctx: &Ctx<'_>, path: &std::path::Path, args: &PairArgs) -> Result<()> 
     let passphrase = passphrase(ctx, args, true)?;
 
     let rng = mailbox_core::Rng::from_env();
-    let payload = Payload::build(&config, &device_name(), &ctx.clock, &rng);
+    let payload = Payload::build(
+        &config,
+        &mailbox_core::paths::device_name(),
+        &ctx.clock,
+        &rng,
+    );
     let bytes = file::export(&payload, &passphrase, &rng)?;
 
     write_private(path, &bytes)?;
@@ -476,14 +486,6 @@ fn store_in_keychain(account_id: &str, secret: &str) -> bool {
         }
     }
     child.wait().map(|s| s.success()).unwrap_or(false)
-}
-
-fn device_name() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "this device".to_string())
 }
 
 /// Renders a link as a QR block (§8, transport 1).
