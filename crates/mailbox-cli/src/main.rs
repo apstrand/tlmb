@@ -11,6 +11,7 @@
 mod cli;
 mod commands;
 mod format;
+mod gui;
 mod output;
 mod pairing;
 mod qr;
@@ -102,6 +103,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Attach(args) => commands::attach(&ctx, args),
         Command::Snooze(args) => commands::snooze(&ctx, args),
         Command::Serve(args) => commands::serve(&ctx, args),
+        Command::Gui => gui::run(&ctx),
         Command::Send(args) => sending::send(&ctx, args),
         Command::Compose(args) => sending::compose(&ctx, args),
         Command::Reply(args) => sending::reply(&ctx, args),
@@ -144,6 +146,9 @@ fn needs_write(cmd: &Command) -> bool {
         | Command::Reply(_) => true,
         // The TUI writes: flags, moves, and a sync it starts itself.
         Command::Tui => true,
+        // The GUI's reading handle is read-only; its writes open their own
+        // session on the worker thread (§4.1).
+        Command::Gui => false,
         // Setting a message aside is a local write; listing what is asleep is
         // not.
         Command::Snooze(args) => !args.list,

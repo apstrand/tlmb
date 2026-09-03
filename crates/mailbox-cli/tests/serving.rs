@@ -110,8 +110,12 @@ impl Serving {
         stream.write_all(raw.as_bytes()).expect("write");
         stream.flush().ok();
 
-        let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read");
+        // Bytes, not a string: one of the things served is a wasm module, and
+        // `read_to_string` on it fails with "stream did not contain valid
+        // UTF-8" — which says nothing about the response being wrong.
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read");
+        let response = String::from_utf8_lossy(&raw).into_owned();
 
         let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
         let status = head

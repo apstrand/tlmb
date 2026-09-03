@@ -1,0 +1,14 @@
+[package]
+name = "mailbox-ui"
+description = "The shared graphical interface (§7): one implementation, rendered by the desktop shell and by the browser."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mailbox-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+egui = "0.28"

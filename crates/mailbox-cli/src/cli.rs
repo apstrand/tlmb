@@ -142,6 +142,9 @@ pub enum Command {
     /// Start the web interface (§3).
     Serve(ServeArgs),
 
+    /// Launch the graphical interface (§7).
+    Gui,
+
     /// Move messages to a folder.
     #[command(visible_alias = "move")]
     Mv(MoveArgs),

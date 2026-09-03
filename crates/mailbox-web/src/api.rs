@@ -11,7 +11,7 @@
 //! every future subcommand — `pair send`, `|` to a shell — reachable from a
 //! page. The routes are named one at a time, and adding one is a decision.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use mailbox_api::BodyFormat;
 use mailbox_core::error::{Error, Result};
@@ -25,7 +25,7 @@ use crate::http::{Request, Response};
 pub fn handle(
     path: &str,
     request: &Request,
-    workspace: &Arc<Mutex<Workspace>>,
+    workspace: &Mutex<Workspace>,
     session: &SessionOptions,
     tracer: &Tracer,
     clock: &Clock,
@@ -80,7 +80,7 @@ fn reply<T: serde::Serialize>(value: Result<T>) -> Result<Response> {
     Ok(Response::json(200, &serde_json::to_value(value?)?))
 }
 
-fn list(request: &Request, workspace: &Arc<Mutex<Workspace>>) -> Result<Response> {
+fn list(request: &Request, workspace: &Mutex<Workspace>) -> Result<Response> {
     let query = request.query.get("q").cloned().unwrap_or_default();
     let opts = ListOptions {
         limit: request
@@ -109,7 +109,7 @@ fn list(request: &Request, workspace: &Arc<Mutex<Workspace>>) -> Result<Response
     Ok(Response::json(200, &serde_json::to_value(list)?))
 }
 
-fn show(request: &Request, workspace: &Arc<Mutex<Workspace>>) -> Result<Response> {
+fn show(request: &Request, workspace: &Mutex<Workspace>) -> Result<Response> {
     let id = request
         .query
         .get("id")
@@ -269,7 +269,7 @@ fn snooze(
 
 fn sync(
     request: &Request,
-    workspace: &Arc<Mutex<Workspace>>,
+    workspace: &Mutex<Workspace>,
     session: &SessionOptions,
     tracer: &Tracer,
     clock: &Clock,

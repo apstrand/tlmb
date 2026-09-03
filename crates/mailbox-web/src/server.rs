@@ -21,6 +21,7 @@
 
 use std::io::BufReader;
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mailbox_core::error::{Error, Result};
@@ -45,13 +46,26 @@ pub struct Options {
 
 pub struct Server {
     listener: TcpListener,
+    max_requests: Option<usize>,
+    inner: Arc<Inner>,
+}
+
+/// Everything a connection needs, shared by the threads serving them.
+struct Inner {
     token: Option<String>,
-    workspace: Arc<Mutex<Workspace>>,
+    workspace: Mutex<Workspace>,
     session: mailbox_core::session::SessionOptions,
     tracer: Tracer,
     clock: Clock,
-    max_requests: Option<usize>,
+    /// Connections being served right now. A browser opens several at once,
+    /// and a cap is what keeps "several" from becoming "as many as anyone
+    /// cares to open".
+    live: AtomicUsize,
 }
+
+/// Enough for a browser's parallel fetches several times over, and few enough
+/// that a stranger cannot spend the machine's memory by connecting.
+const MAX_CONNECTIONS: usize = 32;
 
 /// A token: 32 bytes of the injected RNG, hex.
 ///
@@ -88,12 +102,15 @@ impl Server {
 
         Ok(Server {
             listener,
-            token: opts.token,
-            workspace: Arc::new(Mutex::new(workspace)),
-            session,
-            tracer,
-            clock,
             max_requests: opts.max_requests,
+            inner: Arc::new(Inner {
+                token: opts.token,
+                workspace: Mutex::new(workspace),
+                session,
+                tracer,
+                clock,
+                live: AtomicUsize::new(0),
+            }),
         })
     }
 
@@ -116,33 +133,58 @@ impl Server {
         } else {
             addr.to_string()
         };
-        match &self.token {
+        match &self.inner.token {
             Some(t) => format!("http://{host}/?{TOKEN_NAME}={t}"),
             None => format!("http://{host}/"),
         }
     }
 
-    /// Serves until interrupted, or until `max_requests` have been answered.
+    /// Serves until interrupted, or until `max_requests` have been accepted.
+    ///
+    /// A thread per connection. Serving them one after another looks adequate
+    /// for a single user and is not: a browser opens several at once, and the
+    /// first thing it asks for is a two-megabyte wasm module. Behind that, the
+    /// interface's own first two requests wait — so the mailbox loads empty and
+    /// fills in only when something prompts a reload. Concurrency here is not
+    /// about throughput; it is about not making the page wait on its own
+    /// assets.
     pub fn run(&self) -> Result<()> {
-        let mut served = 0usize;
+        let mut accepted = 0usize;
         for stream in self.listener.incoming() {
             let Ok(stream) = stream else { continue };
-            if let Err(e) = self.serve_one(stream) {
-                // One bad connection is not a reason to stop serving the
-                // others; a browser that hangs up mid-request is routine.
-                self.tracer.emit(
-                    "web.connection_failed",
-                    serde_json::json!({ "error": e.to_string() }),
-                );
+
+            if self.inner.live.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                // Refused rather than queued: a queue with no limit is the
+                // same problem with a longer fuse.
+                let _ = crate::http::Response::text(503, "too many connections")
+                    .write(&mut stream.try_clone().unwrap_or(stream));
+                continue;
             }
-            served += 1;
-            if self.max_requests.is_some_and(|max| served >= max) {
+
+            let inner = self.inner.clone();
+            inner.live.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                if let Err(e) = inner.serve_one(stream) {
+                    // One bad connection is not a reason to stop serving the
+                    // others; a browser that hangs up mid-request is routine.
+                    inner.tracer.emit(
+                        "web.connection_failed",
+                        serde_json::json!({ "error": e.to_string() }),
+                    );
+                }
+                inner.live.fetch_sub(1, Ordering::SeqCst);
+            });
+
+            accepted += 1;
+            if self.max_requests.is_some_and(|max| accepted >= max) {
                 break;
             }
         }
         Ok(())
     }
+}
 
+impl Inner {
     fn serve_one(&self, stream: TcpStream) -> std::result::Result<(), crate::http::Error> {
         crate::http::set_timeouts(&stream)?;
         let mut reader = BufReader::new(stream.try_clone()?);

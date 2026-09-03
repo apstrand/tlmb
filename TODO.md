@@ -45,3 +45,20 @@ off, and the gaps found along the way.
 - **`raw:` search passthrough is parsed and ignored.** It compiles to "match
   everything" locally; the sync engine does not yet hand it to the server.
 - **`COMPRESS=DEFLATE`** is not used, though it is advertised by most servers.
+
+## After M5
+
+- **Share the Markdown parser.** The TUI styles bodies as Markdown; the GUI and
+  the web shell show the flattened text form instead. The inline rules — what
+  counts as emphasis, when a marker is punctuation — live in
+  `mailbox-tui/src/markdown.rs`, and a second copy would be two sets of subtle
+  rules that drift. Extracting the parser into a crate both can use is the fix;
+  duplicating it is not.
+- **L0 in the browser.** §15 asks the wasm build to run L0 in-browser. The L0
+  subjects — MIME, threading, the query parser, the crypto vectors — live in
+  `mailbox-core`, which pulls in SQLite and does not compile to wasm. Getting
+  there means feature-gating the store out of the crate, which is worth doing
+  carefully rather than quickly.
+- **Compose in the GUI.** §7 asks for a compose window with a *From* selector
+  one keystroke away. The interface reads and triages; it does not yet write a
+  message.

@@ -6,7 +6,9 @@ members = [
     "crates/mailbox-cli",
     "crates/mailbox-l3",
     "crates/mailbox-tui",
+    "crates/mailbox-ui",
     "crates/mailbox-web",
+    "crates/mailbox-web-ui",
 ]
 
 [workspace.package]
@@ -21,6 +23,7 @@ mailbox-api = { path = "crates/mailbox-api" }
 mailbox-core = { path = "crates/mailbox-core" }
 mailbox-l3 = { path = "crates/mailbox-l3" }
 mailbox-tui = { path = "crates/mailbox-tui" }
+mailbox-ui = { path = "crates/mailbox-ui" }
 mailbox-web = { path = "crates/mailbox-web" }
 
 serde = { version = "1", features = ["derive"] }
