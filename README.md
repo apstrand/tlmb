@@ -109,6 +109,15 @@ a marker when its other half is on the same line, and emphasis may not begin or
 end against a space, so `2 * 3 * 4`, `snake_case_names` and indented code all
 survive intact.
 
+Links are terminal hyperlinks (OSC 8) where the terminal supports them, so
+right-click offers "copy link" and ctrl-click follows it;
+`MAILBOX_HYPERLINKS=0` turns that off. `o` opens the picker, which shows whole
+URLs — never a shortened form, since a link in mail is exactly the case where
+the text and the destination disagree on purpose — with Enter to open one and
+`y` to copy it. Copying goes through the terminal (OSC 52) rather than a
+`wl-copy`/`pbcopy` helper, so it works over ssh and adds no display-server
+dependency to the binary.
+
 Everything is incremental (§7): the list paints from the store immediately, a
 sync runs on a worker thread and is a word in the status bar rather than a modal
 wait, and `/` filters as you type — prefix-matching, so `postm` finds

@@ -50,6 +50,8 @@ pub enum Action {
     Links,
     /// Set the message aside until later (§7).
     Snooze,
+    /// Copy the selected link to the clipboard.
+    Yank,
     Sync,
     Help,
     /// Scroll a message body without moving the selection.
@@ -85,6 +87,7 @@ impl Action {
             Action::Pipe => "pipe to a command",
             Action::Links => "follow a link",
             Action::Snooze => "snooze until later",
+            Action::Yank => "copy the selected link",
             Action::Sync => "sync now",
             Action::Help => "help",
             Action::ScrollDown => "scroll down",
@@ -140,6 +143,7 @@ impl Keymap {
             ("|", Action::Pipe),
             ("o", Action::Links),
             ("z", Action::Snooze),
+            ("y", Action::Yank),
             ("@", Action::Sync),
             ("?", Action::Help),
             ("C-d", Action::ScrollDown),

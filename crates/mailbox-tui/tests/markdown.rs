@@ -5,29 +5,28 @@
 //! mail, which comes through the same path and was never Markdown, is not
 //! damaged on the way.
 
-use mailbox_tui::markdown::body_lines;
+use mailbox_tui::markdown::{body_lines, BodyLine};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
 
 /// The visible text of a rendered line, markers and all removed.
-fn text(line: &Line<'_>) -> String {
-    line.spans.iter().map(|s| s.content.as_ref()).collect()
+fn text(line: &BodyLine) -> String {
+    line.text()
 }
 
-fn render(md: &str) -> Vec<Line<'static>> {
+fn render(md: &str) -> Vec<BodyLine> {
     body_lines(md, 40, &[])
 }
 
-fn one(md: &str) -> Line<'static> {
+fn one(md: &str) -> BodyLine {
     render(md).into_iter().next().expect("a line")
 }
 
-/// Finds the span carrying `needle` and returns its style.
-fn style_of(line: &Line<'_>, needle: &str) -> Style {
-    line.spans
-        .iter()
-        .find(|s| s.content.contains(needle))
-        .unwrap_or_else(|| panic!("no span containing {needle:?} in {:?}", text(line)))
+/// Finds the run carrying `needle` and returns its style.
+fn style_of(line: &BodyLine, needle: &str) -> Style {
+    std::iter::once(&line.lead)
+        .chain(line.pieces.iter())
+        .find(|p| p.text.contains(needle))
+        .unwrap_or_else(|| panic!("no run containing {needle:?} in {:?}", text(line)))
         .style
 }
 

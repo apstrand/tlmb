@@ -7,6 +7,7 @@
 
 pub mod attach;
 pub mod bench;
+pub mod clipboard;
 pub mod clock;
 pub mod compose;
 pub mod config;

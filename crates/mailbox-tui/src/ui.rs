@@ -8,7 +8,7 @@ use mailbox_api::MessageSummary;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, Prompt, View};
@@ -20,7 +20,17 @@ use crate::keys::{Action, Keymap};
 /// whatever theme the user has rather than fighting it.
 use crate::theme;
 
-pub fn draw(frame: &mut Frame<'_>, app: &mut App, keymap: &Keymap) {
+/// Draws a frame, and reports where any links landed.
+///
+/// The link positions come back rather than being acted on here: turning them
+/// into terminal hyperlinks means writing escape sequences straight at the
+/// terminal after the frame is on screen, which is the shell's job (§4's thin
+/// frontends) and cannot be done through a ratatui buffer at all.
+pub fn draw(
+    frame: &mut Frame<'_>,
+    app: &mut App,
+    keymap: &Keymap,
+) -> Vec<crate::markdown::LinkSpan> {
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -34,15 +44,17 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, keymap: &Keymap) {
     // can actually see rather than by a guess.
     app.page_size = (areas[0].height as usize).saturating_sub(2).max(1);
 
+    let mut links = Vec::new();
     match app.view {
         View::List => draw_list(frame, areas[0], app),
-        View::Message => draw_message(frame, areas[0], app),
+        View::Message => draw_message(frame, areas[0], app, &mut links),
         View::Thread => draw_thread(frame, areas[0], app),
-        View::Links => draw_links(frame, areas[0], app),
+        View::Links => draw_links(frame, areas[0], app, &mut links),
         View::Help => draw_help(frame, areas[0], keymap),
     }
     draw_status(frame, areas[1], app);
     draw_prompt(frame, areas[2], app);
+    links
 }
 
 fn draw_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -140,7 +152,14 @@ fn row(m: &MessageSummary, show_account: bool) -> Line<'static> {
     Line::from(spans)
 }
 
-fn draw_message(frame: &mut Frame<'_>, area: Rect, app: &App) {
+fn draw_message(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App,
+    found: &mut Vec<crate::markdown::LinkSpan>,
+) {
+    use crate::markdown::{Body, BodyLine, Piece};
+
     let Some(detail) = &app.open else {
         frame.render_widget(
             Paragraph::new("loading…").style(Style::default().fg(theme::DIM)),
@@ -149,6 +168,9 @@ fn draw_message(frame: &mut Frame<'_>, area: Rect, app: &App) {
         return;
     };
 
+    // The headers are part of the same scrolled flow as the body, as they were
+    // when both went through one `Paragraph`: scrolling a long message should
+    // move them off rather than spend six rows of a small screen on them.
     let mut lines = vec![
         header("From", &addresses(&detail.summary.from)),
         header("To", &addresses(&detail.summary.to)),
@@ -157,9 +179,9 @@ fn draw_message(frame: &mut Frame<'_>, area: Rect, app: &App) {
         lines.push(header("Cc", &addresses(&detail.summary.cc)));
     }
     lines.push(header("Date", &detail.summary.date));
-    lines.push(Line::from(vec![
-        Span::styled("  Subject: ", Style::default().fg(theme::DIM)),
-        Span::styled(
+    lines.push(BodyLine::plain(vec![
+        Piece::new("  Subject: ", Style::default().fg(theme::DIM)),
+        Piece::new(
             detail.summary.subject.clone(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
@@ -175,9 +197,10 @@ fn draw_message(frame: &mut Frame<'_>, area: Rect, app: &App) {
             lines.push(header("Attach", &names.join(", ")));
         }
     }
-    lines.push(Line::from(""));
+    lines.push(BodyLine::plain(vec![Piece::new("", Style::default())]));
 
-    match &detail.body {
+    let empty: Vec<String> = Vec::new();
+    let links = match &detail.body {
         Some(body) => {
             lines.extend(crate::markdown::body_lines(
                 &body.content,
@@ -185,22 +208,29 @@ fn draw_message(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 &body.links,
             ));
             if body.truncated {
-                lines.push(Line::from(Span::styled(
+                lines.push(BodyLine::plain(vec![Piece::new(
                     "[truncated]",
                     Style::default().fg(theme::DIM),
-                )));
+                )]));
             }
+            &body.links
         }
-        None => lines.push(Line::from(Span::styled(
-            "[body not downloaded]",
-            Style::default().fg(theme::DIM),
-        ))),
-    }
+        None => {
+            lines.push(BodyLine::plain(vec![Piece::new(
+                "[body not downloaded]",
+                Style::default().fg(theme::DIM),
+            )]));
+            &empty
+        }
+    };
 
     frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((app.body_scroll, 0)),
+        Body {
+            lines: &lines,
+            links,
+            scroll: app.body_scroll,
+            found: Some(found),
+        },
         area,
     );
 }
@@ -209,15 +239,23 @@ fn draw_message(frame: &mut Frame<'_>, area: Rect, app: &App) {
 ///
 /// The whole URL is shown, never a shortened or prettified form. A link in mail
 /// is exactly the case where the displayed text and the destination disagree on
-/// purpose, so the destination is what gets displayed here (§9).
-fn draw_links(frame: &mut Frame<'_>, area: Rect, app: &App) {
+/// purpose, so the destination is what gets displayed here (§9). Each is a
+/// terminal hyperlink too, so a right-click offers to copy it.
+fn draw_links(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App,
+    found: &mut Vec<crate::markdown::LinkSpan>,
+) {
+    use crate::markdown::{Body, BodyLine, Piece};
+
     let links = app.links();
-    let mut lines: Vec<Line<'_>> = vec![
-        Line::from(Span::styled(
-            "  links in this message — Enter to open, q to go back",
+    let mut lines = vec![
+        BodyLine::plain(vec![Piece::new(
+            "  links in this message — Enter to open, y to copy, q to go back",
             Style::default().fg(theme::DIM),
-        )),
-        Line::from(""),
+        )]),
+        BodyLine::plain(vec![Piece::new("", Style::default())]),
     ];
 
     for (i, url) in links.iter().enumerate() {
@@ -228,16 +266,29 @@ fn draw_links(frame: &mut Frame<'_>, area: Rect, app: &App) {
         } else {
             Style::default()
         };
-        lines.push(Line::from(vec![
-            Span::styled(
+        lines.push(BodyLine {
+            lead: Piece::new(
                 format!("{marker}[{}] ", i + 1),
                 Style::default().fg(theme::DIM),
             ),
-            Span::styled(url.clone(), style),
-        ]));
+            hang: Piece::new(" ".repeat(6), Style::default()),
+            pieces: vec![Piece {
+                text: url.clone(),
+                style,
+                link: Some(i),
+            }],
+        });
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    frame.render_widget(
+        Body {
+            lines: &lines,
+            links,
+            scroll: 0,
+            found: Some(found),
+        },
+        area,
+    );
 }
 
 fn draw_thread(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -299,6 +350,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, keymap: &Keymap) {
         Action::Compose,
         Action::Links,
         Action::Snooze,
+        Action::Yank,
         Action::Pipe,
         Action::Sync,
         Action::Help,
@@ -383,11 +435,15 @@ fn draw_prompt(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let _ = Prompt::Search(String::new());
 }
 
-fn header(name: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("  {name:>7}: "), Style::default().fg(theme::DIM)),
-        Span::raw(value.to_string()),
-    ])
+fn header(name: &str, value: &str) -> crate::markdown::BodyLine {
+    use crate::markdown::{BodyLine, Piece};
+    BodyLine {
+        // A wrapped recipient list lines up under the first name rather than
+        // under the field label.
+        lead: Piece::new(format!("  {name:>7}: "), Style::default().fg(theme::DIM)),
+        hang: Piece::new(" ".repeat(11), Style::default()),
+        pieces: vec![Piece::new(value.to_string(), Style::default())],
+    }
 }
 
 fn addresses(list: &[mailbox_api::Address]) -> String {

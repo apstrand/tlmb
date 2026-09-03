@@ -103,7 +103,10 @@ fn event_loop(
 
     loop {
         if needs_redraw {
-            terminal.draw(|frame| crate::ui::draw(frame, app, keymap))?;
+            let mut links = Vec::new();
+            terminal.draw(|frame| links = crate::ui::draw(frame, app, keymap))?;
+            // After the frame, never during it: see [`crate::markdown::LinkSpan`].
+            mark_hyperlinks(&links)?;
             needs_redraw = false;
         }
 
@@ -334,6 +337,18 @@ fn apply_effect(
             };
             Ok(false)
         }
+        Effect::Copy(text) => {
+            // Straight at the terminal: it owns the clipboard, and under tmux
+            // or ssh it is the only thing that can reach the right one.
+            // "sent to", not "copied": OSC 52 has no reply, and a terminal
+            // may be configured to refuse it. Claiming success we cannot
+            // observe is how someone loses a URL they thought they had.
+            app.status = match mailbox_core::clipboard::copy(&mut io::stdout(), &text) {
+                Ok(()) => format!("sent to the clipboard: {text}"),
+                Err(e) => format!("could not copy: {e}"),
+            };
+            Ok(false)
+        }
         Effect::Write(write) => {
             app.status = perform_write(opts, tracer, clock, &write)?;
             app.dirty = true;
@@ -464,6 +479,15 @@ fn suspended_task(
             })
         }
     }
+}
+
+/// Marks up the links the frame just drew, if the terminal wants them.
+fn mark_hyperlinks(links: &[crate::markdown::LinkSpan]) -> Result<()> {
+    if links.is_empty() || !crate::markdown::hyperlinks_wanted() {
+        return Ok(());
+    }
+    crate::markdown::write_hyperlinks(&mut io::stdout(), links)?;
+    Ok(())
 }
 
 /// Performs a write the state machine asked for.

@@ -562,3 +562,46 @@ fn an_empty_snooze_prompt_writes_nothing() {
     app.handle(Action::Snooze);
     assert_eq!(app.submit_prompt(), Effect::None);
 }
+
+// ---- the help overlay ----
+
+/// Help is an overlay on whatever you were doing. Being dropped at the list
+/// afterwards loses the message you were reading, which is the specific
+/// annoyance of asking what a key does *while* using it.
+#[test]
+fn closing_the_help_returns_to_what_was_underneath_it() {
+    for close_with in [Action::Quit, Action::Back, Action::Help] {
+        let mut app = app_with(3);
+        app.handle(Action::Open);
+        assert_eq!(app.view, View::Message);
+
+        app.handle(Action::Help);
+        assert_eq!(app.view, View::Help);
+
+        app.handle(close_with);
+        assert_eq!(
+            app.view,
+            View::Message,
+            "{close_with:?} left the message instead of closing the help"
+        );
+    }
+}
+
+#[test]
+fn help_opened_from_the_list_still_closes_to_the_list() {
+    let mut app = app_with(3);
+    app.handle(Action::Help);
+    app.handle(Action::Quit);
+    assert_eq!(app.view, View::List);
+}
+
+/// Including from the link picker, which is itself reached from a message.
+#[test]
+fn help_returns_to_the_link_picker() {
+    let mut app = opened_with_links(&["https://one.example/a"]);
+    app.handle(Action::Links);
+
+    app.handle(Action::Help);
+    app.handle(Action::Help);
+    assert_eq!(app.view, View::Links);
+}

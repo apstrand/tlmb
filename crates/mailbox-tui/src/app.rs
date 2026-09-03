@@ -106,6 +106,9 @@ pub enum Effect {
     /// A store write, named rather than performed: the shell owns the session,
     /// as it does for the flag and move keys.
     Write(Write),
+    /// Put this on the clipboard. The shell owns the terminal, and the
+    /// clipboard is reached through it (OSC 52).
+    Copy(String),
 }
 
 /// A write the interface asked for.
@@ -152,6 +155,12 @@ pub struct App {
     pub dirty: bool,
     /// Which link is highlighted in [`View::Links`].
     pub link_selected: usize,
+    /// Where `?` was pressed, so closing the help goes back there.
+    ///
+    /// Help is an overlay on whatever you were doing. Dropping you at the list
+    /// afterwards loses the message you were reading, which is the specific
+    /// annoyance of asking what a key does *while* using it.
+    help_return: View,
 }
 
 impl App {
@@ -169,6 +178,7 @@ impl App {
             page_size: DEFAULT_PAGE,
             dirty: false,
             link_selected: 0,
+            help_return: View::List,
         }
     }
 
@@ -387,8 +397,15 @@ impl App {
                 }
                 Effect::None
             }
+            // `?` toggles: pressing it again closes the help, which is what
+            // anyone who opened it with `?` reaches for first.
             Action::Help => {
-                self.view = View::Help;
+                if self.view == View::Help {
+                    self.back();
+                } else {
+                    self.help_return = self.view;
+                    self.view = View::Help;
+                }
                 Effect::None
             }
 
@@ -428,6 +445,16 @@ impl App {
                 Effect::None
             }
 
+            // Only in the picker, which is the only place with a link
+            // selected. Elsewhere it would have to guess which link was meant.
+            Action::Yank => match (self.view, self.links().get(self.link_selected)) {
+                (View::Links, Some(url)) => Effect::Copy(url.clone()),
+                _ => {
+                    self.status = "press o first, to pick a link".to_string();
+                    Effect::None
+                }
+            },
+
             Action::Sync => Effect::StartSync,
 
             Action::Reply | Action::ReplyAll | Action::Forward => match self.current_id() {
@@ -458,7 +485,12 @@ impl App {
             View::Links => {
                 self.view = View::Message;
             }
-            View::Message | View::Thread | View::Help => {
+            // The help overlays whatever was underneath it, and leaves it
+            // there.
+            View::Help => {
+                self.view = self.help_return;
+            }
+            View::Message | View::Thread => {
                 self.view = View::List;
                 self.open = None;
                 self.body_scroll = 0;

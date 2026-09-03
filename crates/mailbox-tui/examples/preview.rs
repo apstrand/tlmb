@@ -33,9 +33,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut terminal = Terminal::new(TestBackend::new(96, 34))?;
     let keymap = mailbox_tui::Keymap::vim();
-    terminal.draw(|f| mailbox_tui::ui::draw(f, &mut app, &keymap))?;
+    let mut links = Vec::new();
+    terminal.draw(|f| links = mailbox_tui::ui::draw(f, &mut app, &keymap))?;
 
     print!("{}", ansi(terminal.backend().buffer()));
+    // The same call the interface makes after each frame, so what is printed
+    // here is what a terminal would receive.
+    mailbox_tui::markdown::write_hyperlinks(&mut std::io::stdout(), &links)?;
     Ok(())
 }
 
