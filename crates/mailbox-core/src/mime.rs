@@ -145,8 +145,17 @@ pub fn parse(raw: &[u8]) -> Parsed {
         .body_text(0)
         .map(|c| c.into_owned())
         .filter(|t| !t.trim().is_empty());
+    // Only a real `text/html` part. `body_html` will happily manufacture HTML
+    // from a text part when a message has none, and taking that at face value
+    // means every plain-text mail is rendered by running it through an HTML
+    // flattener — which collapses whitespace, so indented code and ASCII
+    // tables arrive flush-left and mangled.
     p.html = msg
-        .body_html(0)
+        .html_body
+        .first()
+        .and_then(|idx| msg.parts.get(*idx as usize))
+        .filter(|part| matches!(part.body, PartType::Html(_)))
+        .and_then(|_| msg.body_html(0))
         .map(|c| c.into_owned())
         .filter(|h| !h.trim().is_empty());
     p.text_is_derived = msg

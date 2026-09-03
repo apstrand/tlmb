@@ -78,8 +78,8 @@ mailbox tui
 ```
 
 mutt-like muscle memory (§7): `j`/`k` to move, `/` to search, `t` tag, `d`
-delete, `s` archive, `m` compose, `r`/`R` reply, `|` pipe to a command, `?` for
-the keys. Vim-ish by default; `keymap = "emacs"` under `[keys]` swaps the
+delete, `s` archive, `m` compose, `r`/`R` reply, `z` snooze, `o` to follow a
+link, `|` pipe to a command, `?` for the keys. Vim-ish by default; `keymap = "emacs"` under `[keys]` swaps the
 movement, and any action can be rebound:
 
 ```toml
@@ -91,6 +91,23 @@ archive = "e"
 A rebinding *replaces* the old key rather than adding to it, and a name that
 isn't an action is reported rather than ignored — a typo that silently does
 nothing is a rebinding you believe is live.
+
+Bodies are drawn as styled Markdown, which is what the core makes of HTML mail
+— headings, emphasis, lists and quotes become the terminal's own styles rather
+than a screenful of `**` and raw URLs. Links show their label and the number
+`o` will offer:
+
+```
+Hi Peter, your parcel is on its way. You can track it here [2], or view
+the order details [3].
+
+• 1 × Kettle — €39.00
+```
+
+Plain-text mail comes through the same path and is left alone: a marker is only
+a marker when its other half is on the same line, and emphasis may not begin or
+end against a space, so `2 * 3 * 4`, `snake_case_names` and indented code all
+survive intact.
 
 Everything is incremental (§7): the list paints from the store immediately, a
 sync runs on a worker thread and is a word in the status bar rather than a modal

@@ -289,6 +289,12 @@ fn load_open_message(app: &mut App, workspace: &Workspace) -> Result<()> {
         &IdRef::Id(id),
         &RenderOptions {
             strip_quotes: false,
+            // Markdown, not flat text: most mail is HTML, and Markdown is what
+            // the core makes of it while keeping the structure — headings,
+            // lists, emphasis, links — that the flat form throws away. The
+            // renderer turns the markers into styles (§7), so nobody sees a
+            // `**`.
+            format: mailbox_api::BodyFormat::Md,
             ..Default::default()
         },
         false,

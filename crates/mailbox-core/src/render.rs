@@ -57,7 +57,11 @@ pub fn body(parsed: &Parsed, raw: Option<&[u8]>, opts: &RenderOptions) -> Option
         BodyFormat::Md => match (&parsed.text, &parsed.html) {
             (Some(t), _) if opts.text_only && !parsed.text_is_derived => t.clone(),
             _ if opts.text_only => return None,
-            (_, Some(h)) => html_to_markdown(h),
+            (_, Some(h)) => {
+                let flat = render_html(h, Flavour::Markdown, LinkStyle::Inline);
+                links = flat.links;
+                flat.text
+            }
             (Some(t), None) => t.clone(),
             (None, None) => return None,
         },
@@ -408,8 +412,13 @@ fn render_html(html: &str, flavour: Flavour, links: LinkStyle) -> Flattened {
     }
 
     let mut text = out.finish();
-    if let Some(list) = refs.render() {
-        text.push_str(&list);
+    // Only the footnote style prints the list; Markdown already carries each
+    // destination beside its label, and printing both would say everything
+    // twice.
+    if links == LinkStyle::Footnotes {
+        if let Some(list) = refs.render() {
+            text.push_str(&list);
+        }
     }
     Flattened {
         text,
@@ -470,7 +479,14 @@ fn close_link(
     }
 
     match style {
-        LinkStyle::Inline => out.push_raw(&format!("]({href})")),
+        // Numbered even though the number is not printed here: `Body.links` is
+        // the same list in the same order whichever rendering asked for it, so
+        // an interface showing Markdown and an interface showing footnotes
+        // agree about what "the second link" is.
+        LinkStyle::Inline => {
+            refs.number(href);
+            out.push_raw(&format!("]({href})"));
+        }
         LinkStyle::Footnotes => out.push_raw(&format!(" [{}]", refs.number(href))),
         LinkStyle::Drop => {}
     }

@@ -585,3 +585,69 @@ fn the_entity_table_is_sorted() {
         previous = name;
     }
 }
+
+/// Markdown carries each destination beside its label, so appending the
+/// footnote list as well would say everything twice. It once did.
+#[test]
+fn the_markdown_rendering_has_no_footnote_list() {
+    let md = render::html_to_markdown("<p><a href=\"https://x.example/a\">label</a></p>");
+
+    assert!(md.contains("[label](https://x.example/a)"), "{md}");
+    assert!(!md.contains("Links:"), "{md}");
+}
+
+/// `mail_parser`'s `body_html` manufactures HTML from a text part when a
+/// message has none. Taking that at face value meant every plain-text mail was
+/// rendered by running it through an HTML flattener, and HTML collapses
+/// whitespace — so indented code and ASCII tables arrived flush-left with
+/// their runs of spaces squeezed to one.
+#[test]
+fn a_plain_text_message_is_never_routed_through_the_html_path() {
+    let raw = b"From: a@example.com\r\nSubject: patch\r\n\r\n\
+                Roughly:\r\n\r\n    let n = 2 * 3;   /* 24 */\r\n    if x { y }\r\n";
+    let parsed = mime::parse(raw);
+    assert!(
+        parsed.html.is_none(),
+        "a text-only message has no HTML part"
+    );
+
+    for format in [BodyFormat::Text, BodyFormat::Md] {
+        let body = render::body(
+            &parsed,
+            None,
+            &render::RenderOptions {
+                format,
+                ..Default::default()
+            },
+        )
+        .expect("a body");
+        assert!(
+            body.content.contains("    let n = 2 * 3;   /* 24 */"),
+            "{format:?} lost the layout: {:?}",
+            body.content
+        );
+    }
+}
+
+/// The other half of the same bug: because `html` was always populated, the
+/// escape-into-`<pre>` fallback for a text-only message was unreachable.
+#[test]
+fn a_text_only_message_answers_the_html_format_by_escaping() {
+    let raw = b"From: a@example.com\r\nSubject: s\r\n\r\na < b & c\r\n";
+    let body = render::body(
+        &mime::parse(raw),
+        None,
+        &render::RenderOptions {
+            format: BodyFormat::Html,
+            ..Default::default()
+        },
+    )
+    .expect("a body");
+
+    assert!(body.content.starts_with("<pre>"), "{}", body.content);
+    assert!(
+        body.content.contains("a &lt; b &amp; c"),
+        "{}",
+        body.content
+    );
+}

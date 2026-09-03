@@ -18,15 +18,7 @@ use crate::keys::{Action, Keymap};
 ///
 /// Only the terminal's own palette — no fixed RGB — so the interface follows
 /// whatever theme the user has rather than fighting it.
-mod theme {
-    use ratatui::style::Color;
-    pub const UNREAD: Color = Color::Blue;
-    pub const FLAGGED: Color = Color::Yellow;
-    pub const SENDER: Color = Color::Cyan;
-    pub const DIM: Color = Color::DarkGray;
-    pub const ACCENT: Color = Color::Green;
-    pub const WARN: Color = Color::Yellow;
-}
+use crate::theme;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App, keymap: &Keymap) {
     let areas = Layout::default()
@@ -187,15 +179,16 @@ fn draw_message(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
     match &detail.body {
         Some(body) => {
-            for line in body.content.lines() {
-                // Quoted text is dimmed, so a reply's own words stand out from
-                // what it is replying to.
-                let style = if line.trim_start().starts_with('>') {
-                    Style::default().fg(theme::DIM)
-                } else {
-                    Style::default()
-                };
-                lines.push(Line::from(Span::styled(line.to_string(), style)));
+            lines.extend(crate::markdown::body_lines(
+                &body.content,
+                area.width as usize,
+                &body.links,
+            ));
+            if body.truncated {
+                lines.push(Line::from(Span::styled(
+                    "[truncated]",
+                    Style::default().fg(theme::DIM),
+                )));
             }
         }
         None => lines.push(Line::from(Span::styled(
