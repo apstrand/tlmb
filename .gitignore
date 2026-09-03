@@ -1,6 +1,2 @@
 /target
 *.trace.ndjson
-
-# The built web interface. Made by ./build-web.sh, not carried in history:
-# a wasm bundle per commit is a repository that only grows.
-/crates/mailbox-web/web/dist/

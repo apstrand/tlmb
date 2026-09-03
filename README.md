@@ -41,7 +41,7 @@ than retrofitted.
 | Pairing: QR, LAN, encrypted export file | done (§8, M4) |
 | Snooze, local-only (§7) | done (M5) |
 | `serve`: the local web API, token-gated | done (§3, M5) |
-| GUI and web: one UI, two shells | done (§7, M5) |
+| GUI (egui) and web (DOM), on one contract | done (§7, M5) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
@@ -72,27 +72,28 @@ cookie-authenticated local API otherwise has wide open.
 `/api` answers with the §6.4 contract — the same JSON `--json` prints — and
 there is deliberately no route that runs a command.
 
-### One interface, two shells
+### The GUI and the web interface
 
-`mailbox gui` opens a window; `mailbox serve` hands the same interface to a
-browser as wasm. Not two implementations that look alike — one crate,
-`mailbox-ui`, which knows nothing about stores or sockets. It submits a request
-and collects the answer some frames later; the desktop shell answers from
-`meta.db` on a worker thread, the browser from `fetch`. That contract was
-written for the browser's constraints — no threads, nothing blocking — which is
-what lets the same code serve both.
+`mailbox gui` opens a window; `mailbox serve` hands a browser a page. They are
+two implementations sharing one contract rather than one implementation shared
+two ways, and §16 records why.
 
-Building the web half needs two things once:
+The desktop GUI is immediate-mode (egui), which suits a native window and will
+suit the mobile targets of M6. The web interface is DOM — plain HTML, CSS and
+modules, no bundler and no framework, which is the same reasoning as the
+hand-written HTTP it talks to. Being a document rather than a canvas is what
+gives it selection, find-in-page, the platform's own text rendering, and the
+ability to show the sanitized HTML of §9 *as HTML*:
 
-```sh
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version "$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
-./build-web.sh          # then cargo build, and serve has a UI to hand out
-```
+- the message renders in a sandboxed frame with `default-src 'none'` — no
+  scripts, no same-origin, nothing fetched;
+- remote images stay disarmed until you say otherwise, per sender and
+  remembered, because loading them tells the sender you read it;
+- links open in a new tab and carry no referrer.
 
-The bundle is not in git — a wasm module per commit is a repository that only
-grows — so a fresh clone's `mailbox serve` has a working API and a page that
-says the interface was not compiled into this binary, and names that command.
+The keys are the terminal's where they can be: `j`/`k`, `/`, `u`, `f`, `s`,
+`d`, `z`. Below 45rem it folds to one pane at a time, which is what the QR code
+`serve` prints is for.
 
 ### Moving to another device
 

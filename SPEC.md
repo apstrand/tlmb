@@ -49,8 +49,11 @@ The web interface is compiled into every build. `mailbox serve` (alias
 `mailbox --serve`) starts it; by default it binds `127.0.0.1` on an ephemeral
 port, prints a URL with a one-time token, and prints a QR code for that URL so a
 phone on the same LAN can open it (`--bind 0.0.0.0` required for off-host
-access, and it refuses to bind non-loopback without a token). It is the *same*
-UI the desktop GUI renders — one implementation, two shells.
+access, and it refuses to bind non-loopback without a token).
+
+The web interface is a document, not a picture of one: it builds DOM, and it
+shares the §6.4 contract with the desktop GUI rather than sharing an
+implementation. See §16 for why that is worth a second frontend.
 
 Mobile builds are the Rust core compiled to a static library with a thin native
 UI layer (SwiftUI / Jetpack Compose). No web view for the main UI.
@@ -374,8 +377,15 @@ compose window whose *From* selector is one keystroke away and defaults to the
 identity the thread was addressed to. Multi-account is invisible until you want
 it: one list, per-message account color, `account:` to split.
 
-**Web** — the GUI compiled to wasm, served locally, same keybindings, works
-offline via the local store on the serving host.
+**Web** — the same shape as the GUI, built from DOM and served locally: same
+keybindings, same query grammar, and it works offline via the local store on
+the serving host. It is a client of the §6.4 contract, which is what keeps it
+honest — anything it can do is a documented route, and anything a script can do
+it can do.
+
+Being a document rather than a canvas is what makes the sanitized HTML of §9
+readable as HTML, and it is what gives selection, find-in-page, and the
+platform's own text rendering for free.
 
 **Mobile** — the same model with a touch-first layout. Background refresh within
 each OS's limits; optional push via the notifier of §11.
@@ -755,6 +765,21 @@ Recorded so they are not relitigated. Each names what would justify reopening it
   *Reopen if* setup telemetry — which we do not collect — is replaced by actual
   user reports that camera-less, different-network pairing is common enough to
   hurt.
+- **The web interface builds DOM; the GUI is an immediate-mode canvas.** The
+  first version of §3 said they were one implementation compiled twice, and
+  they were — an egui interface, rendered to a `<canvas>` through WebGL. It
+  worked, and it was wrong for a mail client. A canvas is opaque to the
+  browser: no text selection, no find-in-page, no "copy link", scrollbars and
+  fonts that are drawn rather than the platform's, and accessibility that has
+  to be reimplemented instead of inherited. Reading mail is selecting a
+  sentence, searching a long thread, and following a link. What is shared is
+  the *contract*, not the pixels — which §4 already required of every frontend,
+  and which the CLI, the TUI, and now the web all sit on equally. The
+  immediate-mode interface stays for the desktop GUI and for the mobile targets
+  of M6, where it renders natively and none of the above applies. *Reopen if* a
+  second implementation proves to drift in behaviour rather than only in
+  appearance — the interfaces are allowed to look different, but `is:unread`
+  had better mean the same thing in all of them.
 - **The double-send window: retry, and accept the duplicate.** When SMTP
   submission accepts `DATA` and the connection drops before the `250`, the
   client cannot know whether the message was queued. The outbox retries. That

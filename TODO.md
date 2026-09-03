@@ -48,17 +48,25 @@ off, and the gaps found along the way.
 
 ## After M5
 
-- **Share the Markdown parser.** The TUI styles bodies as Markdown; the GUI and
-  the web shell show the flattened text form instead. The inline rules — what
+- **Share the Markdown parser.** The TUI styles bodies as Markdown; the desktop
+  GUI shows the flattened text form instead. (The web interface no longer needs
+  it — it renders the sanitized HTML directly.) The inline rules — what
   counts as emphasis, when a marker is punctuation — live in
   `mailbox-tui/src/markdown.rs`, and a second copy would be two sets of subtle
   rules that drift. Extracting the parser into a crate both can use is the fix;
   duplicating it is not.
-- **L0 in the browser.** §15 asks the wasm build to run L0 in-browser. The L0
-  subjects — MIME, threading, the query parser, the crypto vectors — live in
-  `mailbox-core`, which pulls in SQLite and does not compile to wasm. Getting
-  there means feature-gating the store out of the crate, which is worth doing
-  carefully rather than quickly.
+- **§15's "the wasm build runs L0 in-browser" no longer has a wasm build.**
+  The web interface is DOM now (§16), so there is nothing compiled to wasm to
+  run L0 in. The clause needs rewriting or dropping: what it was buying — proof
+  that the parsers behave the same off the host — is worth keeping, and M6's
+  mobile targets are where it lands.
+- **The web interface has no automated browser test.** Its API is covered by
+  `serving.rs`; the DOM client on top was verified by hand in a browser, which
+  is where its three real bugs came from. A headless run would be the next
+  step if the client grows past a few hundred lines.
+- **The narrow layout is unverified visually.** The rules and the pane
+  switching are exercised, but the window manager here ignored every resize, so
+  nobody has actually looked at it on a phone-shaped screen.
 - **Compose in the GUI.** §7 asks for a compose window with a *From* selector
   one keystroke away. The interface reads and triages; it does not yet write a
   message.

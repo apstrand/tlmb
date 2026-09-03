@@ -8,7 +8,6 @@ members = [
     "crates/mailbox-tui",
     "crates/mailbox-ui",
     "crates/mailbox-web",
-    "crates/mailbox-web-ui",
 ]
 
 [workspace.package]

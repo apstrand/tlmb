@@ -2152,22 +2152,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mailbox-web-ui"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "js-sys",
- "mailbox-api",
- "mailbox-ui",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

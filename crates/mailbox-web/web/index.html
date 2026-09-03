@@ -4,24 +4,53 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
 <title>mailbox</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body data-pane="list">
 <!--
   The token is written into the page rather than left in the address bar or
   read from the cookie: the cookie is HttpOnly so the page cannot read it, and
   the API wants the token in a header — which is what stops another site from
   making the browser do the asking (see server.rs).
 -->
-<script>
-  window.MAILBOX = { token: "{{TOKEN}}", hasWasm: {{HAS_WASM}} };
-</script>
-<canvas id="mailbox"></canvas>
-<div id="fallback" hidden>
-  <h1>mailbox</h1>
-  <p id="fallback-reason"></p>
-</div>
+<!-- Read by the module below. A `data-` attribute rather than an inline
+     script, so the page's policy needs no `unsafe-inline` for scripts. -->
+<div id="config" data-token="{{TOKEN}}" hidden></div>
+
+<header class="bar">
+  <button id="back" class="icon" aria-label="Back to the list" hidden>&#8592;</button>
+  <form id="search-form" role="search">
+    <input id="search" type="search" autocomplete="off" spellcheck="false"
+           placeholder="Search — from:alice is:unread has:attachment"
+           aria-label="Search, using the mailbox query language">
+  </form>
+  <button id="sync" class="text">Sync</button>
+  <span id="spinner" class="spinner" hidden aria-hidden="true"></span>
+</header>
+
+<main>
+  <nav id="folders" aria-label="Folders">
+    <button class="folder is-current" data-query="">Inbox</button>
+  </nav>
+
+  <section id="list-pane" aria-label="Messages">
+    <ol id="list" role="listbox" aria-label="Messages" tabindex="0"></ol>
+    <p id="list-empty" class="empty" hidden>No messages</p>
+  </section>
+
+  <article id="reader" aria-label="Message" aria-live="polite">
+    <p class="empty">No message selected</p>
+  </article>
+</main>
+
+<footer class="bar status">
+  <span id="status"></span>
+  <span id="error" role="alert"></span>
+  <span id="host"></span>
+</footer>
+
 <script type="module" src="/mailbox.js"></script>
 </body>
 </html>

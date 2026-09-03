@@ -429,25 +429,28 @@ fn the_page_carries_the_token_and_the_headers_that_contain_it() {
     }
 }
 
-/// A build with no wasm bundle still serves, and says so. A blank canvas is
-/// the failure mode that wastes an afternoon.
+/// The page loads its interface from this server and nowhere else, and says so
+/// in a header rather than only in a policy document.
 #[test]
-fn a_build_without_the_ui_says_so_rather_than_showing_nothing() {
+fn the_page_declares_where_it_may_load_from() {
     let s = Serving::start();
-    let (_, _, body) = s.get(&format!("/?mailbox_token={}", s.token), "");
+    let (status, head, body) = s.get(&format!("/?mailbox_token={}", s.token), "");
 
-    // The bundle is an asset like any other, so it needs the page's cookie.
-    let cookie = format!("Cookie: mailbox_token={}\r\n", s.token);
-    let (status, _, _) = s.get("/wasm/mailbox_bg.wasm", &cookie);
+    assert_eq!(status, 200);
+    assert!(head.contains("Content-Security-Policy"), "{head}");
+    assert!(head.contains("default-src 'none'"), "{head}");
+    // Nothing is fetched from anywhere but here — a mail client that phones a
+    // CDN on every page load is a mail client that leaks when you read (§2).
+    assert!(!body.contains("//cdn"), "{body}");
+    assert!(
+        !body.contains("https://"),
+        "the page references an outside origin: {body}"
+    );
 
-    if body.contains("hasWasm: false") {
-        assert_eq!(
-            status, 404,
-            "no bundle, but the page was told there was one"
-        );
-    } else {
-        assert!(body.contains("hasWasm: true"), "{body}");
-        assert_eq!(status, 200, "the page was told there was a bundle");
+    for asset in ["/style.css", "/mailbox.js"] {
+        let (status, head, _) = s.get(asset, &format!("Cookie: mailbox_token={}\r\n", s.token));
+        assert_eq!(status, 200, "{asset} is not served");
+        assert!(head.contains("charset=utf-8"), "{asset}: {head}");
     }
 }
 
