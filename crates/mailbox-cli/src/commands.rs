@@ -1016,7 +1016,7 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
 
     let Some(command) = &args.command else {
         let commands = [
-            "ls", "search", "show", "folders", "accounts", "sync", "status",
+            "ls", "search", "show", "folders", "accounts", "sync", "status", "snooze",
         ];
         if ctx.out.is_structured() {
             ctx.out
@@ -1038,6 +1038,7 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
         "status" => schemars::schema_for!(Reply<Status>),
         "send" | "compose" | "reply" => schemars::schema_for!(Reply<SendResult>),
         "outbox" => schemars::schema_for!(Reply<OutboxList>),
+        "snooze" => schemars::schema_for!(Reply<SnoozeList>),
         "error" => schemars::schema_for!(ErrorResponse),
         other => {
             return Err(Error::not_found("schema for command", other));
@@ -1379,6 +1380,149 @@ fn fixture(ctx: &Ctx<'_>, action: &FixtureAction) -> Result<()> {
                     }
                 }
             }
+            Ok(())
+        }
+    }
+}
+
+/// `snooze` (§7): set a message aside until later.
+///
+/// Local by construction. Nothing is queued for the server and nothing is
+/// pushed, because a snooze is not an IMAP concept — inventing one, as a
+/// keyword or a hidden folder, would put a private decision into a mailbox
+/// shared with every other client the user runs. The cost is that the message
+/// reappears on *this* machine, which is why every listing here names the
+/// device holding the timer rather than implying a sync (§5.4 makes it
+/// portable in M8).
+pub fn snooze(ctx: &Ctx<'_>, args: &crate::cli::SnoozeArgs) -> Result<()> {
+    if args.list {
+        let workspace = ctx.workspace()?;
+        let snoozed = workspace.snoozed()?;
+        return report_snoozed(ctx, &snoozed);
+    }
+
+    if args.args.is_empty() {
+        return Err(Error::usage(
+            "which message? `mailbox snooze <id> 2h`, or `--list` to see what is asleep",
+        ));
+    }
+
+    // `--clear` takes messages and no time; otherwise the last argument is the
+    // time, as `mv`'s last argument is the destination (§6.1).
+    let (ids, until) = if args.clear {
+        (args.args.as_slice(), None)
+    } else {
+        let (last, rest) = args.args.split_last().expect("checked non-empty");
+        if rest.is_empty() {
+            return Err(Error::usage(
+                "snooze until when? `mailbox snooze <id> 2h`, `tomorrow`, or a date",
+            ));
+        }
+        (rest, Some(last.clone()))
+    };
+
+    let refs: Vec<IdRef> = ids.iter().map(|s| IdRef::parse(s)).collect();
+    for r in &refs {
+        ctx.warn_if_positional(r);
+    }
+
+    let Some(until) = until else {
+        ctx.confirm("snooze --clear")?;
+        let mut workspace = ctx.workspace()?;
+        if ctx.global.dry_run {
+            return report_dry_run(ctx, "snooze", &workspace, &refs, None, None);
+        }
+        let woken = workspace.unsnooze(&refs)?;
+        return report_snooze_change(ctx, "woke", &woken, None);
+    };
+
+    let until = mailbox_core::store::snooze::parse_until(&until, &ctx.clock)?;
+    ctx.confirm("snooze")?;
+
+    let mut workspace = ctx.workspace()?;
+    if ctx.global.dry_run {
+        return report_dry_run(ctx, "snooze", &workspace, &refs, None, None);
+    }
+    let ids = workspace.snooze(&refs, until)?;
+    report_snooze_change(ctx, "snoozed", &ids, Some(until))
+}
+
+fn report_snooze_change(
+    ctx: &Ctx<'_>,
+    verb: &str,
+    ids: &[String],
+    until: Option<i64>,
+) -> Result<()> {
+    if ctx.out.is_structured() {
+        let payload = serde_json::json!({
+            "changed": ids.len(),
+            "messages": ids,
+            "until": until.map(mailbox_core::clock::format_rfc3339),
+            "device": mailbox_core::paths::device_name(),
+        });
+        ctx.out.reply("snooze", &payload)?;
+        return Ok(());
+    }
+    if ids.is_empty() {
+        ctx.out.print(ctx.out.dim("nothing changed"));
+        return Ok(());
+    }
+    for id in ids {
+        let when = match until {
+            Some(t) => format!(" until {}", mailbox_core::clock::format_rfc3339(t)),
+            None => String::new(),
+        };
+        ctx.out.print(format!(
+            "{} {} {verb}{when}",
+            ctx.out.paint("✓", GREEN),
+            ctx.out.dim(format::short(id)),
+        ));
+    }
+    if until.is_some() {
+        ctx.out.note(format!(
+            "the timer is on {} — a snoozed message comes back on the device that snoozed it",
+            mailbox_core::paths::device_name()
+        ));
+    }
+    Ok(())
+}
+
+fn report_snoozed(ctx: &Ctx<'_>, snoozed: &[mailbox_api::Snoozed]) -> Result<()> {
+    match ctx.out.mode {
+        crate::output::Mode::Json => {
+            ctx.out.reply(
+                "snooze",
+                &mailbox_api::SnoozeList {
+                    snoozed: snoozed.to_vec(),
+                },
+            )?;
+            Ok(())
+        }
+        crate::output::Mode::Ndjson => {
+            ctx.out.ndjson_list("snooze", snoozed, None)?;
+            Ok(())
+        }
+        crate::output::Mode::Human => {
+            if snoozed.is_empty() {
+                ctx.out.print(ctx.out.dim("nothing is snoozed"));
+                return Ok(());
+            }
+            use crate::table::{Column, Table};
+            let mut table = Table::new(vec![
+                Column::new("id").min(8),
+                Column::new("until").min(20),
+                Column::new("subject").flexible().min(20),
+                Column::new("device").min(8),
+            ]);
+            for s in snoozed {
+                table.push(vec![
+                    ctx.out.dim(format::short(&s.id)),
+                    s.until.clone(),
+                    s.subject.clone(),
+                    ctx.out.dim(&s.device),
+                ]);
+            }
+            maybe_page(ctx.out, &table.render(ctx.out));
             Ok(())
         }
     }

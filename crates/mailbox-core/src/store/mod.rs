@@ -16,6 +16,7 @@ pub mod ops;
 pub mod outbox;
 pub mod read;
 pub mod schema;
+pub mod snooze;
 pub mod state;
 pub mod write;
 

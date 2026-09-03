@@ -46,6 +46,7 @@ pub const IS_VALUES: &[&str] = &[
     "unseen",
     "flagged",
     "unflagged",
+    "snoozed",
     "answered",
     "draft",
     "deleted",
@@ -393,6 +394,10 @@ impl Parser<'_> {
                         name: "spam".into(),
                         want: true,
                     },
+                    // Not a flag: a local row and a deadline (§7). Resolved
+                    // here against the injected clock so the whole query means
+                    // one thing, exactly as `before:` and `after:` are.
+                    "snoozed" => Node::Snoozed(self.clock.now()),
                     other if IS_VALUES.contains(&other) => Node::Flag {
                         name: other.to_string(),
                         want: true,

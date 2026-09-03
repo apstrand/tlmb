@@ -99,6 +99,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Search(args) => commands::search(&ctx, args),
         Command::Flag(args) => commands::flag(&ctx, args),
         Command::Attach(args) => commands::attach(&ctx, args),
+        Command::Snooze(args) => commands::snooze(&ctx, args),
         Command::Send(args) => sending::send(&ctx, args),
         Command::Compose(args) => sending::compose(&ctx, args),
         Command::Reply(args) => sending::reply(&ctx, args),
@@ -141,6 +142,9 @@ fn needs_write(cmd: &Command) -> bool {
         | Command::Reply(_) => true,
         // The TUI writes: flags, moves, and a sync it starts itself.
         Command::Tui => true,
+        // Setting a message aside is a local write; listing what is asleep is
+        // not.
+        Command::Snooze(args) => !args.list,
         // Receiving a pairing rewrites the config, and may create a store.
         Command::Pair(_) => true,
         // `show` and `attach` fetch a body they do not have (§5.1), which is a

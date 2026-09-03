@@ -39,6 +39,7 @@ than retrofitted.
 | Desktop notifications | done (§11, M3) |
 | TUI: mutt keys, incremental search, `keys.toml` | done (§7, M3) |
 | Pairing: QR, LAN, encrypted export file | done (§8, M4) |
+| Snooze, local-only (§7) | done (M5) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |

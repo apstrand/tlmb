@@ -291,6 +291,56 @@ impl Workspace {
         Ok(out)
     }
 
+    /// Sets messages aside until `until`, routing each to its account (§7).
+    pub fn snooze(&mut self, refs: &[IdRef], until: i64) -> Result<Vec<String>> {
+        self.route(refs, |session, ids| session.snooze(ids, until))
+    }
+
+    /// Wakes messages now. Returns only the ids that were actually asleep.
+    pub fn unsnooze(&mut self, refs: &[IdRef]) -> Result<Vec<String>> {
+        self.route(refs, |session, ids| session.unsnooze(ids))
+    }
+
+    /// Everything still asleep, across accounts, soonest first.
+    pub fn snoozed(&self) -> Result<Vec<mailbox_api::Snoozed>> {
+        let mut out = Vec::new();
+        for session in &self.accounts {
+            for s in session.snoozed()? {
+                out.push(mailbox_api::Snoozed {
+                    id: s.message_id,
+                    account: session.account_id.clone(),
+                    subject: s.subject,
+                    until: crate::clock::format_rfc3339(s.until),
+                    device: s.device,
+                });
+            }
+        }
+        out.sort_by(|a, b| a.until.cmp(&b.until).then(a.id.cmp(&b.id)));
+        Ok(out)
+    }
+
+    /// [`Workspace::write_each`] for writes that report ids rather than
+    /// [`Written`]s.
+    fn route(
+        &mut self,
+        refs: &[IdRef],
+        mut apply: impl FnMut(&mut Session, &[IdRef]) -> Result<Vec<String>>,
+    ) -> Result<Vec<String>> {
+        let mut by_account: Vec<Vec<IdRef>> = vec![Vec::new(); self.accounts.len()];
+        for r in refs {
+            let (i, id) = self.locate(r)?;
+            by_account[i].push(IdRef::Id(id));
+        }
+        let mut out = Vec::new();
+        for (i, ids) in by_account.iter().enumerate() {
+            if ids.is_empty() {
+                continue;
+            }
+            out.extend(apply(&mut self.accounts[i], ids)?);
+        }
+        Ok(out)
+    }
+
     pub fn folders(&self) -> Result<FolderList> {
         let mut folders = Vec::new();
         for session in &self.accounts {

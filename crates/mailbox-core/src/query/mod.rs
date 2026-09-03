@@ -60,6 +60,13 @@ pub enum Node {
     /// `has:attachment`.
     HasAttachment,
 
+    /// `is:snoozed` — set aside until an instant that has not arrived yet.
+    ///
+    /// Carries the "now" it was parsed against, for the same reason
+    /// [`Node::Date`] carries an absolute instant: one parse means one answer,
+    /// whoever evaluates it and however long the evaluation takes.
+    Snoozed(Timestamp),
+
     /// `in:` — folder path, its last segment, or a special-use name.
     Folder(String),
     /// `tag:` — a local tag (§5.4).

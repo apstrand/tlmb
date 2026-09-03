@@ -49,18 +49,20 @@ pub enum Prompt {
     Tag(String),
     /// `|` — a command to pipe the raw message to.
     Pipe(String),
+    /// `z` — when the message should come back (§7).
+    Snooze(String),
 }
 
 impl Prompt {
     pub fn text(&self) -> &str {
         match self {
-            Prompt::Search(t) | Prompt::Tag(t) | Prompt::Pipe(t) => t,
+            Prompt::Search(t) | Prompt::Tag(t) | Prompt::Pipe(t) | Prompt::Snooze(t) => t,
         }
     }
 
     fn text_mut(&mut self) -> &mut String {
         match self {
-            Prompt::Search(t) | Prompt::Tag(t) | Prompt::Pipe(t) => t,
+            Prompt::Search(t) | Prompt::Tag(t) | Prompt::Pipe(t) | Prompt::Snooze(t) => t,
         }
     }
 
@@ -69,6 +71,7 @@ impl Prompt {
             Prompt::Search(_) => "/",
             Prompt::Tag(_) => "tag:",
             Prompt::Pipe(_) => "|",
+            Prompt::Snooze(_) => "snooze until:",
         }
     }
 }
@@ -100,6 +103,19 @@ pub enum Effect {
     /// Hand a URL to the desktop's browser. Never automatic: this is only ever
     /// the result of someone selecting a link they can see (§9).
     OpenUrl(String),
+    /// A store write, named rather than performed: the shell owns the session,
+    /// as it does for the flag and move keys.
+    Write(Write),
+}
+
+/// A write the interface asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Write {
+    /// `t` — add a local tag (§5.4).
+    Tag { id: String, tag: String },
+    /// `z` — set aside until a time the shell parses, since the grammar for it
+    /// lives in the core and the answer depends on the injected clock (§7).
+    Snooze { id: String, until: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,11 +267,22 @@ impl App {
             // The list is already filtered — searching happens as you type —
             // so Enter only dismisses the prompt.
             Prompt::Search(_) => Effect::None,
-            Prompt::Tag(tag) if !tag.trim().is_empty() => {
-                self.status = format!("tagged {}", tag.trim());
-                Effect::None
-            }
+            Prompt::Tag(tag) if !tag.trim().is_empty() => match self.current_id() {
+                Some(id) => Effect::Write(Write::Tag {
+                    id,
+                    tag: tag.trim().to_string(),
+                }),
+                None => Effect::None,
+            },
             Prompt::Tag(_) => Effect::None,
+            Prompt::Snooze(until) if !until.trim().is_empty() => match self.target_id() {
+                Some(id) => Effect::Write(Write::Snooze {
+                    id,
+                    until: until.trim().to_string(),
+                }),
+                None => Effect::None,
+            },
+            Prompt::Snooze(_) => Effect::None,
             Prompt::Pipe(command) if !command.trim().is_empty() => match self.current_id() {
                 Some(id) => Effect::Suspend(SuspendedTask::Pipe {
                     id,
@@ -394,6 +421,12 @@ impl App {
                 }
                 Effect::None
             }
+            Action::Snooze => {
+                if self.current().is_some() {
+                    self.prompt = Some(Prompt::Snooze(String::new()));
+                }
+                Effect::None
+            }
 
             Action::Sync => Effect::StartSync,
 
@@ -471,11 +504,15 @@ impl App {
     /// The opened message when one is open, otherwise the selection — so `d`
     /// deletes what is on screen rather than what the cursor happens to be on.
     pub fn target(&self) -> Option<IdRef> {
-        let id = match (&self.open, self.view) {
-            (Some(detail), View::Message) => detail.summary.id.clone(),
-            _ => self.current_id()?,
-        };
-        Some(IdRef::Id(id))
+        self.target_id().map(IdRef::Id)
+    }
+
+    /// The same choice as [`App::target`], as a plain id.
+    pub fn target_id(&self) -> Option<String> {
+        match (&self.open, self.view) {
+            (Some(detail), View::Message) => Some(detail.summary.id.clone()),
+            _ => self.current_id(),
+        }
     }
 }
 

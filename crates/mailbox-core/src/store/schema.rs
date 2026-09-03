@@ -13,7 +13,7 @@ use crate::trace::{event, Tracer};
 /// Bumped whenever [`MIGRATIONS`] grows. A store from the future is refused
 /// rather than opened read-only: a newer version may have written columns this
 /// build would silently drop on the next write.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Each entry is applied in order inside one transaction. Migrations are
 /// append-only — editing an existing one changes what an already-migrated store
@@ -333,6 +333,28 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE messages ADD COLUMN notified INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX messages_unnotified ON messages(notified, date DESC) WHERE notified = 0;
 
+    "#,
+    // v6 — M5: snooze, in the local-only form §7 describes.
+    r#"
+    -- Local state, and it stays local until the §5.4 state folder lands in M8.
+    -- Nothing here is sent to the server: a snooze is a timer plus a row, so a
+    -- snoozed message reappears on the device that snoozed it and nowhere else.
+    -- That is a real limitation rather than an implementation gap, which is why
+    -- `device` is stored: every surface that shows a snooze names the machine
+    -- holding it, instead of implying it is synced.
+    CREATE TABLE snoozed (
+        message_rowid INTEGER PRIMARY KEY REFERENCES messages(rowid) ON DELETE CASCADE,
+        -- Unix seconds. The message returns to the inbox at or after this.
+        until         INTEGER NOT NULL,
+        -- Which machine will wake it. Shown, never used for a decision.
+        device        TEXT    NOT NULL,
+        created       INTEGER NOT NULL
+    ) WITHOUT ROWID;
+
+    -- The default listing asks "which of these are asleep right now" on every
+    -- paint, so the due check is an index seek rather than a scan of the
+    -- snooze table.
+    CREATE INDEX snoozed_due ON snoozed(until);
     "#,
 ];
 

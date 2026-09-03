@@ -328,6 +328,11 @@ fn apply_effect(
             };
             Ok(false)
         }
+        Effect::Write(write) => {
+            app.status = perform_write(opts, tracer, clock, &write)?;
+            app.dirty = true;
+            Ok(false)
+        }
         Effect::Suspend(task) => {
             run_suspended(app, opts, tracer, clock, task)?;
             app.dirty = true;
@@ -451,6 +456,55 @@ fn suspended_task(
             } else {
                 "forward cancelled".into()
             })
+        }
+    }
+}
+
+/// Performs a write the state machine asked for.
+///
+/// The session is opened here rather than held, for the same reason the flag
+/// and move keys open one: the interface's own handle is read-only (§4.1), and
+/// a write that borrowed it would make every repaint contend with a sync.
+fn perform_write(
+    opts: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+    write: &crate::app::Write,
+) -> Result<String> {
+    use crate::app::Write;
+
+    let mut writable = opts.clone();
+    writable.read_only = false;
+    let mut session = Session::open(&writable, tracer.clone(), clock.clone())?;
+    let target = [IdRef::Id(match write {
+        Write::Tag { id, .. } | Write::Snooze { id, .. } => id.clone(),
+    })];
+
+    match write {
+        Write::Tag { tag, .. } => {
+            let spec = mailbox_core::session::FlagSpec {
+                add_tags: vec![tag.to_ascii_lowercase()],
+                ..Default::default()
+            };
+            session.flag(&target, &spec)?;
+            Ok(format!("tagged {tag}"))
+        }
+        Write::Snooze { until, .. } => {
+            // The time is parsed here because the grammar lives in the core and
+            // its answer depends on the injected clock. A time that does not
+            // parse is the user's typo, not a failure: it goes to the status
+            // line and the message stays where it is.
+            match mailbox_core::store::snooze::parse_until(until, clock) {
+                Ok(when) => {
+                    session.snooze(&target, when)?;
+                    Ok(format!(
+                        "snoozed until {} — on {}",
+                        mailbox_core::clock::format_rfc3339(when),
+                        mailbox_core::paths::device_name()
+                    ))
+                }
+                Err(e) => Ok(format!("{e}")),
+            }
         }
     }
 }

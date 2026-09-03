@@ -512,3 +512,53 @@ fn leaving_the_picker_returns_to_the_message() {
     assert_eq!(app.view, View::Message);
     assert!(app.open.is_some(), "the message must still be open");
 }
+
+// ---- tagging and snoozing (§7) ----
+
+/// The interface used to say "tagged invoices" and write nothing. A status line
+/// that reports a write which did not happen is worse than no feature.
+#[test]
+fn tagging_asks_for_the_write_it_reports() {
+    use mailbox_tui::app::Write;
+    let mut app = app_with(3);
+
+    app.handle(Action::Tag);
+    for c in "invoices".chars() {
+        app.type_into_prompt(c);
+    }
+    assert_eq!(
+        app.submit_prompt(),
+        Effect::Write(Write::Tag {
+            id: "id00".into(),
+            tag: "invoices".into()
+        })
+    );
+}
+
+#[test]
+fn snoozing_asks_for_the_write_with_what_was_typed() {
+    use mailbox_tui::app::Write;
+    let mut app = app_with(3);
+
+    app.handle(Action::Snooze);
+    assert!(matches!(app.prompt, Some(Prompt::Snooze(_))));
+    for c in "2h".chars() {
+        app.type_into_prompt(c);
+    }
+    assert_eq!(
+        app.submit_prompt(),
+        Effect::Write(Write::Snooze {
+            id: "id00".into(),
+            until: "2h".into()
+        }),
+        "the time is passed through as text: parsing it needs the clock, which lives in the core"
+    );
+}
+
+/// An empty prompt is a cancelled one. Snoozing until nothing is not a write.
+#[test]
+fn an_empty_snooze_prompt_writes_nothing() {
+    let mut app = app_with(3);
+    app.handle(Action::Snooze);
+    assert_eq!(app.submit_prompt(), Effect::None);
+}

@@ -48,6 +48,8 @@ pub enum Action {
     Pipe,
     /// List the open message's links, to follow one.
     Links,
+    /// Set the message aside until later (§7).
+    Snooze,
     Sync,
     Help,
     /// Scroll a message body without moving the selection.
@@ -82,6 +84,7 @@ impl Action {
             Action::Compose => "compose",
             Action::Pipe => "pipe to a command",
             Action::Links => "follow a link",
+            Action::Snooze => "snooze until later",
             Action::Sync => "sync now",
             Action::Help => "help",
             Action::ScrollDown => "scroll down",
@@ -136,6 +139,7 @@ impl Keymap {
             ("m", Action::Compose),
             ("|", Action::Pipe),
             ("o", Action::Links),
+            ("z", Action::Snooze),
             ("@", Action::Sync),
             ("?", Action::Help),
             ("C-d", Action::ScrollDown),

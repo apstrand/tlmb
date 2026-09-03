@@ -113,6 +113,29 @@ pub struct OutboxList {
     pub messages: Vec<OutboxItem>,
 }
 
+/// `snooze` payload (§7).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SnoozeList {
+    pub snoozed: Vec<Snoozed>,
+}
+
+/// One message set aside, and where its timer lives.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Snoozed {
+    pub id: String,
+    pub account: String,
+    pub subject: String,
+    /// RFC3339 UTC. When it returns to the inbox.
+    pub until: String,
+    /// The machine holding the timer.
+    ///
+    /// Reported because a snooze is local until the §5.4 state folder lands in
+    /// M8: the message reappears on *this* device, whenever it is next
+    /// running, and a client that did not say so would be implying a sync that
+    /// is not happening.
+    pub device: String,
+}
+
 /// `sync` payload.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SyncResult {

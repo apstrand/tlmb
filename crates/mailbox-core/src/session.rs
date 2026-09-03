@@ -146,8 +146,12 @@ impl Session {
     /// arrives with M2, and the shape of this function is what it will extend.
     pub fn ls(&self, query_str: Option<&str>, mut opts: ListOptions) -> Result<MessageList> {
         let node = match query_str {
+            // An explicit query is answered as asked, snoozed mail included.
+            // Only the *default* listing hides sleeping messages: that is what
+            // makes `ls is:snoozed` mean something, and it keeps snooze from
+            // becoming a filter that quietly removes mail from every search.
             Some(q) if !q.trim().is_empty() => self.parse_query(q)?,
-            _ => self.parse_query("in:inbox")?,
+            _ => self.parse_query("in:inbox AND NOT is:snoozed")?,
         };
         opts.identities = self.identities();
         let listing = self.store.search(&node, &opts)?;
@@ -396,6 +400,38 @@ impl Session {
             out.push(written);
         }
         Ok(out)
+    }
+
+    /// Sets messages aside until `until` (§7).
+    ///
+    /// Purely local: nothing is queued for the server, because a snooze is not
+    /// an IMAP concept and inventing one would put a private decision into a
+    /// mailbox shared with every other client the user runs.
+    pub fn snooze(&mut self, refs: &[IdRef], until: i64) -> Result<Vec<String>> {
+        let ids = self.resolve_all(refs)?;
+        let device = crate::paths::device_name();
+        let now = self.clock.now();
+        for id in &ids {
+            self.store.snooze(id, until, &device, now)?;
+        }
+        Ok(ids)
+    }
+
+    /// Wakes messages now. Returns the ids that were actually asleep.
+    pub fn unsnooze(&mut self, refs: &[IdRef]) -> Result<Vec<String>> {
+        let ids = self.resolve_all(refs)?;
+        let mut woken = Vec::new();
+        for id in ids {
+            if self.store.unsnooze(&id)? {
+                woken.push(id);
+            }
+        }
+        Ok(woken)
+    }
+
+    /// Everything still asleep in this account, soonest first.
+    pub fn snoozed(&self) -> Result<Vec<crate::store::snooze::Snooze>> {
+        self.store.snoozed(self.clock.now())
     }
 
     /// `mv` (§6.1). `cp`, `rm`, `archive`, and `spam` are sugar over this.

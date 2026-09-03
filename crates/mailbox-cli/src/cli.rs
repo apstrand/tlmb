@@ -136,6 +136,9 @@ pub enum Command {
     /// List or extract a message's attachments.
     Attach(AttachArgs),
 
+    /// Set a message aside until later (§7).
+    Snooze(SnoozeArgs),
+
     /// Move messages to a folder.
     #[command(visible_alias = "move")]
     Mv(MoveArgs),
@@ -232,6 +235,29 @@ pub struct FlagArgs {
     /// come before the subcommand: `mailbox --json flag 1 +seen`.
     #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
     pub args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SnoozeArgs {
+    /// Messages, then when they should come back.
+    ///
+    /// The last argument is the time — `2h`, `tomorrow`, `+3d`, `2026-09-10` —
+    /// and everything before it is a message: an id, a prefix, `^`, `@`, or an
+    /// index into the last listing (§5.2). The same shape as `mv`, where the
+    /// last argument is the destination (§6.1).
+    ///
+    /// Relative forms resolve against the clock at the moment you run this, so
+    /// `2h` and `+2h` mean the same thing. Bare dates are UTC midnight, the
+    /// same meaning `before:` and `after:` give them (§6.2).
+    pub args: Vec<String>,
+
+    /// Show what is asleep and when it comes back.
+    #[arg(long, short = 'l')]
+    pub list: bool,
+
+    /// Wake the named messages now.
+    #[arg(long)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Args)]

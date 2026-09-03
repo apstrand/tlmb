@@ -109,6 +109,17 @@ impl Compiler<'_> {
 
             Node::HasAttachment => "(m.has_attachment = 1)".to_string(),
 
+            // Still asleep: snoozed, and the wake time has not passed. A row
+            // whose `until` is in the past is not snoozed any more — the
+            // message is back — and no sweeper has to run for that to be true.
+            Node::Snoozed(now) => {
+                let p = self.push(*now);
+                format!(
+                    "(EXISTS (SELECT 1 FROM snoozed s WHERE s.message_rowid = m.rowid \
+                      AND s.until > {p}))"
+                )
+            }
+
             // A folder matches by full path, by leaf name, or by special-use —
             // `in:inbox` should work whether the server calls it `INBOX` or
             // `INBOX.stuff`'s parent, and `in:archive` should find whatever the

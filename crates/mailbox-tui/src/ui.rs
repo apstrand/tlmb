@@ -305,6 +305,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, keymap: &Keymap) {
         Action::Forward,
         Action::Compose,
         Action::Links,
+        Action::Snooze,
         Action::Pipe,
         Action::Sync,
         Action::Help,
