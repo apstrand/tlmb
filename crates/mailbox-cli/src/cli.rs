@@ -139,6 +139,9 @@ pub enum Command {
     /// Set a message aside until later (§7).
     Snooze(SnoozeArgs),
 
+    /// Start the web interface (§3).
+    Serve(ServeArgs),
+
     /// Move messages to a folder.
     #[command(visible_alias = "move")]
     Mv(MoveArgs),
@@ -235,6 +238,43 @@ pub struct FlagArgs {
     /// come before the subcommand: `mailbox --json flag 1 +seen`.
     #[arg(required = true, num_args = 1.., allow_hyphen_values = true)]
     pub args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ServeArgs {
+    /// Address to listen on. Loopback by default (§3).
+    ///
+    /// `0.0.0.0` makes it reachable from the rest of the network, which is what
+    /// the printed QR code is for — and is refused without a token.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub bind: std::net::IpAddr,
+
+    /// Port. Zero, the default, takes whatever is free.
+    #[arg(long, short = 'p', default_value_t = 0)]
+    pub port: u16,
+
+    /// Use this token instead of a fresh one.
+    ///
+    /// For a bookmark that should keep working across restarts. It is as
+    /// secret as a password, so it belongs in an environment variable or a
+    /// keychain rather than in shell history.
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Serve without a token.
+    ///
+    /// Only for loopback, and only when you are the only user of the machine:
+    /// every process running as any user could otherwise read your mail.
+    #[arg(long)]
+    pub no_token: bool,
+
+    /// Print the URL and exit without serving.
+    #[arg(long)]
+    pub dry_run_url: bool,
+
+    /// Stop after this many connections. For tests.
+    #[arg(long, hide = true)]
+    pub max_requests: Option<usize>,
 }
 
 #[derive(Debug, Args)]

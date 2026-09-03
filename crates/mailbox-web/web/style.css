@@ -1,0 +1,31 @@
+/* The page is a frame around a canvas. Everything visible is drawn by the
+   shared UI (§3), so there is almost nothing to style here. */
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #1b1b1b;
+    color: #ddd;
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+canvas#mailbox {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+#fallback {
+    margin: 4rem auto;
+    max-width: 34rem;
+    padding: 0 1rem;
+}
+
+#fallback[hidden] { display: none; }
+
+code {
+    background: #333;
+    padding: .1em .3em;
+    border-radius: 3px;
+}

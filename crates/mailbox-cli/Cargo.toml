@@ -22,6 +22,7 @@ terminal_size = "0.4.4"
 time = { version = "0.3.55", features = ["formatting", "parsing", "macros", "local-offset"] }
 base64 = "0.23.1"
 mailbox-tui = { version = "0.1.0", path = "../mailbox-tui" }
+mailbox-web = { version = "0.1.0", path = "../mailbox-web" }
 qrcode = { version = "0.14.1", default-features = false }
 toml = "1.1.5"
 

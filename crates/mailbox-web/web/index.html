@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>mailbox</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<!--
+  The token is written into the page rather than left in the address bar or
+  read from the cookie: the cookie is HttpOnly so the page cannot read it, and
+  the API wants the token in a header — which is what stops another site from
+  making the browser do the asking (see server.rs).
+-->
+<script>
+  window.MAILBOX = { token: "{{TOKEN}}", hasWasm: {{HAS_WASM}} };
+</script>
+<canvas id="mailbox"></canvas>
+<div id="fallback" hidden>
+  <h1>mailbox</h1>
+  <p id="fallback-reason"></p>
+</div>
+<script type="module" src="/mailbox.js"></script>
+</body>
+</html>

@@ -40,12 +40,36 @@ than retrofitted.
 | TUI: mutt keys, incremental search, `keys.toml` | done (§7, M3) |
 | Pairing: QR, LAN, encrypted export file | done (§8, M4) |
 | Snooze, local-only (§7) | done (M5) |
+| `serve`: the local web API, token-gated | done (§3, M5) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
 
 ### In progress: M2
+
+### The web interface
+
+```sh
+mailbox serve
+#   http://127.0.0.1:38895/?mailbox_token=8678…
+```
+
+Loopback on an ephemeral port, behind a token, holding nothing across
+restarts. `--bind 0.0.0.0` makes it reachable from the rest of the network and
+prints a QR code so a phone can open it without anyone typing a token by hand;
+that is refused without a token, since a stranger on the same Wi-Fi is exactly
+who the token is for.
+
+The token authenticates two things differently on purpose. The page gets a
+cookie — `HttpOnly`, `SameSite=Strict` — so a reload works without the token in
+the address bar. The API refuses that cookie and wants `X-Mailbox-Token`
+instead, which another origin cannot send without a preflight, and preflights
+are refused. That is what closes the cross-site request forgery a
+cookie-authenticated local API otherwise has wide open.
+
+`/api` answers with the §6.4 contract — the same JSON `--json` prints — and
+there is deliberately no route that runs a command.
 
 ### Moving to another device
 

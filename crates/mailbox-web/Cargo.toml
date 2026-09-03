@@ -1,0 +1,13 @@
+[package]
+name = "mailbox-web"
+description = "The local web interface (§3): an HTTP server for the shared UI and the §6.4 contract."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mailbox-api.workspace = true
+mailbox-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true

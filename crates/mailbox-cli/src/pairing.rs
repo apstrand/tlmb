@@ -80,7 +80,7 @@ fn receive(ctx: &Ctx<'_>, args: &PairArgs) -> Result<()> {
         )?;
     } else {
         if !args.no_qr {
-            ctx.out.print(qr(&link));
+            ctx.out.print(crate::qr::render(&link));
         }
         ctx.out.print(format!(
             "On the other device run:\n\n  {} {}\n",
@@ -486,44 +486,4 @@ fn store_in_keychain(account_id: &str, secret: &str) -> bool {
         }
     }
     child.wait().map(|s| s.success()).unwrap_or(false)
-}
-
-/// Renders a link as a QR block (§8, transport 1).
-///
-/// Two terminal rows per QR row, using half-block characters, so the code stays
-/// square and fits a normal window — a QR drawn one row per row is twice as
-/// tall as it is wide and most phones will not read it.
-fn qr(text: &str) -> String {
-    use qrcode::{EcLevel, QrCode};
-
-    let Ok(code) = QrCode::with_error_correction_level(text, EcLevel::L) else {
-        return String::new();
-    };
-    let width = code.width();
-    let modules = code.to_colors();
-    let dark = |x: usize, y: usize| -> bool {
-        y < width && x < width && modules[y * width + x] == qrcode::Color::Dark
-    };
-
-    // A quiet zone is required by the specification; without it many readers
-    // simply fail.
-    const QUIET: usize = 2;
-    let span = width + QUIET * 2;
-    let mut out = String::new();
-
-    for row in (0..span).step_by(2) {
-        for col in 0..span {
-            let x = col.wrapping_sub(QUIET);
-            let upper = row >= QUIET && dark(x, row - QUIET);
-            let lower = row + 1 >= QUIET && dark(x, row + 1 - QUIET);
-            out.push(match (upper, lower) {
-                (true, true) => '█',
-                (true, false) => '▀',
-                (false, true) => '▄',
-                (false, false) => ' ',
-            });
-        }
-        out.push('\n');
-    }
-    out
 }

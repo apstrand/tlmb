@@ -1527,3 +1527,67 @@ fn report_snoozed(ctx: &Ctx<'_>, snoozed: &[mailbox_api::Snoozed]) -> Result<()>
         }
     }
 }
+
+/// `serve` (§3): the web interface, on loopback, behind a one-time token.
+pub fn serve(ctx: &Ctx<'_>, args: &crate::cli::ServeArgs) -> Result<()> {
+    use mailbox_web::server::{make_token, Options, Server};
+
+    if args.no_token && args.token.is_some() {
+        return Err(Error::usage(
+            "`--no-token` and `--token` say opposite things",
+        ));
+    }
+    let token = if args.no_token {
+        None
+    } else {
+        Some(match &args.token {
+            Some(t) if t.trim().is_empty() => {
+                return Err(Error::usage("an empty `--token` is not a token"))
+            }
+            Some(t) => t.clone(),
+            None => make_token(&mailbox_core::Rng::from_env()),
+        })
+    };
+
+    let server = Server::bind(
+        Options {
+            bind: args.bind,
+            port: args.port,
+            token,
+            max_requests: args.max_requests,
+        },
+        ctx.opts.clone(),
+        ctx.tracer.clone(),
+        ctx.clock.clone(),
+    )?;
+    let url = server.url();
+
+    if ctx.out.is_structured() {
+        ctx.out.reply(
+            "serve",
+            &serde_json::json!({
+                "url": url,
+                "address": server.address().map(|a| a.to_string()).unwrap_or_default(),
+            }),
+        )?;
+    } else {
+        // The QR is for the phone case §3 names: a device that cannot copy and
+        // paste from this terminal, and a token nobody should be typing.
+        if !args.bind.is_loopback() {
+            ctx.out.print(crate::qr::render(&url));
+        }
+        ctx.out.print(format!("  {url}"));
+        ctx.out.print(
+            ctx.out
+                .dim("  the token is in that link — anything holding it can read this mail"),
+        );
+        if !args.dry_run_url {
+            ctx.out.print(ctx.out.dim("  Ctrl-C to stop"));
+        }
+    }
+
+    if args.dry_run_url {
+        return Ok(());
+    }
+    server.run()
+}

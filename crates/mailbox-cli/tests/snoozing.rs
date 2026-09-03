@@ -240,8 +240,10 @@ fn nothing_about_a_snooze_is_queued_for_the_server() {
     cli.at("2026-09-03T10:00:00Z", &["snooze", &id, "2h"]);
 
     let status = cli.at("2026-09-03T10:00:00Z", &["--json", "status"]).json();
-    let pending = status["queue"]["pending"].as_u64().unwrap_or(0);
-    assert_eq!(pending, 0, "a snooze queued an operation: {status:#}");
+    let queued = status["accounts"][0]["queued_ops"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("status has no queued_ops: {status:#}"));
+    assert_eq!(queued, 0, "a snooze queued an operation: {status:#}");
 
     // And the flags are untouched: this is not a `\Seen` in disguise either.
     let shown = cli

@@ -993,6 +993,7 @@ dependencies = [
  "mailbox-core",
  "mailbox-l3",
  "mailbox-tui",
+ "mailbox-web",
  "qrcode",
  "schemars",
  "serde",
@@ -1047,6 +1048,16 @@ dependencies = [
  "time",
  "toml 0.9.12+spec-1.1.0",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "mailbox-web"
+version = "0.1.0"
+dependencies = [
+ "mailbox-api",
+ "mailbox-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

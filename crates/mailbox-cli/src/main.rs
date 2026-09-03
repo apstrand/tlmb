@@ -13,6 +13,7 @@ mod commands;
 mod format;
 mod output;
 mod pairing;
+mod qr;
 mod sending;
 mod table;
 
@@ -100,6 +101,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Flag(args) => commands::flag(&ctx, args),
         Command::Attach(args) => commands::attach(&ctx, args),
         Command::Snooze(args) => commands::snooze(&ctx, args),
+        Command::Serve(args) => commands::serve(&ctx, args),
         Command::Send(args) => sending::send(&ctx, args),
         Command::Compose(args) => sending::compose(&ctx, args),
         Command::Reply(args) => sending::reply(&ctx, args),
@@ -145,6 +147,9 @@ fn needs_write(cmd: &Command) -> bool {
         // Setting a message aside is a local write; listing what is asleep is
         // not.
         Command::Snooze(args) => !args.list,
+        // The server reads; each write it performs opens its own session
+        // (§4.1), so the handle it holds stays read-only.
+        Command::Serve(_) => false,
         // Receiving a pairing rewrites the config, and may create a store.
         Command::Pair(_) => true,
         // `show` and `attach` fetch a body they do not have (§5.1), which is a
