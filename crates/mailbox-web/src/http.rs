@@ -118,6 +118,12 @@ pub struct Response {
     /// Extra headers, in order. `Set-Cookie` may appear more than once, so
     /// this is a list rather than a map.
     pub extra: Vec<(String, String)>,
+    /// Whether this response may be put in a frame.
+    ///
+    /// False everywhere but the one route whose whole purpose is to be framed
+    /// — the message body — and that one names its permitted ancestors in its
+    /// own policy instead.
+    pub frameable: bool,
 }
 
 impl Response {
@@ -127,6 +133,7 @@ impl Response {
             content_type: content_type.to_string(),
             body,
             extra: Vec::new(),
+            frameable: false,
         }
     }
 
@@ -148,6 +155,12 @@ impl Response {
         self
     }
 
+    /// Allows this response to be framed. See [`Response::frameable`].
+    pub fn framed(mut self) -> Response {
+        self.frameable = true;
+        self
+    }
+
     pub fn write(&self, out: &mut impl Write) -> std::io::Result<()> {
         write!(
             out,
@@ -166,10 +179,12 @@ impl Response {
         write!(
             out,
             "X-Content-Type-Options: nosniff\r\n\
-             X-Frame-Options: DENY\r\n\
              Referrer-Policy: no-referrer\r\n\
              Cache-Control: no-store\r\n"
         )?;
+        if !self.frameable {
+            write!(out, "X-Frame-Options: DENY\r\n")?;
+        }
         for (name, value) in &self.extra {
             write!(out, "{name}: {value}\r\n")?;
         }

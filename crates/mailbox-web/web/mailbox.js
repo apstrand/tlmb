@@ -254,61 +254,28 @@ function bodyFrame(message) {
     const frame = document.createElement("iframe");
     frame.className = "body";
     frame.setAttribute("title", "Message body");
-    // No scripts, no forms, no same-origin, and a unique origin: whatever the
-    // sanitizer missed cannot reach the page around it, the token in it, or
-    // anywhere else (§9). Popups are allowed only so that a link the reader
-    // clicks can open — the sanitizer gives every anchor `target="_blank"`,
-    // and without this the frame swallows the click. Nothing in the frame can
-    // open one by itself, because nothing in the frame can run.
+    // No scripts, no forms, no same-origin: whatever the sanitizer missed
+    // cannot reach the page around it, the token in it, or anywhere else (§9).
+    // Popups are allowed only so a link the reader clicks can open — the
+    // sanitizer gives every anchor `target="_blank"`, and without this the
+    // frame swallows the click. Nothing in the frame can open one by itself,
+    // because nothing in the frame can run.
     frame.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
     frame.setAttribute("referrerpolicy", "no-referrer");
-    frame.srcdoc = document_for(message);
+    // A real URL rather than `srcdoc`. A `srcdoc` frame inherits this page's
+    // content policy, so the page's `img-src` would decide whether a message's
+    // images may load — and the reader saying "load images" would be quietly
+    // overruled. Given its own URL the frame gets exactly the policy the server
+    // sends with it.
+    frame.src = bodyUrl(message, imagesAllowedFor(message));
     return frame;
 }
 
-function document_for(message) {
-    const content = message.body?.content
-        ?? "<p><em>The body has not been downloaded yet.</em></p>";
-    const allow = imagesAllowedFor(message);
-
-    // Remote images are disarmed by the sanitizer into `data-blocked-src`.
-    // Loading them is the reader's decision, per sender and remembered (§9).
-    // A blocked image keeps its place with a placeholder rather than the
-    // browser's broken-image icon, which says "this message is damaged" when
-    // what happened is that we declined to fetch something.
-    const body = allow
-        ? content.replaceAll("data-blocked-src=", "src=")
-        : content.replaceAll("<img ", `<img src="${PLACEHOLDER}" `);
-    const images = allow ? "img-src https: http: data:;" : "img-src data:;";
-
-    return `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; ${images} style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-<meta name="referrer" content="no-referrer">
-<style>
-  :root { color-scheme: light dark; }
-  body { margin: 1rem 1.1rem; font: 14px/1.6 -apple-system, BlinkMacSystemFont,
-         "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-         overflow-wrap: anywhere; }
-  img, table { max-width: 100%; }
-  img[data-blocked-src] { opacity: .6; }
-  blockquote { margin: .6em 0 .6em .4em; padding-left: .8em;
-               border-left: 2px solid currentColor; opacity: .65; }
-  pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, SFMono-Regular,
-        Menlo, Consolas, monospace; }
-  a { color: #0a66d0; }
-  @media (prefers-color-scheme: dark) { a { color: #64a6f5; } }
-</style></head><body>${body}</body></html>`;
+function bodyUrl(message, images) {
+    const params = new URLSearchParams({ id: message.id });
+    if (images) params.set("images", "1");
+    return `/body?${params}`;
 }
-
-/// A grey rectangle, inline, so nothing is fetched to draw it.
-const PLACEHOLDER =
-    "data:image/svg+xml;charset=utf-8," +
-    encodeURIComponent(
-        '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="32">' +
-        '<rect width="48" height="32" rx="3" fill="none" stroke="#9a9aa0" ' +
-        'stroke-dasharray="3 2"/></svg>',
-    );
 
 function hasRemoteContent(html) {
     return html.includes("data-blocked-src=");
@@ -331,38 +298,31 @@ function imagesAllowedFor(message) {
 function remoteNotice(message) {
     const notice = document.createElement("div");
     notice.className = "notice";
-    notice.append(
-        span("text", "Images in this message are on someone else’s server. Loading them tells them you read it."),
-    );
+    notice.append(span(
+        "text",
+        "Images in this message are on someone else\u2019s server. " +
+        "Loading them tells them you read it.",
+    ));
+
+    const show = () => {
+        notice.remove();
+        const frame = readerEl.querySelector("iframe.body");
+        if (frame) frame.src = bodyUrl(message, true);
+    };
 
     const once = document.createElement("button");
     once.textContent = "Load images";
-    once.addEventListener("click", () => {
-        notice.remove();
-        readerEl.querySelector("iframe.body")?.replaceWith(
-            bodyFrameAllowing(message),
-        );
-    });
+    once.addEventListener("click", show);
 
     const always = document.createElement("button");
     always.textContent = "Always for this sender";
     always.addEventListener("click", () => {
         try { localStorage.setItem(senderKey(message), "yes"); } catch { /* fine */ }
-        notice.remove();
-        readerEl.querySelector("iframe.body")?.replaceWith(bodyFrame(message));
+        show();
     });
 
     notice.append(once, always);
     return notice;
-}
-
-function bodyFrameAllowing(message) {
-    const copy = structuredClone(message);
-    copy.__allow = true;
-    const frame = bodyFrame(message);
-    frame.srcdoc = document_for(message).replaceAll("data-blocked-src=", "src=")
-        .replace("img-src data:;", "img-src https: http: data:;");
-    return frame;
 }
 
 function size(bytes) {

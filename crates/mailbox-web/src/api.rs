@@ -294,3 +294,115 @@ fn sync(
     *workspace.lock().unwrap() = Workspace::open(session, tracer.clone(), clock.clone())?;
     Ok(Response::json(200, &serde_json::to_value(result)?))
 }
+
+/// A message body, as a document of its own, for the interface to frame.
+///
+/// Its own URL rather than a `srcdoc`, and that is the whole point. A `srcdoc`
+/// frame inherits the embedding page's content policy, so the *page's*
+/// `img-src` decides whether a message's images can load — which meant the
+/// reader could say "load images" and be quietly overruled by a header written
+/// for a different purpose. A framed document with a real URL gets exactly the
+/// policy sent with it, and the `sandbox` attribute still gives it a unique
+/// origin, so nothing here can reach the page around it (§9).
+///
+/// This is a page rather than an API route, and is authenticated like one: a
+/// frame navigation cannot set a header, so it carries the cookie. That is
+/// safe here in a way it would not be for a write — no other origin can frame
+/// it (`frame-ancestors 'self'`) or read it (no CORS), and it changes nothing.
+pub fn body_document(request: &Request, workspace: &Mutex<Workspace>) -> Response {
+    let Some(id) = request.query.get("id") else {
+        return Response::text(400, "which message?");
+    };
+    // The reader's decision, arriving as they made it. Off unless asked for.
+    let images = request.query.get("images").is_some_and(|v| v == "1");
+
+    let render = RenderOptions {
+        format: BodyFormat::Html,
+        ..Default::default()
+    };
+    let shown = match workspace
+        .lock()
+        .unwrap()
+        .show(&IdRef::parse(id), &render, false)
+    {
+        Ok(shown) => shown,
+        Err(e) => {
+            return document(
+                &format!("<p><em>{}</em></p>", escape(&e.to_string())),
+                false,
+            )
+        }
+    };
+
+    let content = shown
+        .message
+        .and_then(|m| m.body)
+        .map(|b| b.content)
+        .unwrap_or_else(|| "<p><em>The body has not been downloaded yet.</em></p>".to_string());
+
+    // The sanitizer disarmed every remote reference into `data-blocked-src`
+    // (§9). Re-arming them is this one substitution, made where the disarming
+    // happened rather than by string surgery in a browser.
+    let content = if images {
+        content.replace("data-blocked-src=", "src=")
+    } else {
+        // A placeholder instead of the browser's broken-image icon, which says
+        // "this message is damaged" when what happened is that we declined to
+        // fetch something. Substituted for the missing `src`, not alongside a
+        // real one — an `<img>` with two `src` attributes uses the first, which
+        // is how "load images" managed to load nothing.
+        content.replace("<img ", &format!("<img src=\"{PLACEHOLDER}\" "))
+    };
+
+    document(&content, images)
+}
+
+/// A grey dashed rectangle, inline, so nothing is fetched to draw it.
+const PLACEHOLDER: &str = "data:image/svg+xml;charset=utf-8,\
+    %3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='48'%20height='32'%3E\
+    %3Crect%20width='48'%20height='32'%20rx='3'%20fill='none'%20stroke='%239a9aa0'\
+    %20stroke-dasharray='3%202'/%3E%3C/svg%3E";
+
+fn document(content: &str, images: bool) -> Response {
+    let img = if images {
+        "img-src data: https: http:"
+    } else {
+        "img-src data:"
+    };
+    let page = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"referrer\" content=\"no-referrer\">\
+         <style>{STYLE}</style></head><body>{content}</body></html>"
+    );
+
+    Response::new(200, "text/html; charset=utf-8", page.into_bytes())
+        .framed()
+        .with(
+            "Content-Security-Policy",
+            &format!(
+                "default-src 'none'; {img}; style-src 'unsafe-inline'; \
+                 frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+            ),
+        )
+}
+
+/// The reading typography. Inline because the frame has a unique origin and
+/// cannot fetch a stylesheet from anywhere, including from us.
+const STYLE: &str = "\
+:root { color-scheme: light dark; }
+body { margin: 1rem 1.1rem; font: 14px/1.6 -apple-system, BlinkMacSystemFont, \
+'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; overflow-wrap: anywhere; }
+img, table { max-width: 100%; }
+img[data-blocked-src] { opacity: .55; }
+blockquote { margin: .6em 0 .6em .4em; padding-left: .8em; \
+border-left: 2px solid currentColor; opacity: .65; }
+pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+a { color: #0a66d0; }
+@media (prefers-color-scheme: dark) { a { color: #64a6f5; } }
+";
+
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}

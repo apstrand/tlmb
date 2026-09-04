@@ -40,6 +40,18 @@ subject = "Second"
 date = "2026-08-02T10:00:00Z"
 message_id = "<two@example.com>"
 body = "goodbye"
+
+[[message]]
+name = "newsletter"
+folder = "INBOX"
+from = "Shop <shop@example.com>"
+subject = "Third"
+date = "2026-08-03T10:00:00Z"
+message_id = "<three@example.com>"
+html = """
+<p><img src="https://tracker.example/open.gif?id=42" alt="a logo"></p>
+<p>Hello.</p>
+"""
 "#;
 
 struct Serving {
@@ -157,6 +169,19 @@ impl Serving {
         )
     }
 
+    /// The id of the message with this subject.
+    fn id_of(&self, subject: &str) -> String {
+        self.api("/api/ls?limit=50")["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find(|m| m["subject"] == subject)
+            .unwrap_or_else(|| panic!("no message {subject}"))["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
     fn first_id(&self) -> String {
         self.api("/api/ls")["messages"][0]["id"]
             .as_str()
@@ -268,7 +293,7 @@ fn the_api_answers_with_the_same_documents_the_cli_prints() {
 
     let listing = s.api("/api/ls");
     let messages = listing["messages"].as_array().expect("messages");
-    assert_eq!(messages.len(), 2, "{listing:#}");
+    assert_eq!(messages.len(), 3, "{listing:#}");
     for field in [
         "id",
         "account",
@@ -294,7 +319,7 @@ fn the_api_answers_with_the_same_documents_the_cli_prints() {
     let status = s.api("/api/status");
     let account = &status["accounts"][0];
     assert_eq!(account["account"], "test", "{status:#}");
-    assert_eq!(account["messages"], 2, "{status:#}");
+    assert_eq!(account["messages"], 3, "{status:#}");
     assert_eq!(account["queued_ops"], 0, "{status:#}");
     assert!(
         status["store_bytes"].as_u64().unwrap_or(0) > 0,
@@ -323,8 +348,7 @@ fn search_uses_the_same_grammar() {
 #[test]
 fn a_message_can_be_read() {
     let s = Serving::start();
-    let id = s.first_id();
-
+    let id = s.id_of("Second");
     let shown = s.api(&format!("/api/show?id={id}"));
     assert_eq!(shown["message"]["subject"], "Second", "{shown:#}");
     assert!(shown["message"]["body"]["content"]
@@ -373,7 +397,7 @@ fn a_message_can_be_moved_and_snoozed() {
     assert_eq!(status, 200, "{body:#}");
     // §7: the device holding the timer is named rather than implied away.
     assert!(body["device"].is_string(), "{body:#}");
-    assert_eq!(s.api("/api/ls")["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(s.api("/api/ls")["messages"].as_array().unwrap().len(), 2);
 
     let (status, body) = s.post(
         "/api/move",
@@ -452,6 +476,101 @@ fn the_page_declares_where_it_may_load_from() {
         assert_eq!(status, 200, "{asset} is not served");
         assert!(head.contains("charset=utf-8"), "{asset}: {head}");
     }
+}
+
+/// §9: no remote content unless the reader asks, and the asking has to work.
+///
+/// Both halves were broken at once when this was `srcdoc`. The frame inherited
+/// the page's `img-src`, so a reader who said "load images" was overruled by a
+/// header written for something else; and the blocked form carried a
+/// placeholder `src` *alongside* the real one, so re-arming produced an `<img>`
+/// with two `src` attributes — of which HTML uses the first.
+#[test]
+fn remote_images_load_only_when_asked_and_then_actually_load() {
+    let s = Serving::start();
+    let id = s.id_of("Third");
+    let cookie = format!("Cookie: mailbox_token={}\r\n", s.token);
+
+    let (status, head, blocked) = s.get(&format!("/body?id={id}"), &cookie);
+    assert_eq!(status, 200, "{blocked}");
+    assert!(
+        head.contains("img-src data:;") || head.contains("img-src data:; "),
+        "a blocked body must not permit remote images: {head}"
+    );
+
+    let (status, head, allowed) = s.get(&format!("/body?id={id}&images=1"), &cookie);
+    assert_eq!(status, 200, "{allowed}");
+    assert!(head.contains("img-src data: https: http:"), "{head}");
+
+    // Exactly one `src` per image, in both forms. Two is the bug: HTML uses
+    // the first, so the placeholder wins and "load images" loads nothing.
+    for (what, document) in [("blocked", &blocked), ("allowed", &allowed)] {
+        let images: Vec<&str> = body_of(document).split("<img ").skip(1).collect();
+        assert_eq!(images.len(), 1, "{what}: expected one image");
+        for tag in images {
+            let tag = tag.split('>').next().unwrap_or("");
+            assert_eq!(
+                tag.matches("src=").count() - tag.matches("blocked-src=").count(),
+                1,
+                "{what}: <img {tag}>"
+            );
+        }
+    }
+
+    assert!(body_of(&blocked).contains("data-blocked-src="), "{blocked}");
+    assert!(
+        body_of(&blocked).contains("data:image/svg"),
+        "no placeholder: {blocked}"
+    );
+    assert!(
+        !body_of(&allowed).contains("data-blocked-src="),
+        "{allowed}"
+    );
+    assert!(
+        body_of(&allowed).contains("src=\"https://tracker.example/open.gif?id=42\""),
+        "{allowed}"
+    );
+}
+
+/// The body is the one thing that may be framed, and only by us. Everything
+/// else refuses outright.
+#[test]
+fn only_the_message_body_may_be_framed() {
+    let s = Serving::start();
+    let cookie = format!("Cookie: mailbox_token={}\r\n", s.token);
+
+    let (_, head, _) = s.get(&format!("/body?id={}", s.first_id()), &cookie);
+    assert!(
+        !head.contains("X-Frame-Options"),
+        "the body cannot be framed: {head}"
+    );
+    assert!(head.contains("frame-ancestors 'self'"), "{head}");
+
+    for path in ["/", "/style.css", "/mailbox.js"] {
+        let (_, head, _) = s.get(path, &cookie);
+        assert!(
+            head.contains("X-Frame-Options: DENY"),
+            "{path} is frameable: {head}"
+        );
+    }
+}
+
+/// The body renders under the page's authentication, not the API's — a frame
+/// navigation cannot send a header. It still needs *some* authentication.
+#[test]
+fn the_body_document_is_not_public() {
+    let s = Serving::start();
+    let (status, _, _) = s.get(&format!("/body?id={}", s.first_id()), "");
+    assert_eq!(status, 401);
+}
+
+/// The rendered message, without the document's own stylesheet — which
+/// mentions `data-blocked-src` itself, and would answer for it.
+fn body_of(document: &str) -> &str {
+    document
+        .split_once("<body>")
+        .map(|(_, rest)| rest)
+        .unwrap_or(document)
 }
 
 // ---- being a server on a network ----

@@ -244,7 +244,14 @@ impl Inner {
 
         match self.page_token(request) {
             PageAuth::Ok { set_cookie } => {
-                let response = assets::serve(&request.path, self.token.as_deref());
+                // The message body is a page rather than an API route: it is
+                // navigated to by a frame, which cannot send a header, and it
+                // changes nothing. See `api::body_document`.
+                let response = if request.path == "/body" {
+                    api::body_document(request, &self.workspace)
+                } else {
+                    assets::serve(&request.path, self.token.as_deref())
+                };
                 match set_cookie {
                     // `SameSite=Strict` so another site cannot cause a request
                     // that carries it; `HttpOnly` so a bug in the page cannot
