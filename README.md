@@ -105,6 +105,12 @@ The keys are the terminal's where they can be: `j`/`k`, `/`, `u`, `f`, `s`,
 `d`, `z`. Below 45rem it folds to one pane at a time, which is what the QR code
 `serve` prints is for.
 
+A message you read is marked read. In the web and graphical interfaces the
+reading pane fills in as the cursor moves, so it takes a second and a half of
+actually being shown — hold `j` down through a mailbox and nothing is marked.
+The terminal has no such pane: opening a message there is already deliberate,
+so it marks straight away. Either way `-seen` puts it back.
+
 ### Moving to another device
 
 `mailbox pair` on the new device shows a QR and a link; `mailbox pair send

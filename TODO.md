@@ -6,11 +6,6 @@ off, and the gaps found along the way.
 
 ## Behaviour to finish
 
-- **Mark a message read when it is opened.** Only `N` in the TUI and
-  `mailbox flag <id> +seen` do it today. §7 asks for mutt-like muscle memory and
-  mutt marks a message seen on open, so this is an omission rather than a
-  decision. Probably wants a short dwell so cursoring past a message in the
-  index does not mark it.
 - **A pool of idled folders.** `sync --watch` idles on the inbox, which is
   where the mail someone is waiting for arrives. §5.3 wants "a bounded pool of
   idling folders (default: inbox and any folder viewed in the last 24 h)",

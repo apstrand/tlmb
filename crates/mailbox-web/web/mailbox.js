@@ -26,6 +26,8 @@ const state = {
     listSeq: 0,
     openSeq: 0,
     inFlight: 0,
+    /// The pending "this has been read" timer, cancelled when the cursor moves.
+    readTimer: 0,
 };
 
 // ---- talking to the server ----
@@ -166,9 +168,40 @@ async function select(index, { pane = true } = {}) {
         const shown = await api(`/api/show?id=${encodeURIComponent(message.id)}&format=html`);
         if (seq !== state.openSeq) return;
         drawReader(shown.message);
+        startReadDwell(message, seq);
     } catch (e) {
         if (seq === state.openSeq) fail(e);
     }
+}
+
+/// §7: a message read for long enough is read.
+///
+/// A pause, because the reading pane fills in as the cursor moves: without one,
+/// holding `j` down would mark a whole mailbox read on the way past.
+const READ_DWELL_MS = 1500;
+
+function startReadDwell(message, seq) {
+    clearTimeout(state.readTimer);
+    if (message.flags.includes("seen")) return;
+
+    state.readTimer = setTimeout(async () => {
+        // Still the same message. Moving on cancels the timer, but a reply
+        // that arrived late could have moved the cursor since.
+        if (seq !== state.openSeq) return;
+        try {
+            await post("/api/flag", { ids: [message.id], add: ["seen"] });
+            // The row, not the whole listing: reloading here would move things
+            // under someone who is in the middle of reading.
+            message.flags = [...message.flags, "seen"];
+            for (const row of listEl.children) {
+                if (state.messages[Number(row.dataset.index)]?.id === message.id) {
+                    row.classList.remove("unread");
+                }
+            }
+        } catch (e) {
+            fail(e);
+        }
+    }, READ_DWELL_MS);
 }
 
 function clearReader() {

@@ -19,6 +19,14 @@ use crate::backend::{Backend, ReplyKind, Request, Response, Seq};
 /// How many rows a listing asks for.
 const PAGE: usize = 200;
 
+/// How long a message stays on screen before it counts as read (§7).
+///
+/// A pause, because here the reading pane fills in as the cursor moves: without
+/// one, holding `j` down would mark a whole mailbox read on the way past. The
+/// terminal needs no equivalent — `j` there moves the cursor without opening
+/// anything, so opening is always deliberate.
+pub const READ_DWELL: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// Which pane the keyboard is driving.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -53,6 +61,13 @@ pub struct App {
     /// clicked twice.
     pub sending: bool,
 
+    /// When the open message first appeared, for the dwell above. Started on
+    /// the frame it is actually on screen rather than when it was asked for,
+    /// so a slow store does not count as reading time.
+    opened_at: Option<std::time::Instant>,
+    /// Set once the open message has been marked, so it is marked once.
+    marked_read: bool,
+
     next_seq: Seq,
     /// The listing request whose answer is still wanted. An older one that
     /// arrives late is dropped rather than painted over a newer result.
@@ -82,6 +97,8 @@ impl App {
             identities: Vec::new(),
             draft: None,
             sending: false,
+            opened_at: None,
+            marked_read: false,
             next_seq: 0,
             awaiting_list: None,
             awaiting_open: None,
@@ -195,6 +212,8 @@ impl App {
         }
         self.selected = Some(index);
         self.open = None;
+        self.opened_at = None;
+        self.marked_read = false;
         if let Some(id) = self.selected_id() {
             let seq = self.issue(backend, Request::Open { id });
             self.awaiting_open = Some(seq);
@@ -285,6 +304,40 @@ impl App {
 
     pub fn sync(&mut self, backend: &mut dyn Backend) {
         self.issue(backend, Request::Sync);
+    }
+
+    /// Marks the open message read once it has been open long enough (§7).
+    ///
+    /// Called every frame with the shell's clock rather than reading one
+    /// itself, so a test can decide what "long enough" means without waiting.
+    pub fn tick(&mut self, now: std::time::Instant, backend: &mut dyn Backend) {
+        let Some(open) = &self.open else {
+            self.opened_at = None;
+            return;
+        };
+        if self.marked_read || open.summary.flags.iter().any(|f| f == "seen") {
+            return;
+        }
+
+        match self.opened_at {
+            None => self.opened_at = Some(now),
+            Some(shown) if now.duration_since(shown) >= READ_DWELL => {
+                let id = open.summary.id.clone();
+                // Once. The listing has not come back yet, so the flags this
+                // is reading from still say unread, and without the latch this
+                // would fire on every frame until it did.
+                self.marked_read = true;
+                self.issue(
+                    backend,
+                    Request::Flag {
+                        ids: vec![id],
+                        add: vec!["seen".into()],
+                        remove: Vec::new(),
+                    },
+                );
+            }
+            Some(_) => {}
+        }
     }
 
     /// Collects whatever finished. Called once per frame; never waits.

@@ -119,6 +119,8 @@ pub enum Write {
     /// `z` — set aside until a time the shell parses, since the grammar for it
     /// lives in the core and the answer depends on the injected clock (§7).
     Snooze { id: String, until: String },
+    /// Opening a message marks it read, as mutt does (§7).
+    MarkRead { id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +182,12 @@ impl App {
             link_selected: 0,
             help_return: View::List,
         }
+    }
+
+    /// The selected message's id, if it is unread.
+    fn unread_selection(&self) -> Option<String> {
+        let message = self.current()?;
+        (!message.flags.iter().any(|f| f == "seen")).then(|| message.id.clone())
     }
 
     /// The links in the open message, in the numbering its text uses.
@@ -388,6 +396,13 @@ impl App {
                 if self.view == View::List && self.current().is_some() {
                     self.view = View::Message;
                     self.body_scroll = 0;
+                    // Opening a message is reading it, which is what mutt does
+                    // and what §7 asks this interface to feel like. No dwell is
+                    // needed: `j` and `k` move the cursor without opening
+                    // anything, so this only ever fires on a deliberate act.
+                    if let Some(id) = self.unread_selection() {
+                        return Effect::Write(Write::MarkRead { id });
+                    }
                 }
                 Effect::None
             }

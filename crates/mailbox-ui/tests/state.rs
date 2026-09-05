@@ -648,3 +648,133 @@ fn a_message_with_no_recipient_is_not_sent() {
         .contains("recipient"));
     assert!(app.draft.is_some());
 }
+
+// ---- marking read (§7) ----
+
+/// The reading pane fills in as the cursor moves, so a pause is what stops
+/// holding `j` down from marking a whole mailbox read on the way past.
+#[test]
+fn a_message_is_marked_read_only_after_it_has_been_open_a_while() {
+    use mailbox_ui::app::READ_DWELL;
+    let (mut app, mut backend) = loaded();
+
+    let start = std::time::Instant::now();
+    let before = backend.sent.len();
+
+    app.tick(start, &mut backend);
+    assert_eq!(backend.sent.len(), before, "marked read on the first frame");
+
+    app.tick(start + READ_DWELL / 2, &mut backend);
+    assert_eq!(backend.sent.len(), before, "marked read halfway through");
+
+    app.tick(start + READ_DWELL, &mut backend);
+    assert!(
+        matches!(
+            backend.requests().last(),
+            Some(Request::Flag { ids, add, .. }) if ids == &["id1".to_string()] && add == &["seen"]
+        ),
+        "{:?}",
+        backend.requests()
+    );
+}
+
+/// Moving on before the pause elapses marks nothing, which is the whole point.
+#[test]
+fn cursoring_past_a_message_does_not_mark_it() {
+    use mailbox_ui::app::READ_DWELL;
+    let (mut app, mut backend) = loaded();
+
+    let start = std::time::Instant::now();
+    app.tick(start, &mut backend);
+
+    // Down to the next message before the dwell elapses.
+    app.move_selection(1, &mut backend);
+    let seq = backend.seq_of(|r| matches!(r, Request::Open { .. }));
+    backend.ready.push((seq, opened("id2")));
+    app.pump(&mut backend);
+
+    let before = backend.sent.len();
+    app.tick(start + READ_DWELL, &mut backend);
+    assert_eq!(
+        backend.sent.len(),
+        before,
+        "the clock restarts with the message: {:?}",
+        backend.requests()
+    );
+
+    // And the new one is marked on its own schedule.
+    app.tick(start + READ_DWELL * 2, &mut backend);
+    assert!(
+        matches!(
+            backend.requests().last(),
+            Some(Request::Flag { ids, .. }) if ids == &["id2".to_string()]
+        ),
+        "{:?}",
+        backend.requests()
+    );
+}
+
+/// Once. The listing has not come back yet, so the flags this reads from still
+/// say unread — without the latch it would fire every frame until it did.
+#[test]
+fn a_message_is_marked_read_once() {
+    use mailbox_ui::app::READ_DWELL;
+    let (mut app, mut backend) = loaded();
+
+    let start = std::time::Instant::now();
+    app.tick(start, &mut backend);
+    app.tick(start + READ_DWELL, &mut backend);
+    let after_first = backend.sent.len();
+
+    for extra in 1..5 {
+        app.tick(start + READ_DWELL * (1 + extra), &mut backend);
+    }
+    assert_eq!(backend.sent.len(), after_first);
+}
+
+/// A message that was already read is not written to again. A pointless write
+/// is a pointless `STORE` on the server and a pointless entry in the queue.
+#[test]
+fn an_already_read_message_is_left_alone() {
+    use mailbox_ui::app::READ_DWELL;
+    let mut app = App::new();
+    let mut backend = Fake::default();
+    app.start(&mut backend);
+
+    let seq = backend.seq_of(|r| matches!(r, Request::List { .. }));
+    backend.ready.push((
+        seq,
+        Response::List(Ok(Box::new(MessageList {
+            messages: vec![message("read", "already read", &["seen"])],
+            cursor: None,
+            total: None,
+        }))),
+    ));
+    app.pump(&mut backend);
+
+    let seq = backend.seq_of(|r| matches!(r, Request::Open { .. }));
+    backend.ready.push((
+        seq,
+        Response::Opened(Ok(Box::new(ShowResult {
+            message: Some(MessageDetail {
+                summary: message("read", "already read", &["seen"]),
+                message_id: None,
+                in_reply_to: None,
+                references: Vec::new(),
+                reply_to: Vec::new(),
+                bcc: Vec::new(),
+                headers: Vec::new(),
+                body: None,
+                attachments: Vec::new(),
+            }),
+            thread: None,
+        }))),
+    ));
+    app.pump(&mut backend);
+
+    let start = std::time::Instant::now();
+    let before = backend.sent.len();
+    app.tick(start, &mut backend);
+    app.tick(start + READ_DWELL * 3, &mut backend);
+    assert_eq!(backend.sent.len(), before, "{:?}", backend.requests());
+}

@@ -520,7 +520,7 @@ fn perform_write(
     writable.read_only = false;
     let mut session = Session::open(&writable, tracer.clone(), clock.clone())?;
     let target = [IdRef::Id(match write {
-        Write::Tag { id, .. } | Write::Snooze { id, .. } => id.clone(),
+        Write::Tag { id, .. } | Write::Snooze { id, .. } | Write::MarkRead { id } => id.clone(),
     })];
 
     match write {
@@ -531,6 +531,16 @@ fn perform_write(
             };
             session.flag(&target, &spec)?;
             Ok(format!("tagged {tag}"))
+        }
+        Write::MarkRead { .. } => {
+            let spec = mailbox_core::session::FlagSpec {
+                add_flags: vec![mailbox_core::flags::SEEN.to_string()],
+                ..Default::default()
+            };
+            session.flag(&target, &spec)?;
+            // Nothing to say: the row stops being bold, which is the whole
+            // report anyone wants.
+            Ok(String::new())
         }
         Write::Snooze { until, .. } => {
             // The time is parsed here because the grammar lives in the core and

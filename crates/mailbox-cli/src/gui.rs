@@ -68,12 +68,18 @@ impl eframe::App for Gui {
         if self.app.pump(&mut self.backend) {
             ctx.request_repaint();
         }
+        // §7: a message read for long enough is read.
+        self.app.tick(std::time::Instant::now(), &mut self.backend);
         mailbox_ui::view::draw(ctx, &mut self.app, &mut self.backend);
 
         // While work is outstanding, keep the frames coming so its result
         // appears without the user having to move the mouse.
         if self.app.in_flight > 0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        } else if self.app.open.is_some() {
+            // Keep the frames coming while a message sits on screen, or the
+            // dwell above would only elapse when something else moved.
+            ctx.request_repaint_after(mailbox_ui::app::READ_DWELL);
         }
     }
 }

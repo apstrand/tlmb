@@ -71,11 +71,17 @@ pub enum IdRef {
     Index(usize),
 }
 
+/// The width of the id `ls` prints. A decimal string this long is one of those
+/// — about one id in twenty-seven is all digits — not an index into a listing
+/// nobody has ever made that long.
+const PRINTED_ID_WIDTH: usize = 7;
+
 impl IdRef {
     pub fn parse(s: &str) -> IdRef {
         match s {
             "@" => IdRef::Selected,
             "^" => IdRef::Previous,
+            _ if s.len() >= PRINTED_ID_WIDTH => IdRef::Id(s.to_string()),
             _ => match s.parse::<usize>() {
                 Ok(n) if n > 0 => IdRef::Index(n),
                 _ => IdRef::Id(s.to_string()),

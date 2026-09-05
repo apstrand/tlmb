@@ -605,3 +605,37 @@ fn help_returns_to_the_link_picker() {
     app.handle(Action::Help);
     assert_eq!(app.view, View::Links);
 }
+
+/// §7's mutt muscle memory: opening a message is reading it. No pause is
+/// needed here — `j` and `k` move the cursor without opening anything, so
+/// opening is always a deliberate act.
+#[test]
+fn opening_a_message_marks_it_read() {
+    use mailbox_tui::app::Write;
+    let mut app = app_with(3);
+    // `app_with` alternates, so the second row is the unread one.
+    app.handle(Action::Down);
+
+    assert_eq!(
+        app.handle(Action::Open),
+        Effect::Write(Write::MarkRead { id: "id01".into() })
+    );
+    assert_eq!(app.view, View::Message, "and it still opens");
+}
+
+#[test]
+fn opening_an_already_read_message_writes_nothing() {
+    let mut app = app_with(3);
+    assert_eq!(app.handle(Action::Open), Effect::None);
+    assert_eq!(app.view, View::Message);
+}
+
+/// Moving the cursor in the index marks nothing: the message is not open.
+#[test]
+fn moving_the_cursor_marks_nothing() {
+    let mut app = app_with(3);
+    for _ in 0..3 {
+        assert_eq!(app.handle(Action::Down), Effect::None);
+        assert_eq!(app.handle(Action::Up), Effect::None);
+    }
+}

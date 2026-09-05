@@ -7,6 +7,7 @@ use mailbox_core::fixture::Fixture;
 use mailbox_core::flags;
 use mailbox_core::id::{self, Fallback};
 use mailbox_core::imap::{parse_internaldate, uid_set, utf7};
+use mailbox_core::session::IdRef;
 use mailbox_core::trace::{redact_command, summarize_response};
 
 // ---- §5.2: the stable id ----
@@ -93,6 +94,33 @@ fn blob_paths_shard_by_two_characters() {
     let path = id::blob_path(&blob);
     assert_eq!(&path[..2], &blob[..2]);
     assert_eq!(path.as_bytes()[2], b'/');
+}
+
+// ---- §5.2: naming a message on the command line ----
+
+#[test]
+fn short_decimal_is_a_listing_index() {
+    assert_eq!(IdRef::parse("1"), IdRef::Index(1));
+    assert_eq!(IdRef::parse("20"), IdRef::Index(20));
+    assert_eq!(IdRef::parse("@"), IdRef::Selected);
+    assert_eq!(IdRef::parse("^"), IdRef::Previous);
+}
+
+#[test]
+fn an_all_digit_id_is_an_id() {
+    // Hex ids are digits about one time in twenty-seven, and `ls` prints
+    // seven characters of them. Reading `4014827` as an index made those
+    // messages unaddressable from the command line.
+    assert_eq!(
+        IdRef::parse("4014827"),
+        IdRef::Id("4014827".to_string()),
+        "a printed id of digits must not be read as an index"
+    );
+    assert_eq!(
+        IdRef::parse("0"),
+        IdRef::Id("0".to_string()),
+        "listings are numbered from one"
+    );
 }
 
 // ---- §6.7: the injected clock and RNG ----
