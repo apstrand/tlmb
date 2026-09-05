@@ -170,6 +170,9 @@ pub enum Command {
     /// Run a sync pass.
     Sync(SyncArgs),
 
+    /// Stream mailbox events: new mail, flags, moves, sends (§6.4).
+    Watch(WatchArgs),
+
     /// Queues, errors, connectivity, store size.
     Status,
 
@@ -531,6 +534,59 @@ pub enum AccountsAction {
         /// Which account. Defaults to `--account` or the only one configured.
         account: Option<String>,
     },
+}
+
+/// `mailbox watch` (§6.4): the event stream an agent loops on.
+#[derive(Debug, Args)]
+pub struct WatchArgs {
+    /// Only these events, comma-separated: new, flag, move, copy, tag, sent,
+    /// deleted.
+    #[arg(long, value_delimiter = ',')]
+    pub events: Option<Vec<String>>,
+
+    /// Replay events from this far back before streaming: `2h`, `7d`, an
+    /// RFC3339 time. Without it, the stream starts here and now.
+    #[arg(long, value_name = "WHEN")]
+    pub since: Option<String>,
+
+    /// Exit after this many events. Without it, runs until interrupted.
+    #[arg(long, value_name = "N")]
+    pub max_events: Option<usize>,
+
+    /// Stop after this long, in seconds.
+    ///
+    /// Separate from `--timeout`, which is how long a network operation may
+    /// take: a stream that ended because nothing happened has not timed out.
+    #[arg(long, value_name = "SECONDS")]
+    pub stop_after: Option<f64>,
+
+    /// Drain what is already there and exit, rather than waiting for more.
+    ///
+    /// The polling shape, for a caller that would rather own its own loop:
+    /// `watch --drain --cursor <last>` is "what happened while I was away".
+    #[arg(long)]
+    pub drain: bool,
+
+    /// Do not sync — follow a mailbox someone else is keeping up to date.
+    ///
+    /// Off by default: a lone `watch` becomes the sync engine (§4.1) so that
+    /// new mail actually arrives. When another process already is one, this
+    /// happens anyway, and the `started` event says which.
+    #[arg(long)]
+    pub no_sync: bool,
+
+    /// How often to check the feed, in milliseconds. Local reads; the default
+    /// is well under what a human notices.
+    #[arg(long, default_value_t = 250, value_name = "MS")]
+    pub interval: u64,
+
+    /// The longest single `IDLE`, in seconds. As `sync --watch`.
+    #[arg(long, default_value_t = 540, value_name = "SECONDS")]
+    pub idle_window: u64,
+
+    /// How often to sync when the server does not offer `IDLE`, in seconds.
+    #[arg(long, default_value_t = 300, value_name = "SECONDS")]
+    pub poll: u64,
 }
 
 #[derive(Debug, Args)]

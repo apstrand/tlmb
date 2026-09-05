@@ -400,3 +400,109 @@ fn a_single_pass_is_refused_while_a_watcher_holds_the_account() {
         once.stderr
     );
 }
+
+// ---- `mailbox watch`: the event stream of §6.4 ----
+
+/// The promise a lone agent depends on: `watch` with nobody else running is
+/// the sync engine *and* the stream, so mail that arrives on the server
+/// reaches the caller without anyone asking for a sync.
+#[test]
+fn watch_syncs_for_itself_and_streams_what_arrives() {
+    use std::io::{BufRead, BufReader};
+
+    let world = World::new(vec![Message::simple(1, "First", "one@example.com")]);
+    world.server.set_messages(vec![
+        Message::simple(1, "First", "one@example.com"),
+        Message::simple(2, "Second", "two@example.com"),
+    ]);
+    world
+        .server
+        .wake_idle_after(Some(Duration::from_millis(80)));
+
+    let mut watcher = world
+        .command(&[
+            "--ndjson",
+            "watch",
+            "--since",
+            "1h",
+            "--idle-window",
+            "2",
+            "--max-events",
+            "2",
+            "--stop-after",
+            "30",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the watcher");
+
+    let mut out = BufReader::new(watcher.stdout.take().expect("stdout"));
+    let mut read = || {
+        let mut line = String::new();
+        out.read_line(&mut line).expect("read");
+        serde_json::from_str::<serde_json::Value>(&line)
+            .unwrap_or_else(|e| panic!("expected NDJSON, got {e}: {line}"))
+    };
+
+    let started = read();
+    assert_eq!(started["payload"]["event"], "started");
+    assert_eq!(
+        started["payload"]["syncing"], true,
+        "nothing else holds the account, so this watch should have taken it"
+    );
+
+    // Both messages arrive: the first from the pass `watch` runs on startup,
+    // the second from the one the server's announcement wakes.
+    let mut subjects = vec![
+        read()["payload"]["detail"]["subject"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        read()["payload"]["detail"]["subject"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    ];
+    subjects.sort();
+    assert_eq!(subjects, vec!["First".to_string(), "Second".to_string()]);
+
+    let status = watcher.wait().expect("watch exits after --max-events");
+    assert_eq!(status.code(), Some(0));
+}
+
+/// And beside a running sync engine it follows rather than contending: §4.1
+/// allows exactly one, and a `watch` that refused to start next to the TUI
+/// would be useless in the case an agent is most likely to be in.
+#[test]
+fn watch_follows_when_something_else_is_already_syncing() {
+    use std::io::{BufRead, BufReader};
+
+    let world = World::new(vec![Message::simple(1, "First", "one@example.com")]);
+    world.server.set_fault(ImapFault::SilentIdle);
+
+    let mut engine = world
+        .command(&["--json", "sync", "--watch", "--idle-window", "20"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the engine");
+    {
+        let mut line = String::new();
+        BufReader::new(engine.stdout.as_mut().expect("stdout"))
+            .read_line(&mut line)
+            .expect("first pass");
+    }
+
+    let run = world.run(&["--ndjson", "watch", "--stop-after", "0.2"]);
+    let _ = engine.kill();
+    let _ = engine.wait();
+
+    assert_eq!(
+        run.status, 0,
+        "watch should follow, not refuse: {}",
+        run.stderr
+    );
+    let started: serde_json::Value =
+        serde_json::from_str(run.stdout.lines().next().unwrap_or_default()).expect("started");
+    assert_eq!(started["payload"]["event"], "started");
+    assert_eq!(started["payload"]["syncing"], false);
+}

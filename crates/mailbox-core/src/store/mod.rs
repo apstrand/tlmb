@@ -10,6 +10,7 @@
 //! only lists mail takes the WAL read path and never contends with the TUI.
 
 pub mod blobs;
+pub mod changes;
 pub mod corpus;
 pub mod ingest;
 pub mod ops;
@@ -29,6 +30,7 @@ use crate::error::{Error, Result};
 use crate::trace::{event, Tracer};
 
 pub use blobs::Blobs;
+pub use changes::{ChangeKind, ChangePage};
 pub use corpus::{CorpusReport, CorpusSpec};
 pub use ops::{FlagChange, Op, OpKind, OpState};
 pub use outbox::{NewOutboxEntry, OutboxEntry, OutboxState};

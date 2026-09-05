@@ -222,6 +222,26 @@ impl Store {
                  WHERE id = ?1",
                 params![id, now, response],
             )?;
+            // The `Message-ID`, not the outbox row id: it is what a watcher
+            // will see again when the `Sent` copy syncs back, and the only
+            // name for this mail that means anything outside this store.
+            let message_id: Option<String> = tx
+                .query_row("SELECT message_id FROM outbox WHERE id = ?1", [id], |r| {
+                    r.get(0)
+                })
+                .ok();
+            if let Some(message_id) = &message_id {
+                crate::store::changes::record(
+                    tx,
+                    now,
+                    &crate::store::changes::Event::new(
+                        crate::store::changes::ChangeKind::Sent,
+                        message_id,
+                    )
+                    .local()
+                    .with(serde_json::json!({ "outbox": id })),
+                )?;
+            }
             Ok(())
         })
     }

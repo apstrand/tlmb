@@ -14,6 +14,7 @@ use crate::error::Result;
 use crate::flags;
 use crate::id;
 use crate::mime;
+use crate::store::changes::{self, ChangeKind, Event};
 use crate::store::Store;
 use crate::threading::{self, ThreadInput, ThreadingOptions};
 use crate::trace::event;
@@ -59,8 +60,9 @@ impl Store {
     pub fn apply_message(&mut self, incoming: &Incoming) -> Result<Applied> {
         let mut applied = None;
         let account = self.account.clone();
+        let now = self.clock.now();
         self.transaction("apply_message", |tx| {
-            applied = Some(apply_in_tx(tx, &account, incoming)?);
+            applied = Some(apply_in_tx(tx, &account, now, incoming)?);
             Ok(())
         })?;
         Ok(applied.expect("transaction committed without producing a result"))
@@ -72,10 +74,11 @@ impl Store {
     /// so a crash leaves the store at a folder boundary rather than mid-folder.
     pub fn apply_batch(&mut self, batch: &[Incoming]) -> Result<Vec<Applied>> {
         let account = self.account.clone();
+        let now = self.clock.now();
         let out = self.transaction("apply_batch", |tx| {
             let mut out = Vec::with_capacity(batch.len());
             for incoming in batch {
-                out.push(apply_in_tx(tx, &account, incoming)?);
+                out.push(apply_in_tx(tx, &account, now, incoming)?);
             }
             Ok(out)
         })?;
@@ -115,6 +118,7 @@ impl Store {
 
     /// Removes one placement, and the message with it when that was its last.
     pub fn remove_placement(&mut self, folder_id: i64, uid: u32) -> Result<bool> {
+        let now = self.clock.now();
         self.transaction("remove_placement", |tx| {
             let rowid: Option<i64> = tx
                 .query_row(
@@ -128,17 +132,7 @@ impl Store {
                 "DELETE FROM placements WHERE folder_id = ?1 AND uid = ?2",
                 params![folder_id, uid],
             )?;
-            let remaining: i64 = tx.query_row(
-                "SELECT count(*) FROM placements WHERE message_rowid = ?1",
-                [rowid],
-                |r| r.get(0),
-            )?;
-            if remaining == 0 {
-                tx.execute("DELETE FROM messages_fts WHERE rowid = ?1", [rowid])?;
-                tx.execute("DELETE FROM messages WHERE rowid = ?1", [rowid])?;
-            } else {
-                refresh_primary(tx, rowid)?;
-            }
+            expunged(tx, now, rowid, folder_id)?;
             Ok(true)
         })
     }
@@ -169,23 +163,14 @@ impl Store {
         if gone.is_empty() {
             return Ok(0);
         }
+        let now = self.clock.now();
         self.transaction("retain_uids", |tx| {
             for (uid, rowid) in &gone {
                 tx.execute(
                     "DELETE FROM placements WHERE folder_id = ?1 AND uid = ?2",
                     params![folder_id, uid],
                 )?;
-                let remaining: i64 = tx.query_row(
-                    "SELECT count(*) FROM placements WHERE message_rowid = ?1",
-                    [rowid],
-                    |r| r.get(0),
-                )?;
-                if remaining == 0 {
-                    tx.execute("DELETE FROM messages_fts WHERE rowid = ?1", [rowid])?;
-                    tx.execute("DELETE FROM messages WHERE rowid = ?1", [rowid])?;
-                } else {
-                    refresh_primary(tx, *rowid)?;
-                }
+                expunged(tx, now, *rowid, folder_id)?;
             }
             Ok(())
         })?;
@@ -201,6 +186,7 @@ impl Store {
         modseq: Option<u64>,
     ) -> Result<bool> {
         let packed = flags::pack_imap(imap_flags);
+        let now = self.clock.now();
         self.transaction("set_placement_flags", |tx| {
             let changed = tx.execute(
                 "UPDATE placements SET flags = ?3, modseq = COALESCE(?4, modseq)
@@ -214,6 +200,21 @@ impl Store {
                     |r| r.get(0),
                 )?;
                 refresh_primary(tx, rowid)?;
+
+                // Not `local`: this is the server telling us someone else —
+                // another device, webmail — changed the flags.
+                let id: String =
+                    tx.query_row("SELECT id FROM messages WHERE rowid = ?1", [rowid], |r| {
+                        r.get(0)
+                    })?;
+                let folder = folder_path(tx, folder_id)?;
+                changes::record(
+                    tx,
+                    now,
+                    &Event::new(ChangeKind::Flag, &id)
+                        .in_folder(folder.as_deref())
+                        .with(serde_json::json!({ "flags": flags::unpack(&packed) })),
+                )?;
             }
             Ok(changed > 0)
         })
@@ -269,7 +270,12 @@ impl Store {
     }
 }
 
-fn apply_in_tx(tx: &Transaction<'_>, account: &str, incoming: &Incoming) -> Result<Applied> {
+fn apply_in_tx(
+    tx: &Transaction<'_>,
+    account: &str,
+    now: i64,
+    incoming: &Incoming,
+) -> Result<Applied> {
     let bytes = incoming.raw.as_deref().unwrap_or(&incoming.headers);
     let parsed = mime::parse(bytes);
 
@@ -435,12 +441,78 @@ fn apply_in_tx(tx: &Transaction<'_>, account: &str, incoming: &Incoming) -> Resu
     refresh_primary(tx, rowid)?;
     record_contacts(tx, &parsed, date)?;
 
+    // §6.4's `new`. Announced for a message the store had never seen, not for
+    // every new *placement*: the same mail under a second Gmail label is one
+    // arrival, and a watcher that saw it twice would reply twice.
+    if is_new_message {
+        let folder = folder_path(tx, incoming.folder_id)?;
+        changes::record(
+            tx,
+            now,
+            &Event::new(ChangeKind::New, &msg_id)
+                .in_folder(folder.as_deref())
+                .with(serde_json::json!({
+                    "subject": parsed.subject,
+                    "from": from_addr,
+                })),
+        )?;
+    }
+
     Ok(Applied {
         rowid,
         id: msg_id,
         is_new_message,
         is_new_placement: existing_placement == 0,
     })
+}
+
+/// Drops a message that has just lost a placement, or re-ranks it if it has
+/// others left, and says which happened on the feed.
+///
+/// The distinction matters to a watcher: a message that left one folder is
+/// still there to act on, and one whose last placement went is not.
+fn expunged(tx: &Transaction<'_>, now: i64, rowid: i64, folder_id: i64) -> Result<()> {
+    let id: Option<String> = tx
+        .query_row("SELECT id FROM messages WHERE rowid = ?1", [rowid], |r| {
+            r.get(0)
+        })
+        .ok();
+    let remaining: i64 = tx.query_row(
+        "SELECT count(*) FROM placements WHERE message_rowid = ?1",
+        [rowid],
+        |r| r.get(0),
+    )?;
+    let folder = folder_path(tx, folder_id)?;
+    if remaining == 0 {
+        tx.execute("DELETE FROM messages_fts WHERE rowid = ?1", [rowid])?;
+        tx.execute("DELETE FROM messages WHERE rowid = ?1", [rowid])?;
+        if let Some(id) = &id {
+            changes::record(
+                tx,
+                now,
+                &Event::new(ChangeKind::Deleted, id).in_folder(folder.as_deref()),
+            )?;
+        }
+    } else {
+        refresh_primary(tx, rowid)?;
+        if let Some(id) = &id {
+            changes::record(
+                tx,
+                now,
+                &Event::new(ChangeKind::Move, id).with(serde_json::json!({ "from": folder })),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// A folder's path, for an event that names where something happened.
+fn folder_path(tx: &Transaction<'_>, folder_id: i64) -> Result<Option<String>> {
+    Ok(tx
+        .query_row("SELECT path FROM folders WHERE id = ?1", [folder_id], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok())
 }
 
 /// Chooses the placement a message is *reported* as living in, and copies its

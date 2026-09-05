@@ -45,6 +45,7 @@ than retrofitted.
 | `serve`: the local web API, token-gated | done (§3, M5) |
 | GUI (egui) and web (DOM), on one contract | done (§7, M5) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
+| `watch`: the mailbox as a cursored event stream | done (§6.4, M7) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
@@ -437,6 +438,30 @@ MAILBOX_AGENT=1 mailbox ls --json --fields id,subject,from
 ```
 
 Under `MAILBOX_AGENT=1`, any state-changing command needs an explicit `--yes`.
+
+`mailbox watch` is the loop: new mail, flag changes, moves, and sends, one
+NDJSON event per line as they happen.
+
+```sh
+mailbox --ndjson watch --events new
+{"schema":"mailbox/v1","command":"watch","payload":{"event":"started","cursor":"work:184","syncing":true}}
+{"schema":"mailbox/v1","command":"watch","payload":{"seq":185,"event":"new","account":"work",
+ "message":"9c1f0a3…","folder":"INBOX","local":false,"detail":{"subject":"Invoice 42","from":"alice@example.com"}}}
+```
+
+Every event carries a `seq`, and the `cursor` it adds up to resumes the stream:
+`watch --drain --cursor <cursor>` is "what happened while I was away", which is
+what makes a consumer that gets restarted — or crashes halfway through acting
+on an event — miss nothing and repeat rather than skip. If the feed was trimmed
+past that cursor, `truncated` says so instead of pretending the gap is not
+there. `local` distinguishes this device's own writes from everyone else's, so
+an agent that flags what it reads does not wake itself up.
+
+Events are recorded in the same transaction as the change they describe, so
+there is no state in which one exists without the other. With nothing else
+running, `watch` becomes the sync engine itself (§4.1) so that mail actually
+arrives; beside a TUI or a `sync --watch` it follows instead, and the `started`
+event says which.
 
 ## Testing
 

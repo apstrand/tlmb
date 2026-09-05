@@ -1205,7 +1205,7 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
 
     let Some(command) = &args.command else {
         let commands = [
-            "ls", "search", "show", "folders", "accounts", "sync", "status", "snooze",
+            "ls", "search", "show", "folders", "accounts", "sync", "status", "snooze", "watch",
         ];
         if ctx.out.is_structured() {
             ctx.out
@@ -1228,6 +1228,7 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
         "send" | "compose" | "reply" => schemars::schema_for!(Reply<SendResult>),
         "outbox" => schemars::schema_for!(Reply<OutboxList>),
         "snooze" => schemars::schema_for!(Reply<SnoozeList>),
+        "watch" => schemars::schema_for!(Reply<ChangeList>),
         "error" => schemars::schema_for!(ErrorResponse),
         other => {
             return Err(Error::not_found("schema for command", other));

@@ -13,6 +13,7 @@ use rusqlite::{params, Transaction};
 
 use crate::error::{Error, Result};
 use crate::flags;
+use crate::store::changes::{self, ChangeKind, Event};
 use crate::store::ops::{FlagChange, OpKind};
 use crate::store::Store;
 
@@ -107,6 +108,15 @@ impl Store {
                 )?;
             }
 
+            changes::record(
+                tx,
+                now,
+                &Event::new(ChangeKind::Flag, message_id)
+                    .local()
+                    .in_folder(folder_path.as_str())
+                    .with(serde_json::json!({ "flags": flags::unpack(&packed) })),
+            )?;
+
             Ok(Written {
                 message_id: message_id.to_string(),
                 flags: flags::unpack(&packed),
@@ -162,6 +172,15 @@ impl Store {
                 &FlagChange::default(),
             )?;
 
+            changes::record(
+                tx,
+                now,
+                &Event::new(ChangeKind::Move, message_id)
+                    .local()
+                    .in_folder(target_path.as_str())
+                    .with(serde_json::json!({ "from": folder_path })),
+            )?;
+
             Ok(Written {
                 message_id: message_id.to_string(),
                 flags: flags::unpack(&current),
@@ -213,6 +232,14 @@ impl Store {
                 &FlagChange::default(),
             )?;
 
+            changes::record(
+                tx,
+                now,
+                &Event::new(ChangeKind::Copy, message_id)
+                    .local()
+                    .in_folder(target_path.as_str()),
+            )?;
+
             Ok(Written {
                 message_id: message_id.to_string(),
                 flags: flags::unpack(&current),
@@ -235,6 +262,7 @@ impl Store {
         add: &[String],
         remove: &[String],
     ) -> Result<Vec<String>> {
+        let now = self.clock.now();
         self.transaction("set_tags", |tx| {
             let rowid: i64 = tx
                 .query_row(
@@ -260,7 +288,18 @@ impl Store {
             let mut st =
                 tx.prepare("SELECT tag FROM tags WHERE message_rowid = ?1 ORDER BY tag")?;
             let rows = st.query_map([rowid], |r| r.get::<_, String>(0))?;
-            Ok(rows.filter_map(std::result::Result::ok).collect())
+            let tags: Vec<String> = rows.filter_map(std::result::Result::ok).collect();
+
+            if !add.is_empty() || !remove.is_empty() {
+                changes::record(
+                    tx,
+                    now,
+                    &Event::new(ChangeKind::Tag, message_id)
+                        .local()
+                        .with(serde_json::json!({ "tags": tags })),
+                )?;
+            }
+            Ok(tags)
         })
     }
 

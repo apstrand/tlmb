@@ -13,7 +13,7 @@ use crate::trace::{event, Tracer};
 /// Bumped whenever [`MIGRATIONS`] grows. A store from the future is refused
 /// rather than opened read-only: a newer version may have written columns this
 /// build would silently drop on the next write.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Each entry is applied in order inside one transaction. Migrations are
 /// append-only — editing an existing one changes what an already-migrated store
@@ -355,6 +355,34 @@ const MIGRATIONS: &[&str] = &[
     -- paint, so the due check is an index seek rather than a scan of the
     -- snooze table.
     CREATE INDEX snoozed_due ON snoozed(until);
+    "#,
+    // v7 — M7: the change feed behind `mailbox watch` (§6.4).
+    r#"
+    -- What happened to the mailbox, in order. `watch` streams this so an agent
+    -- can follow a mailbox without polling `ls` and diffing it.
+    --
+    -- Durable and cursored rather than an in-process broadcast, because the
+    -- consumer §6.4 is written for is a program that will be restarted: one
+    -- that resumes from the last `seq` it acted on misses nothing, and one that
+    -- crashes mid-event redelivers rather than skips. The same rows are what
+    -- lets `--since` answer "what did I miss" for a caller that was not
+    -- running at all.
+    CREATE TABLE changes (
+        -- The `--cursor` of §6.4: monotonic, opaque, never reused.
+        seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+        at         INTEGER NOT NULL,
+        -- new | flag | move | copy | tag | sent | deleted
+        kind       TEXT    NOT NULL,
+        message_id TEXT,
+        -- The folder the change is about: where it arrived, or where it went.
+        folder     TEXT,
+        -- Whether this device made the change or a sync brought it in. An
+        -- agent that acts on its own writes would otherwise loop.
+        local      INTEGER NOT NULL DEFAULT 0,
+        -- Kind-specific JSON: the flags after a `flag`, the source of a `move`.
+        payload    TEXT    NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX changes_at ON changes(at);
     "#,
 ];
 

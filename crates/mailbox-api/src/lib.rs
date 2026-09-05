@@ -119,6 +119,54 @@ pub struct SnoozeList {
     pub snoozed: Vec<Snoozed>,
 }
 
+/// `watch` payload: one event of the change feed (§6.4).
+///
+/// Emitted one per line under `--ndjson`, which is what makes `watch` a stream
+/// a caller can act on as it arrives rather than a document that never ends.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Change {
+    /// The cursor: pass it back as `--cursor` to resume after this event.
+    pub seq: i64,
+    /// Unix seconds.
+    pub at: i64,
+    /// `new`, `flag`, `move`, `copy`, `tag`, `sent`, `deleted`.
+    pub event: String,
+    pub account: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// True when this device made the change, false when a sync brought it in.
+    ///
+    /// An agent that flags what it reads would otherwise wake itself up.
+    pub local: bool,
+    /// Kind-specific detail: `flags` after a `flag`, `from` for a `move`.
+    ///
+    /// Always present, `{}` when there is nothing to add: a consumer matching
+    /// on `detail.flags` should not also have to handle a missing `detail`.
+    pub detail: serde_json::Value,
+}
+
+/// `watch` as a single document, for a caller that asked for a bounded slice
+/// of the feed rather than a stream.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ChangeList {
+    pub changes: Vec<Change>,
+    /// Pass back as `--cursor`. Present even when no events were returned, so
+    /// a caller that polls does not re-read what it has seen.
+    ///
+    /// Opaque: a workspace is several stores, and the position in one of them
+    /// is not a position in the others.
+    pub cursor: String,
+    /// True when the feed had been trimmed past the requested cursor: events
+    /// were missed, and a full listing is the way back to a known state.
+    ///
+    /// Always present. This is the field a caller must check to know its view
+    /// is complete, and one that appears only when the news is bad is one
+    /// nobody writes the check for.
+    pub truncated: bool,
+}
+
 /// One message set aside, and where its timer lives.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Snoozed {

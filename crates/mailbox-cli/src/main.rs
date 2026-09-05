@@ -17,6 +17,7 @@ mod pairing;
 mod qr;
 mod sending;
 mod table;
+mod watching;
 
 use std::process::ExitCode;
 
@@ -120,6 +121,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Folders(args) => commands::folders(&ctx, args),
         Command::Accounts(args) => commands::accounts(&ctx, args),
         Command::Sync(args) => commands::sync(&ctx, args),
+        Command::Watch(args) => watching::watch(&ctx, args),
         Command::Status => commands::status(&ctx),
         Command::Notify(args) => commands::notify(&ctx, args),
         Command::Tui => commands::tui(&ctx),
@@ -148,6 +150,9 @@ fn needs_write(cmd: &Command) -> bool {
         | Command::Send(_)
         | Command::Compose(_)
         | Command::Reply(_) => true,
+        // `watch` becomes the sync engine unless told not to (§6.4), and a
+        // read-only handle could not.
+        Command::Watch(args) => !args.no_sync,
         // The TUI writes: flags, moves, and a sync it starts itself.
         Command::Tui => true,
         // The GUI's reading handle is read-only; its writes open their own

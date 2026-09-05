@@ -194,6 +194,7 @@ fn every_command_conforms_to_its_published_schema() {
         ("folders", vec!["folders"]),
         ("accounts", vec!["accounts"]),
         ("status", vec!["status"]),
+        ("watch", vec!["watch", "--drain", "--cursor", "test:0"]),
     ] {
         let document = cli.ok(&args);
         assert_conforms(&cli, command, &document);
@@ -209,6 +210,7 @@ fn every_success_is_stamped_with_the_schema_version() {
         vec!["folders"],
         vec!["accounts"],
         vec!["status"],
+        vec!["watch", "--drain"],
     ] {
         let doc = cli.ok(&args);
         assert_eq!(doc["schema"], "mailbox/v1", "{args:?}");
@@ -573,7 +575,7 @@ fn schema_with_no_argument_lists_the_commands() {
         .map(|c| c.as_str().unwrap())
         .collect();
     for expected in [
-        "ls", "search", "show", "folders", "accounts", "sync", "status",
+        "ls", "search", "show", "folders", "accounts", "sync", "status", "watch",
     ] {
         assert!(
             commands.contains(&expected),
