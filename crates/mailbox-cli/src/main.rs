@@ -12,6 +12,7 @@ mod cli;
 mod commands;
 mod format;
 mod gui;
+mod mcp;
 mod output;
 mod pairing;
 mod qr;
@@ -122,6 +123,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Accounts(args) => commands::accounts(&ctx, args),
         Command::Sync(args) => commands::sync(&ctx, args),
         Command::Watch(args) => watching::watch(&ctx, args),
+        Command::Mcp(args) => mcp::mcp(&ctx, args),
         Command::Status => commands::status(&ctx),
         Command::Notify(args) => commands::notify(&ctx, args),
         Command::Tui => commands::tui(&ctx),
@@ -153,6 +155,10 @@ fn needs_write(cmd: &Command) -> bool {
         // `watch` becomes the sync engine unless told not to (§6.4), and a
         // read-only handle could not.
         Command::Watch(args) => !args.no_sync,
+        // Every write `mcp` performs opens its own session (§4.1), so the
+        // handle it holds stays read-only — and is read-only in the stronger
+        // sense too when the server was started without `--yes`.
+        Command::Mcp(_) => false,
         // The TUI writes: flags, moves, and a sync it starts itself.
         Command::Tui => true,
         // The GUI's reading handle is read-only; its writes open their own

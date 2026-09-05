@@ -67,6 +67,59 @@ impl Cursor {
     }
 }
 
+/// One bounded read of the feed, for a caller that is not the CLI.
+///
+/// `mailbox mcp`'s `watch_events` is this: the same cursor, the same filter,
+/// the same truncation report. A second reader of the feed with its own idea
+/// of what a cursor means is how the two would drift.
+pub fn drain(
+    workspace: &Workspace,
+    cursor: Option<&str>,
+    since: Option<&str>,
+    events: &[String],
+    limit: usize,
+    clock: &mailbox_core::Clock,
+) -> Result<mailbox_api::ChangeList> {
+    let kinds = parse_kinds(events)?;
+    let resume = match cursor {
+        Some(c) => Some(Cursor::parse(c)?),
+        None => None,
+    };
+    let since = match since {
+        Some(s) => Some(parse_since(s, clock)?),
+        None => None,
+    };
+
+    let mut at = Cursor::default();
+    let mut changes = Vec::new();
+    let mut truncated = false;
+    for session in workspace.sessions() {
+        let account = &session.account_id;
+        let start = match (&resume, since) {
+            (Some(c), _) => c.get(account).unwrap_or(0),
+            (None, Some(t)) => session.store().change_seq_at(t)?,
+            // No cursor and no `since` is "everything you have", because a
+            // caller that asks once and acts is not a stream: starting it at
+            // the end would hand it nothing on the first call, every time.
+            (None, None) => 0,
+        };
+        let page = session.store().changes_since(start, limit)?;
+        truncated |= page.truncated;
+        at.set(account, page.cursor);
+        changes.extend(page.changes.into_iter().filter(|c| keep(c, &kinds)));
+    }
+    changes.sort_by_key(|c| c.at);
+    Ok(mailbox_api::ChangeList {
+        changes,
+        cursor: at.encode(),
+        truncated,
+    })
+}
+
+fn keep(change: &mailbox_api::Change, kinds: &[ChangeKind]) -> bool {
+    kinds.is_empty() || ChangeKind::parse(&change.event).is_some_and(|k| kinds.contains(&k))
+}
+
 pub fn watch(ctx: &Ctx<'_>, args: &WatchArgs) -> Result<()> {
     let kinds = wanted_kinds(args)?;
     let workspace = ctx.workspace()?;
@@ -155,9 +208,7 @@ fn stream(
             cursor.set(account, page.cursor);
 
             for change in page.changes {
-                if !kinds.is_empty()
-                    && !ChangeKind::parse(&change.event).is_some_and(|k| kinds.contains(&k))
-                {
+                if !keep(&change, kinds) {
                     continue;
                 }
                 quiet = false;
@@ -254,9 +305,13 @@ fn text(detail: &serde_json::Value, key: &str) -> String {
 
 /// Which events to emit. Empty means all of them.
 fn wanted_kinds(args: &WatchArgs) -> Result<Vec<ChangeKind>> {
-    let Some(names) = &args.events else {
-        return Ok(Vec::new());
-    };
+    match &args.events {
+        Some(names) => parse_kinds(names),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn parse_kinds(names: &[String]) -> Result<Vec<ChangeKind>> {
     let mut kinds = Vec::new();
     for name in names {
         let kind = ChangeKind::parse(name.trim()).ok_or_else(|| {

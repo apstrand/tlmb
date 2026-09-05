@@ -46,6 +46,7 @@ than retrofitted.
 | GUI (egui) and web (DOM), on one contract | done (§7, M5) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `watch`: the mailbox as a cursored event stream | done (§6.4, M7) |
+| `mcp`: the same operations as MCP tools over stdio | done (§6.4, M7) |
 | `--trace`, `sync --once --until`, `debug store-dump`, `debug fixture` | done (§6.7) |
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
@@ -462,6 +463,21 @@ there is no state in which one exists without the other. With nothing else
 running, `watch` becomes the sync engine itself (§4.1) so that mail actually
 arrives; beside a TUI or a `sync --watch` it follows instead, and the `started`
 event says which.
+
+`mailbox mcp` serves the same operations as MCP tools over stdio, for a model
+that speaks that instead of a shell:
+
+```json
+{ "mcpServers": { "mailbox": { "command": "mailbox", "args": ["mcp"] } } }
+```
+
+It is read-only as launched: the tools that change anything — flag, move,
+send, sync — are not merely refused but **not listed**, because a model cannot
+be talked into calling a tool it was never shown. `mailbox mcp --yes` offers
+them. Sending still goes through the outbox, so `policy.toml`, the approval
+queue, and idempotency keys apply exactly as they do to `mailbox send`: an
+unattended `send_message` comes back `pending_approval` and waits for a person.
+There is no second send path here to get that wrong.
 
 ## Testing
 

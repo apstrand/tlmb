@@ -173,6 +173,9 @@ pub enum Command {
     /// Stream mailbox events: new mail, flags, moves, sends (§6.4).
     Watch(WatchArgs),
 
+    /// Serve the same operations as MCP tools over stdio (§6.4).
+    Mcp(McpArgs),
+
     /// Queues, errors, connectivity, store size.
     Status,
 
@@ -534,6 +537,19 @@ pub enum AccountsAction {
         /// Which account. Defaults to `--account` or the only one configured.
         account: Option<String>,
     },
+}
+
+/// `mailbox mcp` (§6.4): the contract as MCP tools.
+#[derive(Debug, Args)]
+pub struct McpArgs {
+    /// Offer the tools that change the mailbox: flag, move, send, sync.
+    ///
+    /// A synonym for `--yes`, which §6.4 already defines as the consent that
+    /// unlocks a state-changing command in agent mode. Without it those tools
+    /// are not listed at all — a model cannot be argued into calling a tool it
+    /// has never been shown.
+    #[arg(long)]
+    pub write: bool,
 }
 
 /// `mailbox watch` (§6.4): the event stream an agent loops on.
