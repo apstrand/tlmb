@@ -611,3 +611,128 @@ fn nonsense_is_answered_rather_than_crashing_the_server() {
     let (status, _, _) = s.get("/api/ls", &s.auth());
     assert_eq!(status, 200);
 }
+
+// ---- writing mail (§7) ----
+
+/// The *From* selector's options: the account's address and any alias.
+#[test]
+fn the_identities_a_message_may_be_sent_as_are_listed() {
+    let s = Serving::start();
+    let listed = s.api("/api/identities");
+
+    let identities = listed["identities"].as_array().expect("identities");
+    assert_eq!(identities[0]["address"], "peter@example.com", "{listed:#}");
+    assert_eq!(identities[0]["primary"], true, "{listed:#}");
+    assert_eq!(identities[0]["account"], "test", "{listed:#}");
+}
+
+/// Replying starts from a draft the *core* built. What a reply quotes and
+/// which addresses a reply-all keeps are decisions with one right answer per
+/// message, and two interfaces deriving them separately is how "reply" starts
+/// meaning different things in different windows.
+#[test]
+fn a_reply_draft_comes_back_addressed_and_quoted() {
+    let s = Serving::start();
+    let id = s.id_of("Second");
+
+    let draft = s.api(&format!("/api/reply?id={id}"));
+    assert_eq!(draft["to"][0], "Bob <bob@example.com>", "{draft:#}");
+    assert_eq!(draft["subject"], "Re: Second", "{draft:#}");
+    assert!(
+        draft["body"].as_str().unwrap().contains("goodbye"),
+        "the original is not quoted: {draft:#}"
+    );
+    // Threading (§5.6) depends on this, and a compose box cannot invent it.
+    assert_eq!(draft["in_reply_to"], "<two@example.com>", "{draft:#}");
+
+    let forward = s.api(&format!("/api/reply?id={id}&mode=forward"));
+    assert!(
+        forward["subject"].as_str().unwrap().starts_with("Fwd:"),
+        "{forward:#}"
+    );
+    assert!(
+        forward["to"].as_array().unwrap().is_empty(),
+        "a forward addresses nobody: {forward:#}"
+    );
+}
+
+#[test]
+fn an_unknown_reply_mode_is_named_rather_than_guessed() {
+    let s = Serving::start();
+    let (status, _, body) = s.get(
+        &format!("/api/reply?id={}&mode=sideways", s.first_id()),
+        &s.auth(),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("sender, all, or forward"), "{body}");
+}
+
+/// §5.5: sending queues. A message goes to the outbox and the outbox is
+/// flushed by a sync pass — which is what makes the undo window and a crash
+/// between "queued" and "sent" survivable.
+#[test]
+fn sending_queues_the_message_rather_than_transmitting_it() {
+    let s = Serving::start();
+
+    let (status, result) = s.post(
+        "/api/send",
+        r#"{"to":["bob@example.com"],"subject":"Hello","body":"A message."}"#,
+    );
+    assert_eq!(status, 200, "{result:#}");
+    assert_eq!(result["status"], "queued", "{result:#}");
+    assert_eq!(result["recipients"][0], "bob@example.com", "{result:#}");
+    assert!(result["bytes"].as_u64().unwrap_or(0) > 0, "{result:#}");
+
+    let outbox = s.api("/api/outbox");
+    let queued = outbox["messages"].as_array().expect("messages");
+    assert_eq!(queued.len(), 1, "{outbox:#}");
+    assert_eq!(queued[0]["subject"], "Hello", "{outbox:#}");
+}
+
+/// A blind copy reaches the envelope and no header — the whole of what makes
+/// it blind.
+#[test]
+fn a_blind_copy_stays_out_of_the_headers() {
+    let s = Serving::start();
+
+    let (status, result) = s.post(
+        "/api/send",
+        r#"{"to":["bob@example.com"],"bcc":["secret@example.com"],"subject":"H","body":"b"}"#,
+    );
+    assert_eq!(status, 200, "{result:#}");
+
+    let recipients: Vec<&str> = result["recipients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert!(recipients.contains(&"secret@example.com"), "{result:#}");
+
+    let outbox = s.api("/api/outbox");
+    let text = serde_json::to_string(&outbox).unwrap();
+    assert!(
+        !text.contains("secret@example.com") || !text.contains("\"Bcc\""),
+        "a blind copy appeared in a header: {outbox:#}"
+    );
+}
+
+/// A message with nobody to send it to is the caller's mistake, and is named
+/// rather than queued and failed later.
+#[test]
+fn a_message_with_no_recipient_is_refused() {
+    let s = Serving::start();
+
+    let (status, body) = s.post("/api/send", r#"{"subject":"Hello","body":"A message."}"#);
+    assert_eq!(status, 400, "{body:#}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("recipient"),
+        "{body:#}"
+    );
+
+    let (status, body) = s.post("/api/send", r#"{"to":["not an address"],"subject":"x"}"#);
+    assert_eq!(status, 400, "{body:#}");
+}

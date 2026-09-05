@@ -203,6 +203,54 @@ pub struct SyncReport {
     pub duration_ms: u64,
 }
 
+/// A message being written (§7), as it crosses the contract.
+///
+/// Addresses are text rather than [`Address`] because that is what a compose
+/// box has: someone typed `Alice <a@b>, bob@c` into a field. Parsing it is the
+/// core's job, once, so the browser and the desktop window cannot disagree
+/// about what a comma means.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DraftSpec {
+    /// Which identity to send as. One of `accounts`' addresses or aliases;
+    /// absent means the account's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    /// Reaches the SMTP envelope and no header — which is the whole of what
+    /// makes a blind copy blind.
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    /// Set when replying, so the message threads (§5.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+}
+
+/// The addresses an account may send as (§7's *From* selector).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Identity {
+    pub account: String,
+    /// `Name <address>` where a name is configured, the bare address
+    /// otherwise — ready to put in a menu.
+    pub display: String,
+    pub address: String,
+    /// True for the account's own address, false for an alias.
+    pub primary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IdentityList {
+    pub identities: Vec<Identity>,
+}
+
 /// What `send`, `compose`, and `reply` report.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SendResult {

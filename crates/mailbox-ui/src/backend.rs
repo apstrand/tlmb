@@ -12,7 +12,9 @@
 //! be the same interface. So the contract is deliberately one a `fetch` can
 //! satisfy: submit, carry on drawing, collect later.
 
-use mailbox_api::{FolderList, MessageList, ShowResult, SyncResult};
+use mailbox_api::{
+    DraftSpec, FolderList, IdentityList, MessageList, SendResult, ShowResult, SyncResult,
+};
 
 /// Identifies a request, so a late answer to an old question can be discarded.
 ///
@@ -49,6 +51,35 @@ pub enum Request {
         until: Option<String>,
     },
     Sync,
+    /// The addresses this account may send as (§7's *From* selector).
+    Identities,
+    /// The draft a reply, reply-all, or forward starts from. Built by the
+    /// core, which owns what a reply quotes and which addresses it keeps.
+    ReplyDraft {
+        id: String,
+        mode: ReplyKind,
+    },
+    /// Queue a message (§5.5). Queued, never sent: the outbox is flushed by a
+    /// sync pass.
+    Send(Box<DraftSpec>),
+}
+
+/// How a reply addresses itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyKind {
+    Sender,
+    All,
+    Forward,
+}
+
+impl ReplyKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReplyKind::Sender => "sender",
+            ReplyKind::All => "all",
+            ReplyKind::Forward => "forward",
+        }
+    }
 }
 
 /// An answer. The error side is a string because it has already crossed a
@@ -66,6 +97,10 @@ pub enum Response {
     /// A write finished. The string is what to say about it.
     Changed(Result<String, String>),
     Synced(Result<Box<SyncResult>, String>),
+    Identities(Result<Box<IdentityList>, String>),
+    /// A draft to open a compose window on.
+    Draft(Result<Box<DraftSpec>, String>),
+    Sent(Result<Box<SendResult>, String>),
 }
 
 /// Where the mail comes from.

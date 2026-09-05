@@ -41,6 +41,7 @@ than retrofitted.
 | Pairing: QR, LAN, encrypted export file | done (§8, M4) |
 | Snooze, local-only (§7) | done (M5) |
 | Background sync: `IDLE`, poll fallback, one owner | done (§5.3, §4.1) |
+| Compose and reply in the web UI and the GUI | done (§7) |
 | `serve`: the local web API, token-gated | done (§3, M5) |
 | GUI (egui) and web (DOM), on one contract | done (§7, M5) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
@@ -91,6 +92,14 @@ ability to show the sanitized HTML of §9 *as HTML*:
 - remote images stay disarmed until you say otherwise, per sender and
   remembered, because loading them tells the sender you read it;
 - links open in a new tab and carry no referrer.
+
+Writing works from both: `m` for a new message, `r` and `R` to reply, `F` to
+forward, Ctrl-Enter to send. The draft a reply starts from is built by the core
+— what it quotes and which addresses a reply-all keeps have one right answer
+per message, and two interfaces deriving them separately is how "reply" starts
+meaning different things in different windows. Sending *queues* (§5.5): the
+outbox is flushed by a sync pass, which is what makes the undo window and a
+crash between "queued" and "sent" survivable.
 
 The keys are the terminal's where they can be: `j`/`k`, `/`, `u`, `f`, `s`,
 `d`, `z`. Below 45rem it folds to one pane at a time, which is what the QR code

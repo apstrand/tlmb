@@ -84,6 +84,123 @@ impl Draft {
 /// `domain` is used for the generated `Message-ID`. It comes from the sender's
 /// address rather than from the host name: a `Message-ID` naming the laptop it
 /// was written on tells every recipient something they did not need to know.
+/// Splits on commas that are not inside a quoted display name.
+///
+/// Here rather than in the CLI because every frontend takes addresses as text
+/// someone typed: the compose box in the browser, the desktop window, and
+/// `--to` all mean the same thing by `Alice <a@b>, bob@c`, and two parsers
+/// that agree today would not stay agreed.
+pub fn split_address_list(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for c in s.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                current.push(c);
+            }
+            ',' if !quoted => {
+                out.push(std::mem::take(&mut current));
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.trim().is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// `alice@example.com` or `Alice <alice@example.com>`.
+pub fn parse_address(s: &str) -> Result<Option<Address>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let (name, addr) = match (s.rfind('<'), s.rfind('>')) {
+        (Some(open), Some(close)) if close > open => (
+            s[..open].trim().trim_matches('"').to_string(),
+            s[open + 1..close].trim(),
+        ),
+        _ => (String::new(), s),
+    };
+    if !addr.contains('@') || addr.contains(' ') {
+        return Err(Error::usage(format!("`{s}` is not an email address")));
+    }
+    Ok(Some(Address::new(
+        Some(name).filter(|n| !n.is_empty()),
+        addr.to_string(),
+    )))
+}
+
+/// Turns the wire form of a draft into one that can be built.
+///
+/// Only the parsing and the shape; nothing here decides who the message is
+/// from or whether it may be sent — [`crate::Session::enqueue_send`] fills in
+/// the identity and applies §6.5's policy, and it must stay the only place
+/// that does.
+pub fn draft_from_spec(spec: &mailbox_api::DraftSpec) -> Result<Draft> {
+    let list = |fields: &[String]| -> Result<Vec<Address>> {
+        let mut out = Vec::new();
+        for field in fields {
+            out.extend(parse_address_list(field)?);
+        }
+        Ok(out)
+    };
+
+    Ok(Draft {
+        from: match &spec.from {
+            Some(from) => parse_address(from)?,
+            None => None,
+        },
+        to: list(&spec.to)?,
+        cc: list(&spec.cc)?,
+        bcc: list(&spec.bcc)?,
+        subject: spec.subject.clone(),
+        body: spec.body.clone(),
+        in_reply_to: spec.in_reply_to.clone(),
+        references: spec.references.clone(),
+        ..Default::default()
+    })
+}
+
+/// The wire form of a draft, for a reply the interface is about to open.
+pub fn spec_from_draft(draft: &Draft) -> mailbox_api::DraftSpec {
+    let list =
+        |addresses: &[Address]| -> Vec<String> { addresses.iter().map(format_address).collect() };
+
+    mailbox_api::DraftSpec {
+        from: draft.from.as_ref().map(format_address),
+        to: list(&draft.to),
+        cc: list(&draft.cc),
+        bcc: list(&draft.bcc),
+        subject: draft.subject.clone(),
+        body: draft.body.clone(),
+        in_reply_to: draft.in_reply_to.clone(),
+        references: draft.references.clone(),
+    }
+}
+
+/// `Alice <a@b>`, or the bare address when there is no name.
+pub fn format_address(address: &Address) -> String {
+    match &address.name {
+        Some(name) if !name.trim().is_empty() => format!("{name} <{}>", address.address),
+        _ => address.address.clone(),
+    }
+}
+
+/// Every address in one field of typed text.
+pub fn parse_address_list(text: &str) -> Result<Vec<Address>> {
+    let mut out = Vec::new();
+    for part in split_address_list(text) {
+        if let Some(address) = parse_address(&part)? {
+            out.push(address);
+        }
+    }
+    Ok(out)
+}
+
 pub fn build(draft: &Draft, clock: &Clock, rng: &Rng, domain: &str) -> Result<Vec<u8>> {
     let from = draft
         .from

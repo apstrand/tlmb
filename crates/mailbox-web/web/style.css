@@ -284,3 +284,89 @@ iframe.body {
 @media (min-width: 45.01rem) {
     #back { display: none !important; }
 }
+
+/* ---- the compose window (§7) ---- */
+
+dialog#compose-window {
+    width: min(46rem, 92vw);
+    max-height: 88vh;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: calc(var(--radius) + 3px);
+    background: var(--bg);
+    color: var(--text);
+    box-shadow: 0 12px 40px rgb(0 0 0 / .28);
+}
+
+dialog#compose-window::backdrop { background: rgb(0 0 0 / .35); }
+
+#compose-form {
+    display: flex;
+    flex-direction: column;
+    max-height: 88vh;
+}
+
+.field {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: .35rem .8rem;
+    border-bottom: 1px solid var(--line);
+}
+
+/* `display: flex` above beats the user agent's `[hidden] { display: none }`,
+   so hiding a field needs saying twice. */
+.field[hidden] { display: none; }
+
+.field label {
+    width: 4rem;
+    color: var(--text-dim);
+    flex: none;
+}
+
+.field input, .field select {
+    flex: 1;
+    min-width: 0;
+    padding: .3rem 0;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+}
+
+.field input:focus-visible, .field select:focus-visible { outline: none; }
+.field:focus-within { background: var(--bg-sunken); }
+
+#compose-body {
+    flex: 1;
+    min-height: 14rem;
+    padding: .8rem;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    resize: none;
+}
+
+#compose-body:focus-visible { outline: none; }
+
+.compose-actions {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .6rem .8rem;
+    border-top: 1px solid var(--line);
+    background: var(--bg-sunken);
+}
+
+.compose-actions .grow { flex: 1; }
+#compose-note { color: var(--text-dim); font-size: 13px; }
+
+button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+button.primary:hover { filter: brightness(1.08); background: var(--accent); }
+button:disabled { opacity: .55; cursor: default; }

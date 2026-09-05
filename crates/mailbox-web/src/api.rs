@@ -37,6 +37,10 @@ pub fn handle(
         ("GET", "folders") => reply(workspace.lock().unwrap().folders()),
         ("GET", "accounts") => reply(workspace.lock().unwrap().accounts()),
         ("GET", "status") => reply(workspace.lock().unwrap().status()),
+        ("GET", "identities") => reply(workspace.lock().unwrap().identities()),
+        ("GET", "reply") => reply_draft(request, workspace),
+        ("GET", "outbox") => outbox(workspace),
+        ("POST", "send") => send(request, session, tracer, clock),
         ("GET", "snoozed") => reply(
             workspace
                 .lock()
@@ -134,6 +138,92 @@ fn show(request: &Request, workspace: &Mutex<Workspace>) -> Result<Response> {
     };
     let workspace = workspace.lock().unwrap();
     let result = workspace.show(&IdRef::parse(id), &render, as_thread)?;
+    Ok(Response::json(200, &serde_json::to_value(result)?))
+}
+
+/// What is queued to go out (§5.5).
+///
+/// A compose window that says "sent" and then loses the message is worse than
+/// one that says "queued", so the interface has somewhere to show the queue.
+fn outbox(workspace: &Mutex<Workspace>) -> Result<Response> {
+    let workspace = workspace.lock().unwrap();
+    let mut messages = Vec::new();
+    for session in workspace.sessions() {
+        for entry in session.store().outbox_entries(None)? {
+            messages.push(mailbox_core::send::outbox_item(session.store(), &entry));
+        }
+    }
+    Ok(Response::json(
+        200,
+        &serde_json::to_value(mailbox_api::OutboxList { messages })?,
+    ))
+}
+
+/// The draft a reply, reply-all, or forward starts from (§7).
+///
+/// Built by the core, which owns what quoting looks like and which addresses a
+/// reply-all keeps — the interface should not be re-deriving either, and two
+/// interfaces deriving them differently is how "reply" starts meaning
+/// different things in different windows.
+fn reply_draft(request: &Request, workspace: &Mutex<Workspace>) -> Result<Response> {
+    use mailbox_core::send::ReplyMode;
+
+    let id = request
+        .query
+        .get("id")
+        .ok_or_else(|| Error::usage("reply needs an `id`"))?;
+    let mode = match request.query.get("mode").map(String::as_str) {
+        None | Some("sender") => ReplyMode::Sender,
+        Some("all") => ReplyMode::All,
+        Some("forward") => ReplyMode::Forward,
+        Some(other) => {
+            return Err(Error::usage(format!(
+                "`{other}` is not a reply mode; try sender, all, or forward"
+            )))
+        }
+    };
+
+    let workspace = workspace.lock().unwrap();
+    let (index, id) = workspace.locate(&IdRef::parse(id))?;
+    let draft = workspace.sessions()[index].reply_draft(&IdRef::Id(id), mode)?;
+    Ok(Response::json(
+        200,
+        &serde_json::to_value(mailbox_core::compose::spec_from_draft(&draft))?,
+    ))
+}
+
+/// Queues a message (§5.5).
+///
+/// Queues, never sends: the outbox is flushed by a sync pass or by
+/// `outbox send`. That separation is what makes the undo-send window and the
+/// approval queue possible, and what makes a crash between "queued" and "sent"
+/// recoverable rather than ambiguous — none of which the interface should have
+/// to know about.
+fn send(
+    request: &Request,
+    session: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+) -> Result<Response> {
+    let spec: mailbox_api::DraftSpec = serde_json::from_slice(&request.body)
+        .map_err(|e| Error::usage(format!("the request body is not a draft: {e}")))?;
+    let draft = mailbox_core::compose::draft_from_spec(&spec)?;
+
+    if draft.to.is_empty() && draft.cc.is_empty() && draft.bcc.is_empty() {
+        return Err(Error::usage("a message needs at least one recipient"));
+    }
+
+    let mut session = writable(session, tracer, clock)?;
+    let result = session.enqueue_send(&mailbox_core::send::SendRequest {
+        draft,
+        idempotency_key: None,
+        delay_seconds: 0,
+        dry_run: false,
+        // §6.5's external-recipient confirmation is answered by the person
+        // clicking Send in a window that shows them the recipients.
+        confirmed: true,
+        draft_only: false,
+    })?;
     Ok(Response::json(200, &serde_json::to_value(result)?))
 }
 

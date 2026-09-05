@@ -490,3 +490,41 @@ fn glob_matching_does_not_blow_up() {
     let subject = "a".repeat(64);
     assert!(!matches(pattern, &subject));
 }
+
+/// A reply to a reply is still `Re:` once. Taking the first suffix that
+/// normalizes the same way returns the whole subject — it always does, that
+/// being what normalizing means — so the prefix survived and compounded down
+/// the thread.
+#[test]
+fn a_reply_prefix_is_not_doubled() {
+    use mailbox_core::send::reply_subject_for_test as subject;
+    use mailbox_core::send::ReplyMode;
+
+    assert_eq!(subject("the parser", ReplyMode::Sender), "Re: the parser");
+    assert_eq!(
+        subject("Re: the parser", ReplyMode::Sender),
+        "Re: the parser"
+    );
+    assert_eq!(
+        subject("RE: Re: the parser", ReplyMode::Sender),
+        "Re: the parser"
+    );
+    // Other languages' prefixes are stripped too (§5.6's normalizer), and the
+    // reply goes out in ours.
+    assert_eq!(
+        subject("AW: the parser", ReplyMode::Sender),
+        "Re: the parser"
+    );
+    // Casing of what remains is the sender's, not folded.
+    assert_eq!(
+        subject("Re: The Quarterly Report", ReplyMode::Sender),
+        "Re: The Quarterly Report"
+    );
+    // A forward of a reply keeps neither prefix but its own.
+    assert_eq!(
+        subject("Re: the parser", ReplyMode::Forward),
+        "Fwd: the parser"
+    );
+    // A subject that is nothing but a prefix still says something.
+    assert_eq!(subject("Re:", ReplyMode::Sender), "Re: Re:");
+}

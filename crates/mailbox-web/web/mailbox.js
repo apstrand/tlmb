@@ -239,6 +239,9 @@ function actions(message) {
         flag(message.id, message.flags.includes("flagged")
             ? { remove: ["flagged"] }
             : { add: ["flagged"] }));
+    add("Reply", () => replyTo("sender"));
+    add("Reply all", () => replyTo("all"));
+    add("Forward", () => replyTo("forward"));
     add("Archive", () => moveTo(message.id, "archive"));
     add("Delete", () => moveTo(message.id, "trash"));
     add("Spam", () => moveTo(message.id, "junk"));
@@ -397,6 +400,119 @@ function folderButton(label, query, unread = 0) {
     return button;
 }
 
+// ---- writing (§7) ----
+
+const composeWindow = el("compose-window");
+let identities = [];
+
+async function loadIdentities() {
+    try {
+        identities = (await api("/api/identities")).identities ?? [];
+    } catch (e) {
+        fail(e);
+    }
+    const select = el("compose-from");
+    select.replaceChildren(...identities.map((identity) => {
+        const option = document.createElement("option");
+        option.value = identity.address;
+        option.textContent = identity.display;
+        return option;
+    }));
+}
+
+/// Opens the window on a draft. `null` is a blank one.
+function compose(draft) {
+    const values = draft ?? { to: [], cc: [], bcc: [], subject: "", body: "" };
+    el("compose-to").value = (values.to ?? []).join(", ");
+    el("compose-cc").value = (values.cc ?? []).join(", ");
+    el("compose-bcc").value = (values.bcc ?? []).join(", ");
+    el("compose-subject").value = values.subject ?? "";
+    el("compose-body").value = values.body ?? "";
+    el("compose-note").textContent = "";
+
+    // Threading is the core's to decide (§5.6), so it rides along untouched.
+    composeWindow.dataset.inReplyTo = values.in_reply_to ?? "";
+    composeWindow.dataset.references = JSON.stringify(values.references ?? []);
+
+    // §7: the From selector is one keystroke away, and defaults to the
+    // identity the thread was addressed to.
+    if (values.from) {
+        const wanted = values.from.match(/<([^>]+)>/)?.[1] ?? values.from;
+        const match = identities.find((i) => i.address === wanted.toLowerCase());
+        if (match) el("compose-from").value = match.address;
+    }
+
+    const hasCc = (values.cc ?? []).length > 0;
+    el("cc-field").hidden = !hasCc;
+    el("bcc-field").hidden = !hasCc;
+
+    composeWindow.showModal();
+    // A reply starts in the body; a new message starts in the To field,
+    // because that is the part that is empty.
+    const body = el("compose-body");
+    if (values.to?.length) {
+        body.focus();
+        // At the top, above the quotation. Focusing a textarea leaves the view
+        // wherever the browser put it, which for a long quoted reply is the
+        // bottom — so you start writing underneath someone else's message.
+        body.setSelectionRange(0, 0);
+        body.scrollTop = 0;
+    } else {
+        el("compose-to").focus();
+    }
+}
+
+async function replyTo(mode) {
+    if (!state.selected) return;
+    try {
+        const params = new URLSearchParams({ id: state.selected.id, mode });
+        compose(await api(`/api/reply?${params}`));
+    } catch (e) {
+        fail(e);
+    }
+}
+
+async function sendDraft() {
+    const button = el("compose-send");
+    button.disabled = true;
+    el("compose-note").textContent = "sending…";
+
+    const split = (value) =>
+        value.split(",").map((s) => s.trim()).filter(Boolean);
+
+    try {
+        const result = await post("/api/send", {
+            from: el("compose-from").value || undefined,
+            to: split(el("compose-to").value),
+            cc: split(el("compose-cc").value),
+            bcc: split(el("compose-bcc").value),
+            subject: el("compose-subject").value,
+            body: el("compose-body").value,
+            in_reply_to: composeWindow.dataset.inReplyTo || undefined,
+            references: JSON.parse(composeWindow.dataset.references || "[]"),
+        });
+        composeWindow.close();
+        // §5.5: queued, not sent. Saying "sent" when the outbox still holds it
+        // is a lie the moment submission fails.
+        say(`queued for ${result.recipients.join(", ")}`);
+    } catch (e) {
+        el("compose-note").textContent = "";
+        fail(e);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+el("compose").addEventListener("click", () => compose(null));
+el("compose-send").addEventListener("click", sendDraft);
+el("compose-discard").addEventListener("click", () => composeWindow.close());
+el("compose-cc-toggle").addEventListener("click", () => {
+    const hidden = el("cc-field").hidden;
+    el("cc-field").hidden = !hidden;
+    el("bcc-field").hidden = !hidden;
+    if (hidden) el("compose-cc").focus();
+});
+
 // ---- what the keyboard does (§7, the terminal's muscle memory) ----
 
 const keys = {
@@ -412,6 +528,12 @@ const keys = {
     d: () => withSelected((m) => moveTo(m.id, "trash")),
     z: () => withSelected((m) => snooze(m.id, "tomorrow")),
     "/": () => el("search").focus(),
+    m: () => compose(null),
+    r: () => replyTo("sender"),
+    R: () => replyTo("all"),
+    // `f` is flag in the terminal, so forwarding takes the next letter along
+    // rather than stealing it.
+    F: () => replyTo("forward"),
 };
 
 function move(delta) {
@@ -425,9 +547,25 @@ function withSelected(run) {
 }
 
 document.addEventListener("keydown", (event) => {
+    // The compose window owns every key while it is open. A `d` typed into a
+    // message must not delete the one behind it.
+    if (composeWindow.open) {
+        if (event.key === "Escape") composeWindow.close();
+        // Ctrl/Cmd-Enter sends, which is what every mail client has taught
+        // people to expect.
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            sendDraft();
+        }
+        return;
+    }
+
     // While a field has focus every key is text, or `/` could never be
-    // searched for.
-    const typing = event.target.matches("input, textarea");
+    // searched for. `instanceof` because a key event can be aimed at the
+    // document itself, which has no `matches`.
+    const typing =
+        event.target instanceof Element &&
+        event.target.matches("input, textarea, select");
     if (event.key === "Escape") {
         if (typing) event.target.blur();
         else if (state.query) { el("search").value = ""; run(""); }
@@ -477,4 +615,5 @@ el("sync").addEventListener("click", () =>
 el("host").textContent = location.host;
 
 loadFolders();
+loadIdentities();
 reload();

@@ -299,6 +299,11 @@ impl Session {
 }
 
 /// `Re:` once, `Fwd:` once — never `Re: Re: Re:`.
+/// [`reply_subject`], reachable from the test suite.
+pub fn reply_subject_for_test(subject: &str, mode: ReplyMode) -> String {
+    reply_subject(subject, mode)
+}
+
 fn reply_subject(subject: &str, mode: ReplyMode) -> String {
     let stripped = crate::threading::normalize_subject(subject);
     let base = if stripped.is_empty() {
@@ -318,11 +323,18 @@ fn reply_subject(subject: &str, mode: ReplyMode) -> String {
 /// stripped without folding the case of what remains.
 fn original_case(subject: &str, normalized: &str) -> String {
     let trimmed = subject.trim();
+    // The *shortest* suffix that still normalizes the same way. Taking the
+    // first match instead of the shortest returns the whole subject every
+    // time — the full string normalizes to the normalized form by definition,
+    // which is what normalizing means — so `Re: the parser` came back with its
+    // prefix intact and the reply went out as `Re: Re: the parser`. Down a
+    // long thread that compounds.
+    let mut best = trimmed;
     let mut start = 0;
     while start < trimmed.len() {
         let candidate = &trimmed[start..];
         if crate::threading::normalize_subject(candidate) == normalized {
-            return candidate.to_string();
+            best = candidate;
         }
         // Advance one character, staying on a boundary.
         start += trimmed[start..]
@@ -331,7 +343,7 @@ fn original_case(subject: &str, normalized: &str) -> String {
             .map(char::len_utf8)
             .unwrap_or(1);
     }
-    trimmed.to_string()
+    best.to_string()
 }
 
 /// The identity to answer from: whichever of ours the message was addressed to,

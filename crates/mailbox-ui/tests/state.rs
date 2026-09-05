@@ -161,7 +161,8 @@ fn work_is_outstanding_rather_than_waited_on() {
     let mut backend = Fake::default();
 
     app.start(&mut backend);
-    assert_eq!(app.in_flight, 2, "the first load should be two requests");
+    // The listing, the folders, and who we may write as.
+    assert_eq!(app.in_flight, 3, "the first load should be three requests");
     assert!(app.messages.is_empty(), "nothing was waited for");
 
     let seq = backend.seq_of(|r| matches!(r, Request::List { .. }));
@@ -465,4 +466,185 @@ fn folders_arrive_without_blocking_anything_else() {
 
     assert_eq!(app.folders.len(), 1);
     assert_eq!(app.folders[0].path, "INBOX");
+}
+
+// ---- writing (§7) ----
+
+fn identity_list() -> Response {
+    Response::Identities(Ok(Box::new(mailbox_api::IdentityList {
+        identities: vec![
+            mailbox_api::Identity {
+                account: "test".into(),
+                display: "peter@example.com".into(),
+                address: "peter@example.com".into(),
+                primary: true,
+            },
+            mailbox_api::Identity {
+                account: "test".into(),
+                display: "p.strand@example.com".into(),
+                address: "p.strand@example.com".into(),
+                primary: false,
+            },
+        ],
+    })))
+}
+
+#[test]
+fn the_first_frame_asks_who_we_can_write_as() {
+    let mut app = App::new();
+    let mut backend = Fake::default();
+    app.start(&mut backend);
+
+    assert!(backend.requests().contains(&Request::Identities));
+
+    let seq = backend.seq_of(|r| matches!(r, Request::Identities));
+    backend.ready.push((seq, identity_list()));
+    app.pump(&mut backend);
+    assert_eq!(app.identities.len(), 2);
+}
+
+/// A blank compose window opens without asking anyone anything.
+#[test]
+fn composing_needs_no_round_trip() {
+    let (mut app, mut backend) = loaded();
+    let seq = backend.seq_of(|r| matches!(r, Request::Identities));
+    backend.ready.push((seq, identity_list()));
+    app.pump(&mut backend);
+
+    let before = backend.sent.len();
+    app.compose();
+
+    assert!(app.draft.is_some());
+    assert_eq!(
+        app.draft.as_ref().unwrap().from.as_deref(),
+        Some("peter@example.com"),
+        "the From selector should start on the account's own address"
+    );
+    assert_eq!(
+        backend.sent.len(),
+        before,
+        "opening a window asked the server something"
+    );
+}
+
+/// Replying does need one: what a reply quotes and which addresses a reply-all
+/// keeps are the core's to decide, and an interface deriving them separately is
+/// how "reply" starts meaning different things in different windows.
+#[test]
+fn replying_asks_the_core_for_the_draft() {
+    let (mut app, mut backend) = loaded();
+
+    app.reply(mailbox_ui::backend::ReplyKind::All, &mut backend);
+    assert_eq!(
+        backend.requests().last(),
+        Some(&Request::ReplyDraft {
+            id: "id1".into(),
+            mode: mailbox_ui::backend::ReplyKind::All
+        })
+    );
+    assert!(
+        app.draft.is_none(),
+        "the window opens when the draft arrives"
+    );
+
+    let seq = backend.seq_of(|r| matches!(r, Request::ReplyDraft { .. }));
+    backend.ready.push((
+        seq,
+        Response::Draft(Ok(Box::new(mailbox_api::DraftSpec {
+            to: vec!["Alice <alice@example.com>".into()],
+            subject: "Re: Subject".into(),
+            body: "\n\n> quoted".into(),
+            in_reply_to: Some("<one@example.com>".into()),
+            ..Default::default()
+        }))),
+    ));
+    app.pump(&mut backend);
+
+    let draft = app.draft.as_ref().expect("a draft");
+    assert_eq!(draft.subject, "Re: Subject");
+    assert_eq!(draft.in_reply_to.as_deref(), Some("<one@example.com>"));
+}
+
+#[test]
+fn replying_with_nothing_selected_asks_for_nothing() {
+    let mut app = App::new();
+    let mut backend = Fake::default();
+    app.reply(mailbox_ui::backend::ReplyKind::Sender, &mut backend);
+    assert!(backend.sent.is_empty());
+}
+
+/// §5.5: queued, not sent. Saying "sent" while the outbox still holds it is a
+/// lie the moment submission fails.
+#[test]
+fn sending_reports_the_message_as_queued() {
+    let (mut app, mut backend) = loaded();
+    app.compose();
+    app.draft.as_mut().unwrap().to = vec!["bob@example.com".into()];
+
+    app.send(&mut backend);
+    assert!(app.sending, "the window should say it is working");
+    assert!(matches!(backend.requests().last(), Some(Request::Send(_))));
+
+    let seq = backend.seq_of(|r| matches!(r, Request::Send(_)));
+    backend.ready.push((
+        seq,
+        Response::Sent(Ok(Box::new(mailbox_api::SendResult {
+            id: 1,
+            message_id: "abc".into(),
+            status: "queued".into(),
+            recipients: vec!["bob@example.com".into()],
+            bytes: 400,
+            send_after: None,
+            duplicate: false,
+            raw: None,
+        }))),
+    ));
+    app.pump(&mut backend);
+
+    assert!(app.status.contains("queued"), "{}", app.status);
+    assert!(app.draft.is_none(), "the window should close on success");
+    assert!(!app.sending);
+}
+
+/// A refused send keeps the window open, because the text in it is the only
+/// copy of what someone wrote.
+#[test]
+fn a_refused_send_does_not_throw_the_message_away() {
+    let (mut app, mut backend) = loaded();
+    app.compose();
+    app.draft.as_mut().unwrap().to = vec!["bob@example.com".into()];
+    app.draft.as_mut().unwrap().body = "Please do not lose this.".into();
+    app.send(&mut backend);
+
+    let seq = backend.seq_of(|r| matches!(r, Request::Send(_)));
+    backend
+        .ready
+        .push((seq, Response::Sent(Err("the server said no".into()))));
+    app.pump(&mut backend);
+
+    assert_eq!(app.error.as_deref(), Some("the server said no"));
+    assert_eq!(
+        app.draft.as_ref().map(|d| d.body.as_str()),
+        Some("Please do not lose this."),
+    );
+    assert!(!app.sending, "and it can be tried again");
+}
+
+/// A message with nobody to send it to is caught before it costs a round trip.
+#[test]
+fn a_message_with_no_recipient_is_not_sent() {
+    let (mut app, mut backend) = loaded();
+    app.compose();
+    app.draft.as_mut().unwrap().subject = "Hello".into();
+
+    let before = backend.sent.len();
+    app.send(&mut backend);
+
+    assert_eq!(backend.sent.len(), before);
+    assert!(app
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("recipient"));
+    assert!(app.draft.is_some());
 }

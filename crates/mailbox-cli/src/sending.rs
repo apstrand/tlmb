@@ -325,7 +325,7 @@ fn session_for(ctx: &Ctx<'_>, from: Option<&str>) -> Result<Session> {
     let Some(from) = from else {
         return ctx.session();
     };
-    let address = parse_address(from)?
+    let address = mailbox_core::compose::parse_address(from)?
         .map(|a| a.address)
         .unwrap_or_else(|| from.to_string());
 
@@ -348,65 +348,16 @@ fn session_for(ctx: &Ctx<'_>, from: Option<&str>) -> Result<Session> {
 fn parse_addresses(list: &[String]) -> Result<Vec<Address>> {
     let mut out = Vec::new();
     for item in list {
-        for part in split_address_list(item) {
-            if let Some(a) = parse_address(&part)? {
-                out.push(a);
-            }
-        }
+        out.extend(mailbox_core::compose::parse_address_list(item)?);
     }
     Ok(out)
 }
 
 fn parse_one(value: Option<&str>) -> Result<Option<Address>> {
     match value {
-        Some(v) => parse_address(v),
+        Some(v) => mailbox_core::compose::parse_address(v),
         None => Ok(None),
     }
-}
-
-/// Splits on commas that are not inside a quoted display name.
-fn split_address_list(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut quoted = false;
-    for c in s.chars() {
-        match c {
-            '"' => {
-                quoted = !quoted;
-                current.push(c);
-            }
-            ',' if !quoted => {
-                out.push(std::mem::take(&mut current));
-            }
-            _ => current.push(c),
-        }
-    }
-    if !current.trim().is_empty() {
-        out.push(current);
-    }
-    out
-}
-
-/// `alice@example.com` or `Alice <alice@example.com>`.
-fn parse_address(s: &str) -> Result<Option<Address>> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Ok(None);
-    }
-    let (name, addr) = match (s.rfind('<'), s.rfind('>')) {
-        (Some(open), Some(close)) if close > open => (
-            s[..open].trim().trim_matches('"').to_string(),
-            s[open + 1..close].trim(),
-        ),
-        _ => (String::new(), s),
-    };
-    if !addr.contains('@') || addr.contains(' ') {
-        return Err(Error::usage(format!("`{s}` is not an email address")));
-    }
-    Ok(Some(Address::new(
-        Some(name).filter(|n| !n.is_empty()),
-        addr.to_string(),
-    )))
 }
 
 fn load_attachments(paths: &[std::path::PathBuf]) -> Result<Vec<Attachment>> {
@@ -481,7 +432,7 @@ fn draft_from_edited(text: &str) -> Result<Draft> {
             "to" => draft.to = parse_addresses(&[value.to_string()])?,
             "cc" => draft.cc = parse_addresses(&[value.to_string()])?,
             "bcc" => draft.bcc = parse_addresses(&[value.to_string()])?,
-            "from" => draft.from = parse_address(value)?,
+            "from" => draft.from = mailbox_core::compose::parse_address(value)?,
             "reply-to" => draft.reply_to = parse_addresses(&[value.to_string()])?,
             "subject" => draft.subject = value.to_string(),
             _ => {}

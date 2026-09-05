@@ -16,7 +16,7 @@ use mailbox_core::render::RenderOptions;
 use mailbox_core::session::{FlagSpec, IdRef, Session, SessionOptions};
 use mailbox_core::store::read::{ListOptions, Sort};
 use mailbox_core::{Clock, Tracer, Workspace};
-use mailbox_ui::backend::{Backend, Request, Response, Seq};
+use mailbox_ui::backend::{Backend, ReplyKind, Request, Response, Seq};
 
 use crate::commands::Ctx;
 
@@ -149,6 +149,9 @@ fn failure(request: &Request, message: &str) -> Response {
         Request::Open { .. } => Response::Opened(Err(message.to_string())),
         Request::Folders => Response::Folders(Err(message.to_string())),
         Request::Sync => Response::Synced(Err(message.to_string())),
+        Request::Identities => Response::Identities(Err(message.to_string())),
+        Request::ReplyDraft { .. } => Response::Draft(Err(message.to_string())),
+        Request::Send(_) => Response::Sent(Err(message.to_string())),
         _ => Response::Changed(Err(message.to_string())),
     }
 }
@@ -196,6 +199,36 @@ fn serve(
             }
 
             Request::Folders => Response::Folders(Ok(Box::new(workspace.folders()?))),
+
+            Request::Identities => Response::Identities(Ok(Box::new(workspace.identities()?))),
+
+            Request::ReplyDraft { id, mode } => {
+                use mailbox_core::send::ReplyMode;
+                let mode = match mode {
+                    ReplyKind::Sender => ReplyMode::Sender,
+                    ReplyKind::All => ReplyMode::All,
+                    ReplyKind::Forward => ReplyMode::Forward,
+                };
+                let (index, id) = workspace.locate(&IdRef::parse(id))?;
+                let draft = workspace.sessions()[index].reply_draft(&IdRef::Id(id), mode)?;
+                Response::Draft(Ok(Box::new(mailbox_core::compose::spec_from_draft(&draft))))
+            }
+
+            Request::Send(spec) => {
+                let draft = mailbox_core::compose::draft_from_spec(spec)?;
+                let mut session = writable(opts, tracer, clock)?;
+                let sent = session.enqueue_send(&mailbox_core::send::SendRequest {
+                    draft,
+                    idempotency_key: None,
+                    delay_seconds: 0,
+                    dry_run: false,
+                    // §6.5's external-recipient confirmation is answered by the
+                    // person clicking Send in a window showing the recipients.
+                    confirmed: true,
+                    draft_only: false,
+                })?;
+                Response::Sent(Ok(Box::new(sent)))
+            }
 
             Request::Flag { ids, add, remove } => {
                 let mut session = writable(opts, tracer, clock)?;

@@ -12,9 +12,9 @@
 //! which is what lets the same code run in a browser where blocking does not
 //! exist.
 
-use mailbox_api::{Folder, MessageDetail, MessageSummary};
+use mailbox_api::{DraftSpec, Folder, Identity, MessageDetail, MessageSummary};
 
-use crate::backend::{Backend, Request, Response, Seq};
+use crate::backend::{Backend, ReplyKind, Request, Response, Seq};
 
 /// How many rows a listing asks for.
 const PAGE: usize = 200;
@@ -44,6 +44,15 @@ pub struct App {
     /// working without ever waiting.
     pub in_flight: usize,
 
+    /// The addresses this workspace may send as (§7).
+    pub identities: Vec<Identity>,
+    /// The message being written, when there is one. `None` means no compose
+    /// window is open — the whole of what "open" means here.
+    pub draft: Option<DraftSpec>,
+    /// True while a draft is being queued, so Send can be disabled rather than
+    /// clicked twice.
+    pub sending: bool,
+
     next_seq: Seq,
     /// The listing request whose answer is still wanted. An older one that
     /// arrives late is dropped rather than painted over a newer result.
@@ -70,17 +79,59 @@ impl App {
             error: None,
             focus: Focus::List,
             in_flight: 0,
+            identities: Vec::new(),
+            draft: None,
+            sending: false,
             next_seq: 0,
             awaiting_list: None,
             awaiting_open: None,
         }
     }
 
-    /// The first load: the inbox and the folder list.
+    /// The first load: the inbox, the folder list, and who we can write as.
     pub fn start(&mut self, backend: &mut dyn Backend) {
         self.reload(backend);
-        let seq = self.issue(backend, Request::Folders);
-        let _ = seq;
+        self.issue(backend, Request::Folders);
+        self.issue(backend, Request::Identities);
+    }
+
+    /// Opens an empty compose window (§7).
+    pub fn compose(&mut self) {
+        self.draft = Some(DraftSpec {
+            from: self.identities.first().map(|i| i.address.clone()),
+            ..Default::default()
+        });
+    }
+
+    /// Asks the core for the draft a reply starts from.
+    ///
+    /// The core builds it because what a reply quotes and which addresses a
+    /// reply-all keeps have one right answer per message, and an interface
+    /// deriving them separately is how "reply" starts meaning different things
+    /// in different windows.
+    pub fn reply(&mut self, mode: ReplyKind, backend: &mut dyn Backend) {
+        let Some(id) = self.selected_id() else { return };
+        self.issue(backend, Request::ReplyDraft { id, mode });
+    }
+
+    pub fn discard_draft(&mut self) {
+        self.draft = None;
+        self.sending = false;
+    }
+
+    /// Queues what is in the compose window.
+    pub fn send(&mut self, backend: &mut dyn Backend) {
+        let Some(draft) = self.draft.clone() else {
+            return;
+        };
+        if draft.to.iter().all(|t| t.trim().is_empty())
+            && draft.cc.iter().all(|t| t.trim().is_empty())
+        {
+            self.error = Some("a message needs at least one recipient".into());
+            return;
+        }
+        self.sending = true;
+        self.issue(backend, Request::Send(Box::new(draft)));
     }
 
     pub fn selected_message(&self) -> Option<&MessageSummary> {
@@ -315,6 +366,36 @@ impl App {
                 }
                 Err(e) => self.error = Some(e),
             },
+
+            Response::Identities(result) => match result {
+                Ok(list) => self.identities = list.identities,
+                Err(e) => self.error = Some(e),
+            },
+
+            Response::Draft(result) => match result {
+                Ok(draft) => {
+                    self.error = None;
+                    self.draft = Some(*draft);
+                }
+                Err(e) => self.error = Some(e),
+            },
+
+            Response::Sent(result) => {
+                self.sending = false;
+                match result {
+                    Ok(sent) => {
+                        // §5.5: queued, not sent. Saying "sent" while the
+                        // outbox still holds it is a lie the moment submission
+                        // fails.
+                        self.status = format!("queued for {}", sent.recipients.join(", "));
+                        self.error = None;
+                        self.draft = None;
+                    }
+                    // The window stays open, because the text in it is the
+                    // only copy.
+                    Err(e) => self.error = Some(e),
+                }
+            }
 
             Response::Synced(result) => match result {
                 Ok(sync) => {

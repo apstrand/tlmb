@@ -341,6 +341,29 @@ impl Workspace {
         Ok(out)
     }
 
+    /// Every address these accounts may send as (§7's *From* selector).
+    ///
+    /// The account's own address first, then its aliases, in the order the
+    /// config lists them — so the default in a menu is the obvious one.
+    pub fn identities(&self) -> Result<mailbox_api::IdentityList> {
+        let mut identities = Vec::new();
+        for session in &self.accounts {
+            let config = session.account_config()?;
+            for (index, address) in config.all_identities().into_iter().enumerate() {
+                identities.push(mailbox_api::Identity {
+                    account: session.account_id.clone(),
+                    // The address itself. There is no configured display name
+                    // to put in front of it yet, and inventing one from the
+                    // account id would sign mail with a nickname nobody chose.
+                    display: address.clone(),
+                    address,
+                    primary: index == 0,
+                });
+            }
+        }
+        Ok(mailbox_api::IdentityList { identities })
+    }
+
     pub fn folders(&self) -> Result<FolderList> {
         let mut folders = Vec::new();
         for session in &self.accounts {

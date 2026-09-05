@@ -21,7 +21,7 @@ use egui::{Color32, Context, Key, RichText, ScrollArea, TextStyle};
 use mailbox_api::MessageSummary;
 
 use crate::app::{App, Focus};
-use crate::backend::Backend;
+use crate::backend::{Backend, ReplyKind};
 
 /// Colours, named by role. Deliberately few: the terminal palette's discipline
 /// applies here too.
@@ -117,6 +117,122 @@ pub fn draw(ctx: &Context, app: &mut App, backend: &mut dyn Backend) {
         .show(ctx, |ui| list(ui, app, backend));
 
     egui::CentralPanel::default().show(ctx, |ui| reading(ui, app, backend));
+
+    compose(ctx, app, backend);
+}
+
+/// The compose window (§7).
+///
+/// A window rather than a fourth pane: writing is something you finish and
+/// close, and it should not cost the message you were reading.
+fn compose(ctx: &Context, app: &mut App, backend: &mut dyn Backend) {
+    if app.draft.is_none() {
+        return;
+    }
+
+    let mut open = true;
+    let mut send = false;
+    let identities = app.identities.clone();
+    let sending = app.sending;
+
+    egui::Window::new("Write")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_width(560.0)
+        .default_height(420.0)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            let Some(draft) = app.draft.as_mut() else {
+                return;
+            };
+
+            egui::Grid::new("compose-fields")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("From").color(theme::DIM));
+                    // §7: one keystroke away, and defaulting to the identity
+                    // the thread was addressed to — which the core already
+                    // chose when it built the reply.
+                    let chosen = draft.from.clone().unwrap_or_default();
+                    egui::ComboBox::from_id_source("compose-from")
+                        .selected_text(if chosen.is_empty() { "—" } else { &chosen })
+                        .show_ui(ui, |ui| {
+                            for identity in &identities {
+                                ui.selectable_value(
+                                    &mut draft.from,
+                                    Some(identity.address.clone()),
+                                    &identity.display,
+                                );
+                            }
+                        });
+                    ui.end_row();
+
+                    for (label, field) in [
+                        ("To", &mut draft.to),
+                        ("Cc", &mut draft.cc),
+                        ("Bcc", &mut draft.bcc),
+                    ] {
+                        ui.label(RichText::new(label).color(theme::DIM));
+                        // One line holding a comma-separated list, as every
+                        // mail client presents it. The splitting is the core's,
+                        // done once for every frontend.
+                        let mut text = field.join(", ");
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut text)
+                                    .desired_width(ui.available_width()),
+                            )
+                            .changed()
+                        {
+                            *field = text
+                                .split(',')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                        }
+                        ui.end_row();
+                    }
+
+                    ui.label(RichText::new("Subject").color(theme::DIM));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut draft.subject)
+                            .desired_width(ui.available_width()),
+                    );
+                    ui.end_row();
+                });
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(!sending, egui::Button::new("Send"))
+                    .clicked()
+                {
+                    send = true;
+                }
+                if sending {
+                    ui.spinner();
+                }
+            });
+            ui.separator();
+
+            ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut draft.body)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(14),
+                    );
+                });
+        });
+
+    if send {
+        app.send(backend);
+    } else if !open {
+        app.discard_draft();
+    }
 }
 
 /// §7: multi-account is invisible until you want it. So this is a list of
@@ -276,6 +392,15 @@ fn reading(ui: &mut egui::Ui, app: &mut App, backend: &mut dyn Backend) {
     });
 
     ui.horizontal(|ui| {
+        if ui.button("Reply").clicked() {
+            app.reply(ReplyKind::Sender, backend);
+        }
+        if ui.button("Reply all").clicked() {
+            app.reply(ReplyKind::All, backend);
+        }
+        if ui.button("Forward").clicked() {
+            app.reply(ReplyKind::Forward, backend);
+        }
         if ui.button("Archive").clicked() {
             app.move_to("archive", backend);
         }
@@ -348,6 +473,19 @@ fn reading(ui: &mut egui::Ui, app: &mut App, backend: &mut dyn Backend) {
 
 /// §7 asks the GUI to share the terminal's muscle memory where it can.
 fn keyboard(ctx: &Context, app: &mut App, backend: &mut dyn Backend) {
+    // The compose window owns every key while it is open: a `d` typed into a
+    // message must not delete the one behind it.
+    if app.draft.is_some() {
+        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            app.discard_draft();
+        }
+        // What every mail client has taught people to expect.
+        if ctx.input(|i| i.key_pressed(Key::Enter) && (i.modifiers.command || i.modifiers.ctrl)) {
+            app.send(backend);
+        }
+        return;
+    }
+
     // While the search field has focus every key is text, or `/` could never
     // be searched for.
     if app.focus == Focus::Search {
@@ -386,9 +524,21 @@ fn keyboard(ctx: &Context, app: &mut App, backend: &mut dyn Backend) {
         if i.key_pressed(Key::Z) {
             app.snooze("tomorrow", backend);
         }
-        // `@` in the terminal; here it is a plain letter, since a GUI has a
-        // button for this and the key is a convenience.
+        if i.key_pressed(Key::M) {
+            app.compose();
+        }
         if i.key_pressed(Key::R) {
+            // Shift for everyone, as the terminal has it.
+            let mode = if i.modifiers.shift {
+                ReplyKind::All
+            } else {
+                ReplyKind::Sender
+            };
+            app.reply(mode, backend);
+        }
+        // Sync has a button; the key is only a convenience, and `r` belongs
+        // to reply the way it does in the terminal.
+        if i.key_pressed(Key::G) {
             app.sync(backend);
         }
     });

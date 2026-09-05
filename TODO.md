@@ -72,6 +72,13 @@ off, and the gaps found along the way.
 - **The narrow layout is unverified visually.** The rules and the pane
   switching are exercised, but the window manager here ignored every resize, so
   nobody has actually looked at it on a phone-shaped screen.
-- **Compose in the GUI.** §7 asks for a compose window with a *From* selector
-  one keystroke away. The interface reads and triages; it does not yet write a
-  message.
+- **Attachments in compose.** §7 asks for "attachment drag/paste/`--attach`";
+  the CLI has `--attach` and neither window does. It wants a multipart upload
+  route and a size the browser will not choke on.
+- **Drafts are not saved.** §7 wants them "stored in the outbox and synced to
+  the server's Drafts folder". Closing a compose window discards it — the
+  window warns nobody, and it should.
+- **No display name on an identity.** The *From* selector shows bare
+  addresses, because no config field holds a name. Mail goes out without one.
+- **Markdown→HTML compose.** §7 offers it optionally; both windows send plain
+  text only.
