@@ -51,7 +51,8 @@ than retrofitted.
 | Fixture format | done (§14.1) |
 | L0 and L2 suites | done (§14.2) |
 
-### In progress: M2
+M1 through M5 and M7 are done; M6 (mobile) is below, and M8 — the cross-device
+state folder, `mailbox devices`, and the pairing relay — is not started.
 
 ### The web interface
 
@@ -253,15 +254,17 @@ push notifier of §11 are not in this cut.
 - **OAuth2 and `accounts add`.** Autoconfig discovery and the system-browser
   PKCE flow. A built-in host table covers Gmail/Fastmail/Outlook/Yahoo/iCloud/
   Proton so the iOS setup can skip the hosts for those.
-- **Instance coordination.** The owner lock and the Unix socket of §4.1 are
-  designed but not built; today a write command opens the store directly.
-  Reads already take the read-only path, which is the half that matters most.
-- **Account setup.** `accounts add`, autoconfig discovery, and OAuth2 are M2.
-  An account is configured by hand (below), and credentials come from
-  `credential_command`, the OS keychain via its own CLI, or an environment
-  variable.
-- **`IDLE` and a background loop.** `sync --once` is the only mode.
-- **`COMPRESS=DEFLATE`**, `raw:` server-side search passthrough, and tags.
+- **The §4.1 owner socket.** The advisory lock is built — exactly one process
+  is an account's sync engine, and a loser is told so truthfully, since its
+  local writes are already queued and the owner pushes them. What is missing is
+  the socket that would let the loser have its writes performed *now*.
+- **Account setup.** `accounts add` and autoconfig discovery. An account is
+  configured by hand (below), and credentials come from `credential_command`,
+  the OS keychain via its own CLI, or an environment variable.
+- **`COMPRESS=DEFLATE`** and `raw:` server-side search passthrough.
+- **The cross-device state folder** (§5.4), and with it shared tags, saved
+  searches, and snooze that follows you between machines. All three are local
+  today. M8.
 
 ## Building
 
@@ -273,7 +276,7 @@ No runtime, no daemon, no database server. SQLite is compiled in.
 
 ## Adding an account
 
-`accounts add` and autoconfig discovery are M2. For now an account is a stanza
+`accounts add` and autoconfig discovery are not built. For now an account is a stanza
 in `$XDG_CONFIG_HOME/mailbox/config.toml` (default
 `~/.config/mailbox/config.toml`); everything is optional except the address and
 the server ([§12](SPEC.md)):

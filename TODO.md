@@ -20,6 +20,13 @@ off, and the gaps found along the way.
   that would let the loser have its writes performed *now*, and share the warm
   connection pool.
 
+- **`watch` syncs for all its accounts or none.** It takes ownership (§4.1) of
+  every account in scope or gives up on syncing entirely, because the sync loop
+  takes a whole workspace and partial ownership would mean quietly following
+  some accounts while syncing others. `--account` narrows it back to a single
+  one, which is the honest workaround. A thread per account fixes this and the
+  two idling items above together.
+
 ## Verification gaps
 
 - **L2 against Cyrus and Stalwart.** M2 requires it (§15) and it is the one

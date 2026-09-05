@@ -666,3 +666,91 @@ fn read_only_opens_refuse_writes() {
         "a read-only store must refuse to write"
     );
 }
+
+// ---- §6.4: the change feed ----
+
+/// Seeding the store wrote arrivals, and a cursor walks them in order.
+#[test]
+fn the_feed_is_ordered_and_cursored() {
+    let fx = Fx::new();
+    let all = fx.store.changes_since(0, 100).expect("read the feed");
+    assert!(!all.changes.is_empty(), "seeding should have said so");
+    assert!(
+        all.changes.windows(2).all(|w| w[0].seq < w[1].seq),
+        "the feed is a log, and a log is in order"
+    );
+    assert_eq!(all.cursor, all.changes.last().unwrap().seq);
+    assert!(!all.truncated);
+
+    // A cursor mid-log returns the tail, and nothing before it.
+    let mid = all.changes[0].seq;
+    let rest = fx.store.changes_since(mid, 100).expect("resume");
+    assert_eq!(rest.changes.len(), all.changes.len() - 1);
+    assert!(rest.changes.iter().all(|c| c.seq > mid));
+}
+
+/// A watcher away longer than the log is told so, rather than resumed silently
+/// short. Being handed a partial mailbox with no way to notice is the failure
+/// this field exists to prevent.
+#[test]
+fn a_cursor_the_feed_has_outlived_reports_truncated() {
+    let mut fx = Fx::new();
+    let all = fx.store.changes_since(0, 100).expect("read the feed");
+    let first = all.changes[0].seq;
+
+    // Simulate the trim: drop everything up to and including the event this
+    // cursor is sitting on, plus the one after it.
+    fx.store
+        .transaction("trim-for-test", |tx| {
+            tx.execute("DELETE FROM changes WHERE seq <= ?1", [first + 1])?;
+            Ok(())
+        })
+        .expect("trim");
+
+    let page = fx.store.changes_since(first, 100).expect("resume");
+    assert!(
+        page.truncated,
+        "the event after this cursor is gone, and the caller must hear about it"
+    );
+
+    // And a cursor that is still covered is not reported as truncated.
+    let live = page.changes.first().map(|c| c.seq).expect("something left");
+    assert!(!fx.store.changes_since(live, 100).expect("resume").truncated);
+}
+
+/// Reading does not consume: two watchers at the same cursor see the same
+/// events, which is what makes the feed a log rather than a queue.
+#[test]
+fn reading_the_feed_leaves_it_alone() {
+    let fx = Fx::new();
+    let once = fx.store.changes_since(0, 100).expect("read");
+    let twice = fx.store.changes_since(0, 100).expect("read again");
+    assert_eq!(once.changes.len(), twice.changes.len());
+    assert_eq!(once.cursor, twice.cursor);
+}
+
+/// A local write is marked local; one the server told us about is not. An
+/// agent that flags what it reads would otherwise wake itself up.
+#[test]
+fn the_feed_separates_this_devices_writes_from_the_servers() {
+    let mut fx = Fx::new();
+    let id = fx.id("root").to_string();
+    let before = fx.store.latest_change().expect("cursor");
+
+    fx.store
+        .set_flags(&id, &["seen".to_string()], &[])
+        .expect("flag");
+
+    let page = fx.store.changes_since(before, 100).expect("read");
+    let event = page.changes.first().expect("an event for the write");
+    assert_eq!(event.event, "flag");
+    assert!(event.local, "this device set that flag");
+
+    // Whereas the arrivals that seeded the store came from the server.
+    let arrivals = fx.store.changes_since(0, 100).expect("read");
+    assert!(arrivals
+        .changes
+        .iter()
+        .filter(|c| c.event == "new")
+        .all(|c| !c.local));
+}
