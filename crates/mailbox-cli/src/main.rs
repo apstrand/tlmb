@@ -79,6 +79,10 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
     let opts = SessionOptions {
         account: cli.global.account.clone(),
         config_path: cli.global.config.clone(),
+        // The mobile shells pass their own directory here; on a desktop the
+        // XDG path is the right one, and `MAILBOX_STATE_DIR` already relocates
+        // it (§6.7).
+        state_dir: None,
         // Reads skip ownership entirely (§4.1). Only the commands that write
         // ask for a writable store.
         read_only: !needs_write(&cli.command),
