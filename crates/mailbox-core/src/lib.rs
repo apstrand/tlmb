@@ -22,6 +22,7 @@ pub mod imap;
 pub mod mime;
 pub mod notify;
 pub mod open;
+pub mod owner;
 pub mod pair;
 pub mod paths;
 pub mod policy;

@@ -100,6 +100,17 @@ impl Write for Transport {
     }
 }
 
+/// How an [`Connection::idle`] wait ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Idle {
+    /// The server sent something. What it was is not interpreted here — the
+    /// next sync pass finds out.
+    Woken,
+    /// The window passed in silence. The caller re-idles, which is also what
+    /// keeps the connection from being dropped by a middlebox.
+    TimedOut,
+}
+
 pub struct Connection {
     transport: Transport,
     buf: Vec<u8>,
@@ -111,6 +122,9 @@ pub struct Connection {
     pub capabilities: BTreeSet<String>,
     /// Set once `ENABLE QRESYNC` has been accepted.
     pub qresync_enabled: bool,
+    /// The ordinary read timeout, restored after an `IDLE` borrows the socket
+    /// for a much longer one.
+    timeout: Duration,
 }
 
 /// Everything a command produced: the untagged responses, and how it ended.
@@ -183,6 +197,8 @@ impl Connection {
                 recorder: None,
                 capabilities,
                 qresync_enabled,
+                // A transcript answers from memory; the number is never used.
+                timeout: Duration::from_secs(30),
             },
             divergence,
         ))
@@ -261,6 +277,7 @@ impl Connection {
             recorder,
             capabilities: BTreeSet::new(),
             qresync_enabled: false,
+            timeout: cfg.timeout,
         };
 
         // The greeting. `BYE` here means the server refused us outright — too
@@ -417,6 +434,87 @@ impl Connection {
             self.qresync_enabled = true;
         }
         Ok(())
+    }
+
+    /// Waits on `IDLE` (RFC 2177) until the server says something or `window`
+    /// passes, then ends the wait and returns what it saw.
+    ///
+    /// The window is the caller's, and it is not optional: RFC 2177 requires
+    /// the client to re-issue `IDLE` at least every 29 minutes, and middleboxes
+    /// drop idle connections long before that. So this always returns — with
+    /// [`Idle::Woken`] when the server spoke, [`Idle::TimedOut`] when it did
+    /// not — and the loop above decides whether to sync, re-idle, or give up.
+    ///
+    /// Ending the wait is `DONE`, and it is sent whichever way the wait ended.
+    /// Leaving a connection in the idling state and sending it a command is how
+    /// a client and a server stop agreeing about what a response answers.
+    pub fn idle(&mut self, window: Duration) -> Result<Idle> {
+        if !self.has_capability("IDLE") {
+            return Err(Error::protocol("this server does not offer IDLE"));
+        }
+
+        let tag = self.send("IDLE")?;
+
+        // The server must acknowledge with a continuation before it is idling.
+        // Anything else — including a tagged NO — means it is not, and there is
+        // nothing to end.
+        loop {
+            match self.read_response()? {
+                Response::Continue { .. } => break,
+                Response::Done { status, .. } => {
+                    return Err(Error::protocol(format!(
+                        "server refused IDLE with {status:?}"
+                    )))
+                }
+                // Untagged data before the continuation is unusual but legal,
+                // and it is news either way.
+                _ => continue,
+            }
+        }
+        self.tracer
+            .emit1(event::IMAP_IDLE, "window_ms", window.as_millis() as u64);
+
+        // One read, bounded by the window. Anything at all from the server
+        // during IDLE is a reason to sync — EXISTS, EXPUNGE, FETCH, or a bare
+        // untagged OK from a server keeping the connection warm. Telling them
+        // apart here would be guessing at what changed; the sync pass knows.
+        self.set_read_timeout(window)?;
+        let outcome = self.read_response();
+        self.restore_read_timeout()?;
+
+        let woken = match outcome {
+            Ok(Response::Done { .. }) => {
+                // The server ended the command itself, so there is nothing to
+                // terminate and no completion left to collect.
+                return Ok(Idle::Woken);
+            }
+            Ok(_) => true,
+            Err(Error::Timeout(_)) => false,
+            Err(e) => return Err(e),
+        };
+
+        // Whichever way the wait ended. A connection left in the idling state
+        // reads the next command as the terminator and attributes IDLE's
+        // completion to it, which is how a client and a server stop agreeing
+        // about what a response answers.
+        self.send_raw("DONE", false)?;
+        self.collect(tag)?;
+
+        Ok(if woken { Idle::Woken } else { Idle::TimedOut })
+    }
+
+    fn set_read_timeout(&mut self, timeout: Duration) -> Result<()> {
+        match &self.transport {
+            Transport::Plain(s) => s.set_read_timeout(Some(timeout))?,
+            Transport::Tls(s) => s.get_ref().set_read_timeout(Some(timeout))?,
+            // A recorded conversation answers instantly or not at all.
+            Transport::Replay(_) | Transport::Upgrading => {}
+        }
+        Ok(())
+    }
+
+    fn restore_read_timeout(&mut self) -> Result<()> {
+        self.set_read_timeout(self.timeout)
     }
 
     pub fn logout(&mut self) -> Result<()> {

@@ -537,11 +537,35 @@ pub enum AccountsAction {
 pub struct SyncArgs {
     /// Run exactly one pass to quiescence and exit (§6.7).
     ///
-    /// M1 has no background loop, so this is the only mode; it is a flag rather
-    /// than the absence of one because later milestones add the loop and this
-    /// spelling must keep meaning what it means now.
+    /// The default, and what every end-to-end test steps the engine with. The
+    /// loop is `--watch`.
     #[arg(long, default_value_t = true)]
     pub once: bool,
+
+    /// Keep syncing: wait on `IDLE` and sync again whenever the server speaks
+    /// (§5.3).
+    ///
+    /// Runs until interrupted. Only one process may be an account's sync
+    /// engine (§4.1), so this refuses to start if another already is.
+    #[arg(long, conflicts_with_all = ["until", "since"])]
+    pub watch: bool,
+
+    /// How often to sync when the server does not offer `IDLE`, in seconds.
+    #[arg(long, default_value_t = 300, value_name = "SECONDS")]
+    pub poll: u64,
+
+    /// The longest single `IDLE` before re-issuing it, in seconds.
+    ///
+    /// RFC 2177's ceiling is 29 minutes, and this is clamped to it. The default
+    /// is well under it because a NAT that drops an idle connection does so
+    /// silently. Anything under a minute reconnects more than it waits, and is
+    /// only useful for testing.
+    #[arg(long, default_value_t = 540, value_name = "SECONDS")]
+    pub idle_window: u64,
+
+    /// Stop after this many passes. For tests.
+    #[arg(long, hide = true)]
+    pub max_passes: Option<usize>,
 
     /// Fetch every body, for offline use.
     #[arg(long)]

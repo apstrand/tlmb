@@ -60,6 +60,15 @@ impl Ctx<'_> {
     /// do. Treating a non-TTY as a missing confirmation would break
     /// `mailbox sync` from cron, from a systemd timer, and from every script,
     /// which is most of the ways a sync is meant to be run.
+    /// The `[notify]` section, read the same way `mailbox notify` reads it.
+    pub(crate) fn notify_config(&self) -> Result<mailbox_core::config::Notify> {
+        Ok(match &self.global.config {
+            Some(path) => mailbox_core::config::Config::load(path)?,
+            None => mailbox_core::config::Config::load_default()?,
+        }
+        .notify)
+    }
+
     pub(crate) fn confirm(&self, what: &str) -> Result<()> {
         if self.global.yes || !self.agent_mode {
             return Ok(());
@@ -827,6 +836,14 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
         max_prefetch: 500,
     };
 
+    if args.watch {
+        return watch(ctx, &mut workspace, args, opts);
+    }
+
+    // §4.1: one sync engine per account, for a single pass as much as for a
+    // loop. Held only for the pass, so this is a conflict with something
+    // actually syncing rather than with something merely running.
+    let _owners = own(&workspace)?;
     let result = workspace.sync(&opts)?;
 
     if ctx.out.is_structured() {
@@ -856,6 +873,178 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
                     .warn(format!("{folder}: UIDVALIDITY changed, folder rescanned"));
             }
         }
+    }
+    Ok(())
+}
+
+/// Becomes the sync engine for every account in scope (§4.1).
+///
+/// The lock lives as long as the returned value, so a caller holds it for
+/// exactly the work it is doing — a pass, or a whole watch.
+fn own(workspace: &mailbox_core::Workspace) -> Result<Vec<mailbox_core::owner::Owner>> {
+    workspace
+        .sessions()
+        .iter()
+        .map(|session| {
+            mailbox_core::owner::Owner::acquire(session.store().dir(), &session.account_id)
+        })
+        .collect()
+}
+
+/// `sync --watch` (§5.3): sync, wait on `IDLE`, sync again.
+///
+/// This is the mode that makes the rest of the client behave like a mail
+/// client rather than a mail viewer. Without it nothing arrives until someone
+/// asks, the desktop notifications of §11 almost never fire, and a flag set on
+/// a train sits in the queue until the next manual sync.
+fn watch(
+    ctx: &Ctx<'_>,
+    workspace: &mut mailbox_core::Workspace,
+    args: &SyncArgs,
+    sync: SyncOptions,
+) -> Result<()> {
+    use mailbox_core::imap::watch::WatchOptions;
+
+    // §4.1: exactly one process per account may be the sync engine, and this
+    // one holds a connection for hours. Taken before the first pass so the
+    // refusal is immediate rather than after a round trip.
+    let mut owners = own(workspace)?;
+
+    let notify = ctx.notify_config()?;
+    let notifier = mailbox_core::notify::Notifier::discover(notify.command.as_deref());
+    let structured = ctx.out.is_structured();
+
+    if !structured {
+        ctx.out.print(format!(
+            "watching {} — Ctrl-C to stop",
+            mailbox_core::workspace::account_ids(workspace).join(", ")
+        ));
+    }
+
+    let options = WatchOptions {
+        sync,
+        idle_window: std::time::Duration::from_secs(args.idle_window.clamp(1, 29 * 60)),
+        poll_interval: std::time::Duration::from_secs(args.poll.max(1)),
+        max_passes: args.max_passes,
+        ..Default::default()
+    };
+
+    let mut fatal: Option<Error> = None;
+    mailbox_core::imap::watch::watch(workspace, &options, |workspace, wake, result| {
+        match result {
+            Ok(report) => {
+                // Announced after the pass that brought them in, and marked so
+                // a restart does not repeat itself (§11).
+                if let Err(e) = announce(ctx, workspace, &notifier, &notify) {
+                    ctx.out.warn(format!("could not announce new mail: {e}"));
+                }
+                if structured {
+                    // One JSON document per pass, so a caller can follow this
+                    // the way it follows `watch` (§6.1) — a stream of
+                    // documents rather than one at the end that never comes.
+                    let _ = ctx.out.ndjson_event(
+                        "sync",
+                        &serde_json::json!({
+                            "wake": format!("{wake:?}").to_lowercase(),
+                            "result": report,
+                        }),
+                    );
+                } else {
+                    report_pass(ctx, wake, report);
+                }
+                true
+            }
+            Err(e) => {
+                if structured {
+                    let _ = ctx
+                        .out
+                        .ndjson_event("sync", &serde_json::json!({ "error": e.to_response() }));
+                } else {
+                    ctx.out.warn(format!("sync failed: {e}"));
+                }
+                // A configuration mistake or a refused password retried every
+                // fifteen minutes produces an authentication failure every
+                // fifteen minutes and no mail. Only the network is worth
+                // waiting out.
+                if mailbox_core::imap::watch::is_transient(e) {
+                    true
+                } else {
+                    fatal = Some(Error::Network(e.to_string()));
+                    false
+                }
+            }
+        }
+    })?;
+
+    drop(owners.drain(..));
+
+    match fatal {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+fn report_pass(
+    ctx: &Ctx<'_>,
+    wake: mailbox_core::imap::watch::Wake,
+    result: &mailbox_api::SyncResult,
+) {
+    use mailbox_core::imap::watch::Wake;
+    let added: u32 = result.synced.iter().map(|r| r.messages_added).sum();
+    let updated: u32 = result.synced.iter().map(|r| r.messages_updated).sum();
+    let removed: u32 = result.synced.iter().map(|r| r.messages_removed).sum();
+
+    // A loop that printed a line every nine minutes saying nothing happened
+    // would be a loop nobody leaves running.
+    if added == 0 && updated == 0 && removed == 0 && wake != Wake::Started {
+        return;
+    }
+    ctx.out.print(format!(
+        "{} +{added} ~{updated} -{removed}",
+        ctx.out
+            .dim(&mailbox_core::clock::format_rfc3339(ctx.clock.now())),
+    ));
+}
+
+/// Raises a desktop notification for mail that arrived and has not been
+/// announced (§11).
+///
+/// The query decides what is worth interrupting someone for, and defaults to
+/// `is:unread in:inbox NOT tag:muted`. Marking happens whether or not the
+/// notifier worked: a machine with no notification daemon should not
+/// accumulate a backlog that all arrives at once when one appears.
+fn announce(
+    ctx: &Ctx<'_>,
+    workspace: &mut mailbox_core::Workspace,
+    notifier: &mailbox_core::notify::Notifier,
+    config: &mailbox_core::config::Notify,
+) -> Result<()> {
+    // §6.4: an agent raises no desktop notifications. It is not sitting at the
+    // machine, and something else is.
+    if !config.enabled || ctx.agent_mode {
+        return Ok(());
+    }
+
+    for session in workspace.sessions_mut() {
+        let node = session.parse_query(&config.query)?;
+        let waiting = session.store().unnotified(&node, config.max_per_sync)?;
+        if waiting.is_empty() {
+            continue;
+        }
+
+        // One notification per message up to a point, then one that says how
+        // many — a hundred separate popups is not an announcement, it is a
+        // denial of service with a friendly icon.
+        if waiting.len() == 1 {
+            let _ = notifier.send(&mailbox_core::notify::Notification::for_message(
+                &waiting[0],
+            ));
+        } else {
+            let _ = notifier.send(&mailbox_core::notify::Notification::for_many(waiting.len()));
+        }
+
+        let ids: Vec<String> = waiting.iter().map(|m| m.id.clone()).collect();
+        session.store_mut().mark_notified(&ids)?;
     }
     Ok(())
 }

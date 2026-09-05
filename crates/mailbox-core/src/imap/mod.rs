@@ -11,6 +11,7 @@ pub mod replay;
 pub mod sync;
 pub mod transcript;
 pub mod utf7;
+pub mod watch;
 
 use std::collections::BTreeSet;
 
@@ -202,6 +203,11 @@ impl Client {
 
     pub fn logout(&mut self) -> Result<()> {
         self.conn.logout()
+    }
+
+    /// Waits for the server to speak, or for `window` (§5.3's `IDLE`).
+    pub fn idle(&mut self, window: std::time::Duration) -> Result<crate::imap::connection::Idle> {
+        self.conn.idle(window)
     }
 
     /// Lists every folder, with `SPECIAL-USE` where the server offers it.

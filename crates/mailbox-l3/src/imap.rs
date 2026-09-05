@@ -46,6 +46,15 @@ pub enum ImapFault {
     DropAfterCommands(u32),
     /// Delay every response.
     Delay(Duration),
+    /// Acknowledge `IDLE` and then never say anything, so the client's own
+    /// window is the only thing that ends the wait.
+    ///
+    /// This is the case RFC 2177 exists for: a server that is perfectly happy
+    /// to hold an idle connection open forever, and a client that must
+    /// re-issue anyway because the network between them will not.
+    SilentIdle,
+    /// Acknowledge `IDLE` and then hang up without a `BYE`, mid-wait.
+    DropDuringIdle,
 }
 
 /// One message the server serves.
@@ -88,6 +97,12 @@ impl Message {
 
 struct Shared {
     fault: Mutex<ImapFault>,
+    /// How long an `IDLE` waits before announcing new mail. `None` waits for
+    /// `DONE`.
+    idle_wake: Mutex<Option<Duration>>,
+    /// Whether `IDLE` appears in `CAPABILITY`. Plenty of servers do not offer
+    /// it, and the loop has to work against those too.
+    offers_idle: AtomicBool,
     messages: Mutex<Vec<Message>>,
     uidvalidity: AtomicU32,
     /// How many times a mailbox has been selected, for the mid-session bump.
@@ -108,6 +123,8 @@ impl ImapServer {
         let addr = listener.local_addr()?;
         let shared = Arc::new(Shared {
             fault: Mutex::new(ImapFault::None),
+            idle_wake: Mutex::new(None),
+            offers_idle: AtomicBool::new(true),
             messages: Mutex::new(messages),
             uidvalidity: AtomicU32::new(1000),
             selects: AtomicU32::new(0),
@@ -138,6 +155,18 @@ impl ImapServer {
 
     pub fn set_fault(&self, fault: ImapFault) {
         *self.shared.fault.lock().expect("fault lock") = fault;
+    }
+
+    /// Stops advertising `IDLE`, so the client has to fall back to polling.
+    pub fn advertise_idle(&self, offers: bool) {
+        self.shared.offers_idle.store(offers, Ordering::SeqCst);
+    }
+
+    /// Makes an `IDLE` announce new mail after `delay` instead of waiting for
+    /// `DONE`. This is how the background loop is woken in a test without
+    /// anything sleeping for minutes.
+    pub fn wake_idle_after(&self, delay: Option<Duration>) {
+        *self.shared.idle_wake.lock().expect("idle lock") = delay;
     }
 
     pub fn uidvalidity(&self) -> u32 {
@@ -203,8 +232,49 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) -> std::io::Result<()> {
         }
 
         match verb.as_str() {
+            "IDLE" => {
+                if fault == ImapFault::DropDuringIdle {
+                    write!(out, "+ idling\r\n")?;
+                    out.flush()?;
+                    // No BYE, no DONE, no close handshake: the way a middlebox
+                    // reaps a connection nobody has spoken on.
+                    return Ok(());
+                }
+
+                write!(out, "+ idling\r\n")?;
+                out.flush()?;
+
+                let wake = *shared.idle_wake.lock().expect("idle lock");
+                if let Some(delay) = wake.filter(|_| fault != ImapFault::SilentIdle) {
+                    std::thread::sleep(delay);
+                    // The one thing a client cannot ignore: the mailbox is a
+                    // different size than it was told.
+                    let count = shared.messages.lock().expect("messages lock").len();
+                    write!(out, "* {count} EXISTS\r\n")?;
+                    out.flush()?;
+                }
+
+                // Whatever happened, the wait ends when the client says so.
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line)? == 0 {
+                        return Ok(());
+                    }
+                    if line.trim().eq_ignore_ascii_case("DONE") {
+                        break;
+                    }
+                }
+                write!(out, "{tag} OK idle done\r\n")?;
+            }
             "CAPABILITY" => {
-                write!(out, "* CAPABILITY {}\r\n", capabilities(advertises_qresync))?;
+                write!(
+                    out,
+                    "* CAPABILITY {}\r\n",
+                    capabilities(
+                        advertises_qresync,
+                        shared.offers_idle.load(Ordering::SeqCst)
+                    )
+                )?;
                 write!(out, "{tag} OK done\r\n")?;
             }
             "LOGIN" | "AUTHENTICATE" => {
@@ -217,7 +287,10 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) -> std::io::Result<()> {
                 write!(
                     out,
                     "{tag} OK [CAPABILITY {}] logged in\r\n",
-                    capabilities(advertises_qresync)
+                    capabilities(
+                        advertises_qresync,
+                        shared.offers_idle.load(Ordering::SeqCst)
+                    )
                 )?;
             }
             "ENABLE" => {
@@ -313,8 +386,11 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) -> std::io::Result<()> {
     }
 }
 
-fn capabilities(qresync: bool) -> String {
+fn capabilities(qresync: bool, idle: bool) -> String {
     let mut caps = String::from("IMAP4rev1 LITERAL+ UIDPLUS MOVE ENABLE LIST-EXTENDED SPECIAL-USE");
+    if idle {
+        caps.push_str(" IDLE");
+    }
     if qresync {
         // Advertised whenever a fault is armed, so the QRESYNC-specific faults
         // have something to lie about.

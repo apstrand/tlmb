@@ -40,6 +40,7 @@ than retrofitted.
 | TUI: mutt keys, incremental search, `keys.toml` | done (§7, M3) |
 | Pairing: QR, LAN, encrypted export file | done (§8, M4) |
 | Snooze, local-only (§7) | done (M5) |
+| Background sync: `IDLE`, poll fallback, one owner | done (§5.3, §4.1) |
 | `serve`: the local web API, token-gated | done (§3, M5) |
 | GUI (egui) and web (DOM), on one contract | done (§7, M5) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |

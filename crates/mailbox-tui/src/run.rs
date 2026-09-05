@@ -373,7 +373,20 @@ fn start_sync(opts: SessionOptions, tracer: Tracer, clock: Clock, tx: Sender<Upd
         let mut writable = opts;
         writable.read_only = false;
         let outcome = Workspace::open(&writable, tracer, clock)
-            .and_then(|mut w| w.sync(&SyncOptions::default()))
+            .and_then(|mut w| {
+                // §4.1: one sync engine per account. Held for the pass only,
+                // so this conflicts with something actually syncing — a
+                // `sync --watch` in another terminal — rather than with
+                // anything merely running. The refusal explains that the
+                // user's own flags and moves are queued and will be pushed by
+                // whatever holds it.
+                let _owners: Vec<_> = w
+                    .sessions()
+                    .iter()
+                    .map(|s| mailbox_core::owner::Owner::acquire(s.store().dir(), &s.account_id))
+                    .collect::<mailbox_core::error::Result<_>>()?;
+                w.sync(&SyncOptions::default())
+            })
             .map(|result| {
                 let added: u32 = result.synced.iter().map(|r| r.messages_added).sum();
                 let removed: u32 = result.synced.iter().map(|r| r.messages_removed).sum();

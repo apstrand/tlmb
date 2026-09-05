@@ -21,6 +21,10 @@ use crate::clock::Clock;
 pub mod event {
     pub const IMAP_CONNECT: &str = "imap.connect";
     pub const IMAP_SEND: &str = "imap.send";
+    /// One `IDLE` wait began (§5.3).
+    pub const IMAP_IDLE: &str = "imap.idle";
+    /// The loop is waiting before retrying a failed pass (§5.3).
+    pub const SYNC_BACKOFF: &str = "sync.backoff";
     pub const IMAP_RECV: &str = "imap.recv";
     pub const IMAP_DISCONNECT: &str = "imap.disconnect";
     pub const REPLAY_BEGIN: &str = "replay.begin";

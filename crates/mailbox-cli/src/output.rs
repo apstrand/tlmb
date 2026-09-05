@@ -73,6 +73,27 @@ impl Out {
         )
     }
 
+    /// Emits one document of a continuing stream.
+    ///
+    /// For a command that does not end — `sync --watch` — where a single
+    /// document at the finish would be a document that never arrives. Flushed
+    /// each time, because a consumer reading line by line should not wait on a
+    /// buffer.
+    pub fn ndjson_event<T: Serialize>(&self, command: &str, payload: &T) -> std::io::Result<()> {
+        let value = self.project(serde_json::json!({
+            "schema": SCHEMA_VERSION,
+            "command": command,
+            "payload": payload,
+        }));
+        let mut stdout = std::io::stdout().lock();
+        writeln!(
+            stdout,
+            "{}",
+            serde_json::to_string(&value).unwrap_or_default()
+        )?;
+        stdout.flush()
+    }
+
     /// Emits a list as NDJSON: the envelope first, then one object per row, so
     /// a consumer can start work before the command finishes.
     pub fn ndjson_list<T: Serialize>(

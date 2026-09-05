@@ -11,14 +11,19 @@ off, and the gaps found along the way.
   mutt marks a message seen on open, so this is an omission rather than a
   decision. Probably wants a short dwell so cursoring past a message in the
   index does not mark it.
-- **Background sync.** There is no daemon, no timer, and no `IDLE`: `sync --once`
-  is still the only mode, so queued writes reach the server when the user runs
-  `mailbox sync` or presses `@`. §5.3 wants `IDLE` per selected folder plus a
-  bounded pool of idling folders, with a poll fallback and backoff.
-- **§4.1's owner lock and socket.** Designed, not built. Reads already take the
-  read-only path, which is the half that matters most; what is missing is the
-  advisory lock that makes exactly one process the sync engine, and the Unix
-  socket that lets the losers have their writes performed.
+- **A pool of idled folders.** `sync --watch` idles on the inbox, which is
+  where the mail someone is waiting for arrives. §5.3 wants "a bounded pool of
+  idling folders (default: inbox and any folder viewed in the last 24 h)",
+  which needs a connection per folder and a thread to hold each. Worth doing
+  after the single case has been run against real servers.
+- **Idling for more than one account.** `IDLE` selects one mailbox on one
+  connection, so a workspace with several accounts polls them all. `--account`
+  narrows back to the idling path. A thread per account is the fix.
+- **§4.1's owner socket.** The advisory lock is built: exactly one process is
+  the sync engine, and a loser is told so — truthfully, since its local writes
+  are already queued and the owner pushes them. What is missing is the socket
+  that would let the loser have its writes performed *now*, and share the warm
+  connection pool.
 
 ## Verification gaps
 
