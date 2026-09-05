@@ -223,10 +223,18 @@ Stalwart**, and the existing Dovecot suite is currently skipping, because the
 Docker daemon on this machine is not reachable from this user. Everything else
 runs without it.
 
+### In progress: M6 (iOS)
+
+The iOS app is a thin SwiftUI shell over `mailbox-ffi` — the same core, no web
+view (§3). Inbox, thread, compose, search, and account setup are in
+[`ios/`](ios/README.md). Android is not started. OAuth2 and the optional
+push notifier of §11 are not in this cut.
+
 ### Not built yet
 
 - **OAuth2 and `accounts add`.** Autoconfig discovery and the system-browser
-  PKCE flow.
+  PKCE flow. A built-in host table covers Gmail/Fastmail/Outlook/Yahoo/iCloud/
+  Proton so the iOS setup can skip the hosts for those.
 - **Instance coordination.** The owner lock and the Unix socket of §4.1 are
   designed but not built; today a write command opens the store directly.
   Reads already take the read-only path, which is the half that matters most.
@@ -520,6 +528,11 @@ fixtures name messages symbolically (§14.1).
 crates/mailbox-api    the JSON contract — types only, no logic
 crates/mailbox-core   store, sync, query, threading, MIME
 crates/mailbox-cli    the `mailbox` binary
+crates/mailbox-tui    the terminal interface
+crates/mailbox-ui     the GUI (egui)
+crates/mailbox-web    the local web UI
+crates/mailbox-ffi    C ABI for the native mobile shells
+ios/                  SwiftUI app over mailbox-ffi
 tests/dovecot         the L2 server, configured in-tree
 ```
 

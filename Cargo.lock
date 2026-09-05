@@ -2109,7 +2109,18 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "toml 0.9.12+spec-1.1.0",
+ "webpki-roots",
  "zstd",
+]
+
+[[package]]
+name = "mailbox-ffi"
+version = "0.1.0"
+dependencies = [
+ "mailbox-api",
+ "mailbox-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4197,6 +4208,15 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "url",
  "web-sys",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf85cb06032201fa7c6f829d7db5a7e5aa45bcc0655327713065f6f0576731bf"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]

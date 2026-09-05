@@ -13,7 +13,6 @@
 use std::collections::BTreeSet;
 use std::io::{BufWriter, Read, Write};
 use std::net::TcpStream;
-use std::sync::Arc;
 use std::time::Duration;
 
 use imap_proto::{Response, Status};
@@ -758,26 +757,7 @@ fn tls_stream(
     host: &str,
     tcp: TcpStream,
 ) -> Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>> {
-    // §9: system roots, TLS 1.2 and up. rustls has no TLS 1.0/1.1 to disable.
-    let mut roots = rustls::RootCertStore::empty();
-    let loaded = rustls_native_certs::load_native_certs();
-    for cert in loaded.certs {
-        let _ = roots.add(cert);
-    }
-    if roots.is_empty() {
-        return Err(Error::Network(
-            "no system trust roots were readable, so no certificate can be verified".into(),
-        ));
-    }
-
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    let server_name = rustls_pki_types::ServerName::try_from(host.to_string())
-        .map_err(|_| Error::usage(format!("`{host}` is not a valid server name")))?;
-    let client = rustls::ClientConnection::new(Arc::new(config), server_name)
-        .map_err(|e| Error::Network(format!("starting TLS with {host}: {e}")))?;
-    Ok(rustls::StreamOwned::new(client, tcp))
+    crate::tls::stream(host, tcp)
 }
 
 impl Connection {

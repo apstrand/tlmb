@@ -32,7 +32,7 @@ pub struct Config {
     pub pair: Pair,
     /// Keymap overrides. Passed through to the TUI (M3) without interpretation
     /// here, so an unknown key is that frontend's problem to report.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub keys: BTreeMap<String, String>,
 }
 
@@ -148,38 +148,38 @@ pub struct AccountConfig {
     pub address: String,
     /// Every address this account answers to, for `to:me` and for compose's
     /// From selector. The primary address is implied.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub identities: Vec<String>,
 
     /// Discovered by autoconfig when absent (§9). Required for M1, which has no
     /// discovery yet.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imap_host: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imap_port: Option<u16>,
     /// `implicit` (993) | `starttls` (143) | `none`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imap_security: Option<String>,
     /// The login name, when it differs from `address`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imap_user: Option<String>,
 
     /// SMTP submission (§5.5). Discovered by autoconfig when absent, which
     /// lands with `accounts add`; until then, set it.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smtp_host: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smtp_port: Option<u16>,
     /// `starttls` (587) | `implicit` (465) | `none`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smtp_security: Option<String>,
     /// The submission login, when it differs from `imap_user`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smtp_user: Option<String>,
 
     /// §9: a command that prints the password on stdout. This is the
     /// `pass`/`gpg`/`op` hook, and the reason no secret needs to live here.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_command: Option<String>,
 
     /// §9. Turning this off is only honoured for a loopback host.
@@ -297,6 +297,20 @@ impl Config {
 
     pub fn load_default() -> Result<Config> {
         Config::load(&crate::paths::config_file())
+    }
+
+    /// Writes the config as TOML, creating parent directories.
+    ///
+    /// Secrets still do not belong here: [`crate::credentials::install`] is
+    /// how a frontend hands over a password.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = toml::to_string_pretty(self)
+            .map_err(|e| Error::usage(format!("{}: could not serialise: {e}", path.display())))?;
+        std::fs::write(path, text)?;
+        Ok(())
     }
 
     pub fn account(&self, id: &str) -> Result<&AccountConfig> {

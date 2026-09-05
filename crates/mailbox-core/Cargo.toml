@@ -20,6 +20,7 @@ zstd = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-native-certs = "0.8"
 rustls-pki-types = "1"
+webpki-roots = "1"
 base64 = "0.22"
 toml = "0.9"
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }

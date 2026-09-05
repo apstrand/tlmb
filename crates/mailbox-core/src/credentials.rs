@@ -7,23 +7,55 @@
 //! 1. `MAILBOX_PASSWORD_<ACCOUNT>` / `MAILBOX_OAUTH_TOKEN_<ACCOUNT>` — for
 //!    tests, CI, and the L2 suite (§14.2), which needs a credential without a
 //!    keychain to put one in.
-//! 2. `credential_command` — the `pass`/`gpg`/`op`/`op read` hook. The most
-//!    important entry in practice, and the reason no keychain integration is
-//!    load-bearing.
-//! 3. The OS keychain, reached through its own CLI rather than through a
+//! 2. An in-process install ([`install`]) — how a native UI that already holds
+//!    the secret in the OS keystore hands it over without spawning a CLI that
+//!    does not exist on iOS.
+//! 3. `credential_command` — the `pass`/`gpg`/`op`/`op read` hook. The most
+//!    important entry in practice on the desktop, and the reason no keychain
+//!    integration is load-bearing there.
+//! 4. The OS keychain, reached through its own CLI rather than through a
 //!    D-Bus or Security.framework binding. That keeps the static binary of §4
 //!    free of a platform dependency it would otherwise carry everywhere, and
 //!    the delegated command is the same one a user can run by hand to check
 //!    what we will see.
 //!
-//! Native keychain bindings — and `accounts add` writing to them — belong with
-//! the write milestone. Until then a store with no resolvable credential fails
-//! with `auth_failed` and a hint, which is the honest outcome.
+//! Native keychain *storage* is the frontend's job: the iOS app writes to
+//! the Keychain and calls [`install`] on launch. Until a secret is resolvable
+//! a store fails with `auth_failed` and a hint, which is the honest outcome.
 
+use std::collections::HashMap;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use crate::error::{Error, Result};
 use crate::imap::Credential;
+
+fn installed() -> &'static Mutex<HashMap<String, Credential>> {
+    static INSTALLED: OnceLock<Mutex<HashMap<String, Credential>>> = OnceLock::new();
+    INSTALLED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Hands a secret to this process without putting it in the config file.
+///
+/// The iOS/Android shells keep the password in the OS keystore and call this
+/// on launch (and again when the user adds an account). The map is process
+/// memory only: a crash forgets it, which is what we want — the keystore is
+/// the durable copy.
+pub fn install(account_id: &str, credential: Credential) {
+    installed()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(account_id.to_string(), credential);
+}
+
+/// Drops an installed secret. Removing an account from the config is not
+/// enough: the next `resolve` would still find it until the process exits.
+pub fn forget(account_id: &str) {
+    installed()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(account_id);
+}
 
 /// Looks up the credential for `account_id`, whose config is `cfg`.
 pub fn resolve(account_id: &str, cfg: &crate::config::AccountConfig) -> Result<Credential> {
@@ -34,6 +66,15 @@ pub fn resolve(account_id: &str, cfg: &crate::config::AccountConfig) -> Result<C
     }
     if let Some(pw) = env_secret(&format!("MAILBOX_PASSWORD_{key}")) {
         return Ok(Credential::Password(pw));
+    }
+
+    if let Some(credential) = installed()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(account_id)
+        .cloned()
+    {
+        return Ok(credential);
     }
 
     if let Some(cmd) = &cfg.credential_command {

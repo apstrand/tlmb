@@ -1,0 +1,380 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A40000000000000000000001 /* MailboxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000001 /* MailboxApp.swift */; };
+		A40000000000000000000002 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000002 /* RootView.swift */; };
+		A40000000000000000000003 /* InboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000003 /* InboxView.swift */; };
+		A40000000000000000000004 /* MessageRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000004 /* MessageRow.swift */; };
+		A40000000000000000000005 /* ThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000005 /* ThreadView.swift */; };
+		A40000000000000000000006 /* ComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000006 /* ComposeView.swift */; };
+		A40000000000000000000007 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000007 /* SetupView.swift */; };
+		A40000000000000000000008 /* AccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000008 /* AccountsView.swift */; };
+		A40000000000000000000009 /* Types.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000009 /* Types.swift */; };
+		A4000000000000000000000A /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000A /* Keychain.swift */; };
+		A4000000000000000000000B /* MailboxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000B /* MailboxClient.swift */; };
+		A4000000000000000000000C /* MailboxStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000C /* MailboxStore.swift */; };
+		A4000000000000000000000D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000F /* Assets.xcassets */; };
+		A4000000000000000000000E /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000E /* PrivacyInfo.xcprivacy */; };
+		A40000000000000000000011 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A30000000000000000000011 /* Security.framework */; };
+		A40000000000000000000012 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A30000000000000000000012 /* SystemConfiguration.framework */; };
+		A40000000000000000000013 /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A30000000000000000000013 /* libz.tbd */; };
+		A40000000000000000000014 /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A30000000000000000000014 /* libiconv.tbd */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A30000000000000000000001 /* MailboxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxApp.swift; sourceTree = "<group>"; };
+		A30000000000000000000002 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		A30000000000000000000003 /* InboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxView.swift; sourceTree = "<group>"; };
+		A30000000000000000000004 /* MessageRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRow.swift; sourceTree = "<group>"; };
+		A30000000000000000000005 /* ThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadView.swift; sourceTree = "<group>"; };
+		A30000000000000000000006 /* ComposeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeView.swift; sourceTree = "<group>"; };
+		A30000000000000000000007 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
+		A30000000000000000000008 /* AccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountsView.swift; sourceTree = "<group>"; };
+		A30000000000000000000009 /* Types.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Types.swift; sourceTree = "<group>"; };
+		A3000000000000000000000A /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
+		A3000000000000000000000B /* MailboxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxClient.swift; sourceTree = "<group>"; };
+		A3000000000000000000000C /* MailboxStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxStore.swift; sourceTree = "<group>"; };
+		A3000000000000000000000D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A3000000000000000000000E /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A3000000000000000000000F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A30000000000000000000010 /* Mailbox-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Mailbox-Bridging-Header.h"; sourceTree = "<group>"; };
+		A30000000000000000000011 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		A30000000000000000000012 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+		A30000000000000000000013 /* libz.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libz.tbd; path = usr/lib/libz.tbd; sourceTree = SDKROOT; };
+		A30000000000000000000014 /* libiconv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libiconv.tbd; path = usr/lib/libiconv.tbd; sourceTree = SDKROOT; };
+		A30000000000000000000015 /* mailbox.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = mailbox.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A40000000000000000000011 /* Security.framework in Frameworks */,
+				A40000000000000000000012 /* SystemConfiguration.framework in Frameworks */,
+				A40000000000000000000013 /* libz.tbd in Frameworks */,
+				A40000000000000000000014 /* libiconv.tbd in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000008 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000009 /* Mailbox */,
+				A1000000000000000000000D /* Frameworks */,
+				A1000000000000000000000C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000009 /* Mailbox */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000001 /* MailboxApp.swift */,
+				A1000000000000000000000A /* Core */,
+				A1000000000000000000000B /* Views */,
+				A3000000000000000000000F /* Assets.xcassets */,
+				A3000000000000000000000D /* Info.plist */,
+				A3000000000000000000000E /* PrivacyInfo.xcprivacy */,
+				A30000000000000000000010 /* Mailbox-Bridging-Header.h */,
+			);
+			path = Mailbox;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000000A /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000009 /* Types.swift */,
+				A3000000000000000000000A /* Keychain.swift */,
+				A3000000000000000000000B /* MailboxClient.swift */,
+				A3000000000000000000000C /* MailboxStore.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000000B /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000002 /* RootView.swift */,
+				A30000000000000000000003 /* InboxView.swift */,
+				A30000000000000000000004 /* MessageRow.swift */,
+				A30000000000000000000005 /* ThreadView.swift */,
+				A30000000000000000000006 /* ComposeView.swift */,
+				A30000000000000000000007 /* SetupView.swift */,
+				A30000000000000000000008 /* AccountsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000000C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000015 /* mailbox.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000000D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A30000000000000000000011 /* Security.framework */,
+				A30000000000000000000012 /* SystemConfiguration.framework */,
+				A30000000000000000000013 /* libz.tbd */,
+				A30000000000000000000014 /* libiconv.tbd */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000002 /* mailbox */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A20000000000000000000005 /* Build configuration list for PBXNativeTarget "mailbox" */;
+			buildPhases = (
+				A10000000000000000000006 /* Build mailbox-ffi */,
+				A10000000000000000000003 /* Sources */,
+				A10000000000000000000004 /* Frameworks */,
+				A10000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = mailbox;
+			productName = mailbox;
+			productReference = A30000000000000000000015 /* mailbox.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					A10000000000000000000002 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = A20000000000000000000006 /* Build configuration list for PBXProject "Mailbox" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000008;
+			productRefGroup = A1000000000000000000000C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000002 /* mailbox */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A4000000000000000000000D /* Assets.xcassets in Resources */,
+				A4000000000000000000000E /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A10000000000000000000006 /* Build mailbox-ffi */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build mailbox-ffi";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/libmailbox_ffi.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/build-ffi.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A40000000000000000000001 /* MailboxApp.swift in Sources */,
+				A40000000000000000000002 /* RootView.swift in Sources */,
+				A40000000000000000000003 /* InboxView.swift in Sources */,
+				A40000000000000000000004 /* MessageRow.swift in Sources */,
+				A40000000000000000000005 /* ThreadView.swift in Sources */,
+				A40000000000000000000006 /* ComposeView.swift in Sources */,
+				A40000000000000000000007 /* SetupView.swift in Sources */,
+				A40000000000000000000008 /* AccountsView.swift in Sources */,
+				A40000000000000000000009 /* Types.swift in Sources */,
+				A4000000000000000000000A /* Keychain.swift in Sources */,
+				A4000000000000000000000B /* MailboxClient.swift in Sources */,
+				A4000000000000000000000C /* MailboxStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A20000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A20000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A20000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../crates/mailbox-ffi/include";
+				INFOPLIST_FILE = Mailbox/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = mailbox;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(BUILT_PRODUCTS_DIR)";
+				MARKETING_VERSION = 0.1;
+				OTHER_LDFLAGS = (
+					"-lmailbox_ffi",
+					"-lc++",
+					"-lz",
+					"-liconv",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = se.nena.mailbox;
+				PRODUCT_NAME = mailbox;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Mailbox/Mailbox-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A20000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../crates/mailbox-ffi/include";
+				INFOPLIST_FILE = Mailbox/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = mailbox;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(BUILT_PRODUCTS_DIR)";
+				MARKETING_VERSION = 0.1;
+				OTHER_LDFLAGS = (
+					"-lmailbox_ffi",
+					"-lc++",
+					"-lz",
+					"-liconv",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = se.nena.mailbox;
+				PRODUCT_NAME = mailbox;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Mailbox/Mailbox-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A20000000000000000000005 /* Build configuration list for PBXNativeTarget "mailbox" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A20000000000000000000001 /* Debug */,
+				A20000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A20000000000000000000006 /* Build configuration list for PBXProject "Mailbox" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A20000000000000000000003 /* Debug */,
+				A20000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000001 /* Project object */;
+}

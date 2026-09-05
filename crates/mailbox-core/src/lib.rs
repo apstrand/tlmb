@@ -25,6 +25,7 @@ pub mod open;
 pub mod pair;
 pub mod paths;
 pub mod policy;
+pub mod providers;
 pub mod query;
 pub mod render;
 pub mod send;
@@ -32,6 +33,7 @@ pub mod session;
 pub mod smtp;
 pub mod store;
 pub mod threading;
+pub mod tls;
 pub mod trace;
 pub mod workspace;
 

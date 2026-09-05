@@ -8,6 +8,7 @@ members = [
     "crates/mailbox-tui",
     "crates/mailbox-ui",
     "crates/mailbox-web",
+    "crates/mailbox-ffi",
 ]
 
 [workspace.package]
@@ -24,6 +25,7 @@ mailbox-l3 = { path = "crates/mailbox-l3" }
 mailbox-tui = { path = "crates/mailbox-tui" }
 mailbox-ui = { path = "crates/mailbox-ui" }
 mailbox-web = { path = "crates/mailbox-web" }
+mailbox-ffi = { path = "crates/mailbox-ffi" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

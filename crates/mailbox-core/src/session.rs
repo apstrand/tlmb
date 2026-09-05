@@ -31,6 +31,10 @@ pub struct SessionOptions {
     pub account: Option<String>,
     /// `--config`.
     pub config_path: Option<PathBuf>,
+    /// Relocates the per-account store. The mobile shells pass the app's
+    /// Application Support directory here rather than relying on XDG, which
+    /// does not exist on iOS.
+    pub state_dir: Option<PathBuf>,
     /// Read-only skips ownership entirely (§4.1) — the fast path for scripts
     /// and agents.
     pub read_only: bool,
@@ -100,7 +104,10 @@ impl Session {
                 .to_string(),
         };
 
-        let dir = crate::paths::account_dir(&account_id);
+        let dir = match &opts.state_dir {
+            Some(root) => root.join(&account_id),
+            None => crate::paths::account_dir(&account_id),
+        };
         let store = if opts.read_only {
             Store::open_read_only(&dir, &account_id, tracer.clone(), clock.clone())?
         } else {

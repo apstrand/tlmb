@@ -1,2 +1,6 @@
 /target
 *.trace.ndjson
+.DS_Store
+xcuserdata/
+DerivedData/
+*.xcuserstate
