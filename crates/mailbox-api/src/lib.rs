@@ -119,6 +119,73 @@ pub struct SnoozeList {
     pub snoozed: Vec<Snoozed>,
 }
 
+/// `flag`, `mv`, `cp`, `rm`, `archive`, `spam` payload: what a write did.
+///
+/// One type for all six because they are one operation with six names (§6.1),
+/// and because a caller that handles `flag` should not need new code to handle
+/// `archive`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WriteResult {
+    /// How many messages actually changed. Zero is a success: the flag was
+    /// already set, or the message was already in that folder.
+    pub changed: usize,
+    pub messages: Vec<WriteRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WriteRecord {
+    pub id: String,
+    /// The folder it is in after the write.
+    pub folder: String,
+    /// The flags after the write, not the ones asked for.
+    pub flags: Vec<String>,
+    pub changed: bool,
+}
+
+/// `attach` payload: what a message carries, or what was written out.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AttachmentList {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+    /// Present for `attach --extract`: the files written, and where.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extracted: Vec<Extracted>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Extracted {
+    pub part: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    pub mime_type: String,
+    pub bytes: u64,
+    /// Where it was written. §9: never opened, only saved.
+    pub path: String,
+}
+
+/// `notify` payload (§11): what the platform offers, and what is waiting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct NotifyStatus {
+    pub notifier: String,
+    /// False when no desktop notifier was found. Not an error: §11 makes
+    /// notifications an enhancement, and agent mode raises none at all.
+    pub available: bool,
+    /// `--test` only: whether the test notification went out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_per_sync: Option<usize>,
+    /// What would be announced by the next sync, without announcing it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<MessageSummary>,
+}
+
 /// `watch` payload: one event of the change feed (§6.4).
 ///
 /// Emitted one per line under `--ndjson`, which is what makes `watch` a stream

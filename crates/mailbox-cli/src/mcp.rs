@@ -419,7 +419,9 @@ fn run_tool(
             };
             let mut session = writable_session(ctx)?;
             let written = session.flag(&refs, &spec)?;
-            Ok(written_report(&written))
+            Ok(serde_json::to_value(mailbox_core::store::write_result(
+                &written,
+            ))?)
         }
 
         "move_message" => {
@@ -428,7 +430,9 @@ fn run_tool(
                 .ok_or_else(|| Error::usage("move_message needs a `folder`"))?;
             let mut session = writable_session(ctx)?;
             let written = session.move_to(&refs, &folder)?;
-            Ok(written_report(&written))
+            Ok(serde_json::to_value(mailbox_core::store::write_result(
+                &written,
+            ))?)
         }
 
         "send_message" => {
@@ -481,18 +485,6 @@ fn run_tool(
 
         other => Err(Error::not_found("tool", other)),
     }
-}
-
-fn written_report(written: &[mailbox_core::store::Written]) -> serde_json::Value {
-    serde_json::json!({
-        "changed": written.iter().filter(|w| w.changed).count(),
-        "messages": written.iter().map(|w| serde_json::json!({
-            "id": w.message_id,
-            "folder": w.folder,
-            "flags": w.flags,
-            "changed": w.changed,
-        })).collect::<Vec<_>>(),
-    })
 }
 
 /// A writable session for one operation, as the web server does it (§4.1).

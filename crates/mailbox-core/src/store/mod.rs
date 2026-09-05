@@ -35,7 +35,7 @@ pub use corpus::{CorpusReport, CorpusSpec};
 pub use ops::{FlagChange, Op, OpKind, OpState};
 pub use outbox::{NewOutboxEntry, OutboxEntry, OutboxState};
 pub use state::{FolderState, SyncState};
-pub use write::Written;
+pub use write::{write_result, Written};
 
 /// How a folder is ranked when a message is filed in several of them (§5.3).
 pub mod rank {

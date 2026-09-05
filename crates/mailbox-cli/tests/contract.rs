@@ -19,6 +19,14 @@ special_use = "inbox"
 path = "Archive"
 special_use = "archive"
 
+[[folder]]
+path = "Trash"
+special_use = "trash"
+
+[[folder]]
+path = "Junk"
+special_use = "junk"
+
 [[message]]
 name = "root"
 folder = "INBOX"
@@ -187,17 +195,166 @@ fn every_command_conforms_to_its_published_schema() {
     let cli = Cli::new();
     let id = cli.id("inv42@example.com");
 
-    for (command, args) in [
-        ("ls", vec!["ls"]),
-        ("search", vec!["search", "invoice"]),
-        ("show", vec!["show", id.as_str()]),
-        ("folders", vec!["folders"]),
-        ("accounts", vec!["accounts"]),
-        ("status", vec!["status"]),
-        ("watch", vec!["watch", "--drain", "--cursor", "test:0"]),
-    ] {
+    for (command, coverage) in COVERAGE {
+        let Coverage::Checked(args) = coverage else {
+            continue;
+        };
+        let owned: Vec<String> = args.iter().map(|a| a.replace("<id>", &id)).collect();
+        let args: Vec<&str> = owned.iter().map(String::as_str).collect();
         let document = cli.ok(&args);
         assert_conforms(&cli, command, &document);
+    }
+}
+
+/// What §14.4 requires of one subcommand.
+///
+/// M7 makes schema conformance gating "for every command", which is a claim
+/// about the *set* as much as about each member: the point of the table below
+/// is that a new subcommand cannot be added without landing in it, and that
+/// declaring one exempt means writing down why.
+enum Coverage {
+    /// Runs offline, so both halves are checked: the schema exists, and real
+    /// output validates against it.
+    Checked(&'static [&'static str]),
+    /// Publishes a schema, but needs a server to produce a document. The L2
+    /// and L3 suites are where those documents get checked.
+    SchemaOnly,
+    /// Emits no JSON document at all. The string is the reason.
+    NoDocument(&'static str),
+}
+
+const COVERAGE: &[(&str, Coverage)] = &[
+    ("ls", Coverage::Checked(&["ls"])),
+    ("search", Coverage::Checked(&["search", "invoice"])),
+    ("show", Coverage::Checked(&["show", "<id>"])),
+    ("folders", Coverage::Checked(&["folders"])),
+    ("accounts", Coverage::Checked(&["accounts"])),
+    ("status", Coverage::Checked(&["status"])),
+    ("snooze", Coverage::Checked(&["snooze", "--list"])),
+    (
+        "watch",
+        Coverage::Checked(&["watch", "--drain", "--cursor", "test:0"]),
+    ),
+    ("notify", Coverage::Checked(&["notify"])),
+    ("outbox", Coverage::Checked(&["outbox"])),
+    ("attach", Coverage::Checked(&["attach", "<id>"])),
+    ("flag", Coverage::Checked(&["flag", "<id>", "+seen"])),
+    ("mv", Coverage::Checked(&["mv", "<id>", "Archive"])),
+    ("cp", Coverage::Checked(&["cp", "<id>", "Archive"])),
+    ("rm", Coverage::Checked(&["rm", "<id>"])),
+    ("archive", Coverage::Checked(&["archive", "<id>"])),
+    ("spam", Coverage::Checked(&["spam", "<id>"])),
+    (
+        "send",
+        Coverage::Checked(&[
+            "send",
+            "--dry-run",
+            "--to",
+            "someone@example.org",
+            "--subject",
+            "s",
+            "--body",
+            "b",
+        ]),
+    ),
+    // Opens $EDITOR and then goes down `send`'s path, which is checked above.
+    ("compose", Coverage::SchemaOnly),
+    // Needs a message to reply to *and* $EDITOR; `send`'s schema covers the
+    // document it produces.
+    ("reply", Coverage::SchemaOnly),
+    // Talks to a server by definition. The L3 suite runs it for real.
+    ("sync", Coverage::SchemaOnly),
+    (
+        "serve",
+        Coverage::NoDocument("runs a web server until interrupted"),
+    ),
+    ("gui", Coverage::NoDocument("opens a window")),
+    ("tui", Coverage::NoDocument("takes over the terminal")),
+    (
+        "mcp",
+        Coverage::NoDocument("speaks JSON-RPC on stdio, not the envelope"),
+    ),
+    (
+        "pair",
+        Coverage::NoDocument("a two-device conversation; `tests/pairing.rs` drives it"),
+    ),
+    (
+        "schema",
+        Coverage::NoDocument("emits a JSON Schema, which is not a Reply"),
+    ),
+    ("help", Coverage::NoDocument("clap's own")),
+];
+
+/// The gate itself: every subcommand the binary offers is classified above.
+///
+/// Derived from `--help` rather than a second hand-written list, because a
+/// list that has to be updated by hand is one that will not be.
+#[test]
+fn every_subcommand_is_accounted_for() {
+    let cli = Cli::new();
+    let help = cli.run(&["--help"]);
+    let mut commands = Vec::new();
+    let mut in_commands = false;
+    for line in help.stdout.lines() {
+        if line.starts_with("Commands:") {
+            in_commands = true;
+            continue;
+        }
+        if in_commands {
+            if line.trim().is_empty() {
+                break;
+            }
+            if let Some(name) = line.split_whitespace().next() {
+                commands.push(name.to_string());
+            }
+        }
+    }
+    assert!(
+        commands.len() > 20,
+        "could not read the command list: {help:?}",
+        help = help.stdout
+    );
+
+    for command in &commands {
+        assert!(
+            COVERAGE.iter().any(|(name, _)| name == command),
+            "`{command}` is a new subcommand with no entry in COVERAGE — \
+             give it a schema, or say in the table why it has no document (§14.4)"
+        );
+    }
+    for (name, _) in COVERAGE {
+        assert!(
+            commands.contains(&name.to_string()),
+            "COVERAGE lists `{name}`, which the binary no longer offers"
+        );
+    }
+}
+
+/// And everything the table says has a schema, has one.
+#[test]
+fn every_documented_command_publishes_a_schema() {
+    let cli = Cli::new();
+    for (command, coverage) in COVERAGE {
+        if let Coverage::NoDocument(why) = coverage {
+            // And the converse, so a command that grows a document is
+            // reclassified rather than quietly left out of the gate.
+            let run = cli.run(&["schema", command]);
+            assert_ne!(
+                run.status, 0,
+                "`{command}` publishes a schema, but COVERAGE says it emits no document ({why})"
+            );
+            continue;
+        }
+        let run = cli.run(&["schema", command]);
+        assert_eq!(
+            run.status, 0,
+            "`schema {command}` failed, but the table says it emits a document: {}",
+            run.stderr
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&run.stdout).is_ok(),
+            "`schema {command}` did not print a schema"
+        );
     }
 }
 

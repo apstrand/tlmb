@@ -283,25 +283,31 @@ pub fn attach(ctx: &Ctx<'_>, args: &AttachArgs) -> Result<()> {
             mailbox_core::attach::destination(&args.out, &name)
         };
         mailbox_core::attach::write(&target, &bytes)?;
-        written.push(serde_json::json!({
-            "part": part,
-            "filename": name,
-            "mime_type": mime_type,
-            "bytes": bytes.len(),
-            "path": target.display().to_string(),
-        }));
+        written.push(mailbox_api::Extracted {
+            part: part.clone(),
+            filename: Some(name.clone()),
+            mime_type: mime_type.clone(),
+            bytes: bytes.len() as u64,
+            path: target.display().to_string(),
+        });
     }
 
     if ctx.out.is_structured() {
-        ctx.out
-            .reply("attach", &serde_json::json!({ "extracted": written }))?;
+        ctx.out.reply(
+            "attach",
+            &mailbox_api::AttachmentList {
+                id: None,
+                attachments: Vec::new(),
+                extracted: written,
+            },
+        )?;
     } else {
         for w in &written {
             ctx.out.print(format!(
                 "{} {} ({})",
                 ctx.out.paint("✓", GREEN),
-                w["path"].as_str().unwrap_or_default(),
-                format::human_size(w["bytes"].as_u64().unwrap_or(0)),
+                w.path,
+                format::human_size(w.bytes),
             ));
         }
     }
@@ -312,10 +318,11 @@ fn list_attachments(ctx: &Ctx<'_>, detail: &mailbox_api::MessageDetail) -> Resul
     if ctx.out.is_structured() {
         ctx.out.reply(
             "attach",
-            &serde_json::json!({
-                "id": detail.summary.id,
-                "attachments": detail.attachments,
-            }),
+            &mailbox_api::AttachmentList {
+                id: Some(detail.summary.id.clone()),
+                attachments: detail.attachments.clone(),
+                extracted: Vec::new(),
+            },
         )?;
         return Ok(());
     }
@@ -451,21 +458,9 @@ pub fn move_to_special(ctx: &Ctx<'_>, args: &TargetArgs, use_name: &str) -> Resu
 
 /// The result of a write, in both audiences' terms.
 fn report_written(ctx: &Ctx<'_>, command: &str, written: &[Written]) -> Result<()> {
-    let payload = serde_json::json!({
-        "changed": written.iter().filter(|w| w.changed).count(),
-        "messages": written
-            .iter()
-            .map(|w| serde_json::json!({
-                "id": w.message_id,
-                "folder": w.folder,
-                "flags": w.flags,
-                "changed": w.changed,
-            }))
-            .collect::<Vec<_>>(),
-    });
-
     if ctx.out.is_structured() {
-        ctx.out.reply(command, &payload)?;
+        ctx.out
+            .reply(command, &mailbox_core::store::write_result(written))?;
         return Ok(());
     }
     let changed = written.iter().filter(|w| w.changed).count();
@@ -1128,11 +1123,12 @@ pub fn notify(ctx: &Ctx<'_>, args: &NotifyArgs) -> Result<()> {
             body: "Notifications are working.".into(),
         };
         notifier.send(&sample)?;
-        let payload = serde_json::json!({
-            "notifier": notifier.describe(),
-            "available": notifier.is_available(),
-            "sent": notifier.is_available(),
-        });
+        let payload = mailbox_api::NotifyStatus {
+            notifier: notifier.describe(),
+            available: notifier.is_available(),
+            sent: Some(notifier.is_available()),
+            ..Default::default()
+        };
         if ctx.out.is_structured() {
             ctx.out.reply("notify", &payload)?;
         } else if notifier.is_available() {
@@ -1162,14 +1158,15 @@ pub fn notify(ctx: &Ctx<'_>, args: &NotifyArgs) -> Result<()> {
         }
     }
 
-    let payload = serde_json::json!({
-        "enabled": config.enabled,
-        "query": config.query,
-        "notifier": notifier.describe(),
-        "available": notifier.is_available(),
-        "max_per_sync": config.max_per_sync,
-        "pending": waiting,
-    });
+    let payload = mailbox_api::NotifyStatus {
+        notifier: notifier.describe(),
+        available: notifier.is_available(),
+        sent: None,
+        enabled: Some(config.enabled),
+        query: Some(config.query.clone()),
+        max_per_sync: Some(config.max_per_sync),
+        pending: waiting.clone(),
+    };
 
     if ctx.out.is_structured() {
         ctx.out.reply("notify", &payload)?;
@@ -1206,6 +1203,8 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
     let Some(command) = &args.command else {
         let commands = [
             "ls", "search", "show", "folders", "accounts", "sync", "status", "snooze", "watch",
+            "flag", "mv", "cp", "rm", "archive", "spam", "attach", "send", "compose", "reply",
+            "outbox", "notify", "error",
         ];
         if ctx.out.is_structured() {
             ctx.out
@@ -1229,6 +1228,11 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
         "outbox" => schemars::schema_for!(Reply<OutboxList>),
         "snooze" => schemars::schema_for!(Reply<SnoozeList>),
         "watch" => schemars::schema_for!(Reply<ChangeList>),
+        "flag" | "mv" | "cp" | "rm" | "archive" | "spam" => {
+            schemars::schema_for!(Reply<WriteResult>)
+        }
+        "attach" => schemars::schema_for!(Reply<AttachmentList>),
+        "notify" => schemars::schema_for!(Reply<NotifyStatus>),
         "error" => schemars::schema_for!(ErrorResponse),
         other => {
             return Err(Error::not_found("schema for command", other));

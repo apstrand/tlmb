@@ -290,15 +290,7 @@ fn flag(
     let written = session.flag(&refs, &spec)?;
     Ok(Response::json(
         200,
-        &serde_json::json!({
-            "changed": written.iter().filter(|w| w.changed).count(),
-            "messages": written.iter().map(|w| serde_json::json!({
-                "id": w.message_id,
-                "folder": w.folder,
-                "flags": w.flags,
-                "changed": w.changed,
-            })).collect::<Vec<_>>(),
-        }),
+        &serde_json::to_value(mailbox_core::store::write_result(&written))?,
     ))
 }
 
@@ -319,10 +311,7 @@ fn move_to(
     let written = session.move_to(&refs, folder)?;
     Ok(Response::json(
         200,
-        &serde_json::json!({
-            "changed": written.iter().filter(|w| w.changed).count(),
-            "folder": folder,
-        }),
+        &serde_json::to_value(mailbox_core::store::write_result(&written))?,
     ))
 }
 

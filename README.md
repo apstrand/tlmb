@@ -432,7 +432,10 @@ Every command takes `--json` and emits one document stamped
 `"schema": "mailbox/v1"`. Failures print
 `{"error":{"code":…,"message":…,"retryable":…,"hint":…}}` to stderr and set a
 distinct exit code (§6.6). `mailbox schema <command>` prints the JSON Schema,
-and the test suite validates real output against it.
+and the test suite validates real output against it — for every subcommand the
+binary offers, since §14.4 makes that gating: a new command must either publish
+a schema or be recorded as emitting no document, and the test reads the command
+list out of `--help` so neither can be forgotten.
 
 ```sh
 MAILBOX_AGENT=1 mailbox ls --json --fields id,subject,from

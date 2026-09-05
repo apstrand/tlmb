@@ -17,6 +17,26 @@ use crate::store::changes::{self, ChangeKind, Event};
 use crate::store::ops::{FlagChange, OpKind};
 use crate::store::Store;
 
+/// Renders a batch of writes as the contract's `WriteResult` (§6.4).
+///
+/// Here rather than in each frontend because the CLI, the web server, and the
+/// MCP server all report the same thing, and three hand-built copies of one
+/// JSON shape is three chances for them to stop being the same shape.
+pub fn write_result(written: &[Written]) -> mailbox_api::WriteResult {
+    mailbox_api::WriteResult {
+        changed: written.iter().filter(|w| w.changed).count(),
+        messages: written
+            .iter()
+            .map(|w| mailbox_api::WriteRecord {
+                id: w.message_id.clone(),
+                folder: w.folder.clone(),
+                flags: w.flags.clone(),
+                changed: w.changed,
+            })
+            .collect(),
+    }
+}
+
 /// What a local write did, for the caller to report.
 #[derive(Debug, Clone)]
 pub struct Written {
