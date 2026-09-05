@@ -128,8 +128,12 @@ impl Policy {
             if ctx.sends_last_hour >= max {
                 return Err(Violation {
                     rule: "send.max_per_hour".into(),
+                    // "queued or sent", because the count includes mail that
+                    // has not gone out yet — and a message told it was refused
+                    // because 5 were "sent" when the outbox has delivered none
+                    // reads as a bug in the client.
                     detail: format!(
-                        "{} sent in the last hour, limit is {max}",
+                        "{} queued or sent in the last hour, limit is {max}",
                         ctx.sends_last_hour
                     ),
                 });

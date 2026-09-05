@@ -374,6 +374,12 @@ Under `MAILBOX_AGENT=1`, `send` holds the message for approval and returns
 `mailbox outbox approve <id>`. `--idempotency-key` makes a retried `send`
 return the original result instead of queueing a second copy.
 
+`max_per_hour` counts mail this account is *committed* to sending — queued and
+awaiting approval as well as delivered — because the thing it guards against is
+a loop, and a loop that queues two hundred messages in a second has delivered
+none of them yet. Cancelling gives the slot back; retrying after a failed
+delivery does not spend a second one.
+
 `folders --remote` asks the server instead of reading the local store: it lists
 every folder with its message and unread counts, fetches nothing, and writes
 nothing — so it works on an account that has never synced. `folders` without it

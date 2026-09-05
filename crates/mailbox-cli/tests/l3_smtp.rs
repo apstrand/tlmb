@@ -151,6 +151,28 @@ impl World {
         (id, message_id)
     }
 
+    /// Runs as an unsupervised agent (§6.4), which is what turns on §6.5's
+    /// approval default.
+    fn agent(&self, args: &[&str]) -> Run {
+        let out = Command::new(env!("CARGO_BIN_EXE_mailbox"))
+            .args(args)
+            .env("MAILBOX_CONFIG", &self.config)
+            .env("MAILBOX_STATE_DIR", &self.state)
+            .env("MAILBOX_PASSWORD_TEST", "testpass")
+            .env("MAILBOX_CLOCK", "2026-09-01T12:00:00Z")
+            .env("MAILBOX_SEED", "l3")
+            .env("XDG_RUNTIME_DIR", &self.dir)
+            .env("NO_COLOR", "1")
+            .env("MAILBOX_AGENT", "1")
+            .output()
+            .expect("run");
+        Run {
+            status: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    }
+
     fn flush(&self) -> serde_json::Value {
         self.json(&["outbox", "flush"])
     }
@@ -676,4 +698,260 @@ fn the_outbox_survives_a_restart() {
     assert_eq!(w.entry(id)["state"], "queued");
     w.flush();
     assert_eq!(w.server.deliveries_of(&message_id), 1);
+}
+
+// ---- M7: the policy and approval rules, against the L3 server ----
+
+/// The rate limit of §6.5, against the thing it exists for.
+///
+/// A limit that counted only *delivered* mail was no limit at all: a loop that
+/// queues two hundred messages in a second has delivered none of them, so every
+/// check saw zero and let the next one through. What has to be counted is mail
+/// this account is committed to sending.
+#[test]
+fn the_rate_limit_stops_a_burst_before_any_of_it_is_sent() {
+    let w = World::new();
+    std::fs::write(
+        w.config.parent().unwrap().join("policy.toml"),
+        "[send]\nmax_per_hour = 2\n",
+    )
+    .unwrap();
+
+    for i in 0..2 {
+        let run = w.run(&[
+            "--json",
+            "send",
+            "--to",
+            "alice@example.com",
+            "--subject",
+            &format!("Within the limit {i}"),
+            "--body",
+            "Hello.",
+        ]);
+        assert_eq!(run.status, 0, "{}", run.stderr);
+    }
+
+    // Nothing has been flushed, so nothing has been *sent* — and the third
+    // message must still be refused.
+    let run = w.run(&[
+        "--json",
+        "send",
+        "--to",
+        "alice@example.com",
+        "--subject",
+        "Over the limit",
+        "--body",
+        "Hello.",
+    ]);
+    assert_eq!(run.status, 7, "§6.6's policy exit code: {}", run.stdout);
+    assert_eq!(run.error_code(), "policy_denied");
+    assert!(
+        run.stderr.contains("max_per_hour"),
+        "the error must cite the rule: {}",
+        run.stderr
+    );
+
+    assert_eq!(
+        w.outbox().len(),
+        2,
+        "the refused message must not be queued"
+    );
+    assert_eq!(w.flush()["sent"], 2);
+    assert_eq!(
+        w.server.received().len(),
+        2,
+        "and only two reached the server"
+    );
+}
+
+/// A message that was cancelled was never sent, and must not go on holding a
+/// slot in the hour: an agent that cancels its own draft would otherwise lock
+/// itself out until the window rolled past.
+#[test]
+fn a_cancelled_message_gives_its_slot_back() {
+    let w = World::new();
+    let (id, _) = w.queue("Withdrawn");
+    // Written after queuing: `queue` previews the message to recover its
+    // Message-ID, and a preview is refused when a real send would be — see
+    // `a_dry_run_is_refused_when_a_real_send_would_be`.
+    std::fs::write(
+        w.config.parent().unwrap().join("policy.toml"),
+        "[send]\nmax_per_hour = 1\n",
+    )
+    .unwrap();
+    w.json(&["outbox", "cancel", &id.to_string()]);
+
+    let run = w.run(&[
+        "--json",
+        "send",
+        "--to",
+        "alice@example.com",
+        "--subject",
+        "The real one",
+        "--body",
+        "Hello.",
+    ]);
+    assert_eq!(
+        run.status, 0,
+        "a cancelled message should not count against the limit: {}",
+        run.stderr
+    );
+}
+
+/// Retrying after a failure mid-send must not cost a second slot. The
+/// alternative is an outbox that eats its own budget on a flaky link — the
+/// worse the network, the tighter the limit becomes.
+#[test]
+fn a_retry_after_a_mid_send_failure_does_not_spend_the_limit_twice() {
+    let w = World::new();
+    std::fs::write(
+        w.config.parent().unwrap().join("policy.toml"),
+        "[send]\nmax_per_hour = 2\n",
+    )
+    .unwrap();
+
+    let (id, message_id) = w.queue("Interrupted");
+    w.server.set_fault(Fault::DropDuringData);
+    assert_eq!(w.flush()["sent"], 0);
+    assert_eq!(w.server.deliveries_of(&message_id), 0);
+
+    w.server.set_fault(Fault::None);
+    w.json(&["outbox", "retry", &id.to_string()]);
+    assert_eq!(w.flush()["sent"], 1);
+    assert_eq!(
+        w.server.deliveries_of(&message_id),
+        1,
+        "exactly one copy after the retry"
+    );
+
+    // One message went out, and one slot was spent. The second is still there.
+    let run = w.run(&[
+        "--json",
+        "send",
+        "--to",
+        "alice@example.com",
+        "--subject",
+        "The second of two",
+        "--body",
+        "Hello.",
+    ]);
+    assert_eq!(
+        run.status, 0,
+        "the retry consumed a second slot: {}",
+        run.stderr
+    );
+}
+
+/// A message held for a human counts: it is going to be sent, and pretending
+/// otherwise would let an agent queue an unbounded backlog for someone to find.
+#[test]
+fn mail_waiting_for_approval_counts_against_the_limit() {
+    let w = World::new();
+    std::fs::write(
+        w.config.parent().unwrap().join("policy.toml"),
+        "[send]\nmax_per_hour = 1\n",
+    )
+    .unwrap();
+
+    let held = w.agent(&[
+        "--json",
+        "send",
+        "--to",
+        "alice@example.com",
+        "--subject",
+        "For approval",
+        "--body",
+        "Hello.",
+        "--yes",
+    ]);
+    assert_eq!(held.json()["status"], "pending_approval");
+
+    let second = w.agent(&[
+        "--json",
+        "send",
+        "--to",
+        "alice@example.com",
+        "--subject",
+        "And another",
+        "--body",
+        "Hello.",
+        "--yes",
+    ]);
+    assert_eq!(second.status, 7, "{}", second.stdout);
+    assert!(second.stderr.contains("max_per_hour"), "{}", second.stderr);
+}
+
+/// The approval queue survives a failure on the way out: releasing a message
+/// and having the server drop the connection must leave it queued and
+/// retryable, not silently back in `pending_approval` (where the next flush
+/// would ignore it) and not marked sent (§5.5).
+#[test]
+fn an_approved_message_that_fails_mid_send_stays_queued() {
+    let w = World::new();
+    let approved = w.agent(&[
+        "--json",
+        "send",
+        "--to",
+        "alice@example.com",
+        "--subject",
+        "Released",
+        "--body",
+        "Hello.",
+        "--yes",
+    ]);
+    let id = approved.json()["id"].as_i64().expect("an outbox id");
+    w.json(&["outbox", "approve", &id.to_string()]);
+
+    w.server.set_fault(Fault::DropDuringData);
+    assert_eq!(w.flush()["sent"], 0);
+    let entry = w.entry(id);
+    assert_eq!(
+        entry["state"], "queued",
+        "a failed delivery must not walk the message back to pending_approval: {entry}"
+    );
+
+    w.server.set_fault(Fault::None);
+    w.json(&["outbox", "retry", &id.to_string()]);
+    assert_eq!(w.flush()["sent"], 1);
+    assert_eq!(w.entry(id)["state"], "sent");
+}
+
+/// And the preview tells the truth about the limit too.
+///
+/// A `--dry-run` consumes nothing and sends nothing, so it could have been
+/// exempted — but a preview that succeeds where the send it previews would be
+/// refused is a preview that lies, which is the one thing it must not do.
+#[test]
+fn a_dry_run_is_refused_when_a_real_send_would_be() {
+    let w = World::new();
+    std::fs::write(
+        w.config.parent().unwrap().join("policy.toml"),
+        "[send]\nmax_per_hour = 1\n",
+    )
+    .unwrap();
+    w.json(&[
+        "send",
+        "--to",
+        "alice@example.com",
+        "--subject",
+        "The one allowed",
+        "--body",
+        "Hello.",
+    ]);
+
+    let run = w.run(&[
+        "--json",
+        "--dry-run",
+        "send",
+        "--to",
+        "alice@example.com",
+        "--subject",
+        "Preview",
+        "--body",
+        "Hello.",
+    ]);
+    assert_eq!(run.status, 7, "{}", run.stdout);
+    assert!(run.stderr.contains("max_per_hour"), "{}", run.stderr);
+    // And it still consumed nothing.
+    assert_eq!(w.outbox().len(), 1);
 }

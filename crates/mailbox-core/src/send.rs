@@ -69,7 +69,9 @@ impl Session {
         // leaves nothing behind to clean up.
         let policy = Policy::load_default()?;
         let ctx = SendContext {
-            sends_last_hour: self.store().sends_since(self.clock.now() - 3600)?,
+            sends_last_hour: self
+                .store()
+                .sends_committed_since(self.clock.now() - 3600)?,
             confirmed: req.confirmed,
         };
         policy.check(&draft, &ctx).map_err(Error::from)?;

@@ -330,9 +330,25 @@ impl Store {
 
     /// How many messages were accepted in the last hour, for the policy's rate
     /// limit (§6.5).
-    pub fn sends_since(&self, since: Timestamp) -> Result<u32> {
+    /// How much of the rolling hour §6.5's `max_per_hour` has been spent.
+    ///
+    /// Counts mail *committed* to going out, not only mail that has already
+    /// gone: a queued message and one awaiting approval are both messages this
+    /// account is going to send. Counting deliveries alone made the limit
+    /// useless against the thing it exists for — a loop that queues two
+    /// hundred messages in a second has delivered none of them yet, so every
+    /// check saw a counter of zero and let the next one through.
+    ///
+    /// Cancelled, failed, and draft entries do not count: nothing left, and
+    /// nothing is going to.
+    ///
+    /// A row is counted once, by whichever timestamp falls in the window —
+    /// when it went out, or, for one that has not, when it was queued.
+    pub fn sends_committed_since(&self, since: Timestamp) -> Result<u32> {
         Ok(self.conn.query_row(
-            "SELECT count(*) FROM outbox WHERE state = 'sent' AND sent_at >= ?1",
+            "SELECT count(*) FROM outbox
+             WHERE state IN ('queued', 'pending_approval', 'sent')
+               AND (CASE WHEN sent_at IS NULL THEN created ELSE sent_at END) >= ?1",
             [since],
             |r| r.get::<_, i64>(0),
         )? as u32)
