@@ -2126,6 +2126,10 @@ dependencies = [
 [[package]]
 name = "mailbox-l3"
 version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "sha2",
+]
 
 [[package]]
 name = "mailbox-tui"

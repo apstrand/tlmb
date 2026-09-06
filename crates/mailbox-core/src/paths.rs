@@ -25,8 +25,37 @@ pub fn config_dir() -> PathBuf {
     xdg("XDG_CONFIG_HOME", ".config").join("mailbox")
 }
 
-/// `$MAILBOX_STATE_DIR`, else `$XDG_DATA_HOME/mailbox`.
+/// Relocates every per-account path for this process.
+///
+/// `SessionOptions.state_dir` is how the mobile shells point the store at the
+/// app's own data directory, because XDG does not exist on a phone. Everything
+/// *derived* from that directory — the owner socket, the OAuth2 token cache —
+/// has to move with it, and a function that reads the environment cannot know
+/// it moved. So the relocation is recorded here, once, by whoever opens the
+/// session.
+///
+/// Process-wide because the setting is: it is where this application keeps its
+/// data, not a per-command choice.
+pub fn set_state_root(root: &std::path::Path) {
+    let mut slot = state_root().lock().unwrap_or_else(|e| e.into_inner());
+    *slot = Some(root.to_path_buf());
+}
+
+fn state_root() -> &'static std::sync::Mutex<Option<PathBuf>> {
+    static ROOT: std::sync::OnceLock<std::sync::Mutex<Option<PathBuf>>> =
+        std::sync::OnceLock::new();
+    ROOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// [`set_state_root`], else `$MAILBOX_STATE_DIR`, else `$XDG_DATA_HOME/mailbox`.
 pub fn state_dir() -> PathBuf {
+    if let Some(root) = state_root()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        return root;
+    }
     if let Some(p) = env_path("MAILBOX_STATE_DIR") {
         return p;
     }

@@ -102,6 +102,27 @@ pub struct Applied {
     pub credentials_not_stored: Vec<String>,
 }
 
+/// The credential to send for one account.
+///
+/// For OAuth2 this is deliberately *not* what [`crate::credentials::resolve`]
+/// returns: that is an access token good for about an hour, and §8 promises
+/// the new device does not have to redo the OAuth flow. What travels is the
+/// refresh token, which is the thing that survives the trip.
+fn paired_credential(id: &str, account: &crate::config::AccountConfig) -> Option<PairedCredential> {
+    if account.oauth_provider.is_some() {
+        let cached = crate::oauth::cached(id);
+        return crate::credentials::refresh_token(id, cached.as_ref())
+            .map(|refresh_token| PairedCredential::OAuth2 { refresh_token });
+    }
+    match crate::credentials::resolve(id, account).ok()? {
+        crate::imap::Credential::Password(secret) => Some(PairedCredential::Password { secret }),
+        // An account that resolves to a bearer token without being configured
+        // for OAuth2 got it from the environment, and sending an hour of
+        // access to another machine is not what anyone meant by pairing.
+        crate::imap::Credential::OAuth2(_) => None,
+    }
+}
+
 impl Payload {
     /// Builds the payload for the accounts in `config`.
     ///
@@ -117,16 +138,7 @@ impl Payload {
             .map(|(id, account)| PairedAccount {
                 id: id.clone(),
                 config: account.clone(),
-                credential: crate::credentials::resolve(id, account)
-                    .ok()
-                    .map(|c| match c {
-                        crate::imap::Credential::Password(secret) => {
-                            PairedCredential::Password { secret }
-                        }
-                        crate::imap::Credential::OAuth2(refresh_token) => {
-                            PairedCredential::OAuth2 { refresh_token }
-                        }
-                    }),
+                credential: paired_credential(id, account),
             })
             .collect();
 

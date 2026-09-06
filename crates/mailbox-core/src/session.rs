@@ -111,7 +111,14 @@ impl Session {
         };
 
         let dir = match &opts.state_dir {
-            Some(root) => root.join(&account_id),
+            Some(root) => {
+                // Recorded so that everything else derived from the state
+                // directory — the owner socket, the OAuth2 token cache — lands
+                // beside the store rather than at an XDG path that does not
+                // exist on this platform.
+                crate::paths::set_state_root(root);
+                root.join(&account_id)
+            }
             None => crate::paths::account_dir(&account_id),
         };
         let store = if opts.read_only {

@@ -300,8 +300,14 @@ fn apply(ctx: &Ctx<'_>, payload: &Payload, mode: ApplyMode) -> Result<()> {
                     manual.push(account.id.clone());
                 }
             }
-            Some(mailbox_core::pair::PairedCredential::OAuth2 { .. }) => {
-                manual.push(account.id.clone());
+            Some(mailbox_core::pair::PairedCredential::OAuth2 { refresh_token }) => {
+                // §8: "no re-doing OAuth". The refresh token is what makes
+                // that true, and the first command on this device trades it
+                // for an access token.
+                match mailbox_core::credentials::adopt_refresh_token(&account.id, refresh_token) {
+                    Ok(_) => stored.push(account.id.clone()),
+                    Err(_) => manual.push(account.id.clone()),
+                }
             }
             None => manual.push(account.id.clone()),
         }

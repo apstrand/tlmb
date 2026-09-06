@@ -12,7 +12,9 @@
 //! a `dev-dependency` of the test suites.
 
 pub mod imap;
+pub mod oauth;
 pub mod smtp;
 
 pub use imap::{ImapFault, ImapServer, Message};
+pub use oauth::{OauthFault, OauthServer, TokenRequest};
 pub use smtp::{Fault, ReceivedMessage, SmtpServer, Stage};

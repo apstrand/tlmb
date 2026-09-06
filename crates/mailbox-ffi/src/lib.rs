@@ -20,9 +20,10 @@ use mailbox_api::{
     Account, AccountList, Address, BodyFormat, ErrorResponse, FolderList, MessageList, Reply,
     SCHEMA_VERSION,
 };
+use mailbox_core::accounts;
 use mailbox_core::clock::Clock;
 use mailbox_core::compose::Draft;
-use mailbox_core::config::{AccountConfig, Config};
+use mailbox_core::config::Config;
 use mailbox_core::credentials;
 use mailbox_core::error::{Error, Result};
 use mailbox_core::imap::sync::SyncOptions;
@@ -334,81 +335,19 @@ impl Mailbox {
         Ok(json!({ "ok": true }))
     }
 
-    pub fn add_account(&self, mut spec: AddAccount) -> Result<Value> {
-        if spec.address.trim().is_empty() {
-            return Err(Error::usage("an account needs an address"));
-        }
-        let address = spec.address.trim().to_string();
-        let id = if spec.id.trim().is_empty() {
-            account_id_from_address(&address)
-        } else {
-            spec.id.trim().to_ascii_lowercase()
-        };
-
-        if spec.imap_host.as_deref().unwrap_or("").is_empty() {
-            if let Some(hints) = providers::hints_for(&address) {
-                spec.imap_host = Some(hints.imap_host);
-                if spec.imap_port.is_none() {
-                    spec.imap_port = Some(hints.imap_port);
-                }
-                if spec.imap_security.as_deref().unwrap_or("").is_empty() {
-                    spec.imap_security = Some(hints.imap_security.to_string());
-                }
-                if spec.smtp_host.as_deref().unwrap_or("").is_empty() {
-                    spec.smtp_host = Some(hints.smtp_host);
-                }
-                if spec.smtp_port.is_none() {
-                    spec.smtp_port = Some(hints.smtp_port);
-                }
-                if spec.smtp_security.as_deref().unwrap_or("").is_empty() {
-                    spec.smtp_security = Some(hints.smtp_security.to_string());
-                }
-            }
-        }
-        if spec.imap_host.as_deref().unwrap_or("").is_empty() {
-            return Err(Error::usage(
-                "imap_host is required (unknown provider; fill it in by hand)",
-            ));
-        }
-
-        let mut config = Config::load(&self.config_path)?;
-        if config.accounts.contains_key(&id) {
-            return Err(Error::usage(format!("account `{id}` already exists")));
-        }
-        let mut cfg = AccountConfig {
-            address: address.clone(),
-            imap_host: spec.imap_host,
-            imap_port: spec.imap_port,
-            imap_security: spec.imap_security,
-            imap_user: spec.imap_user,
-            smtp_host: spec.smtp_host,
-            smtp_port: spec.smtp_port,
-            smtp_security: spec.smtp_security,
-            smtp_user: spec.smtp_user,
-            ..Default::default()
-        };
-        if spec.require_tls == Some(false) {
-            cfg.require_tls = false;
-        }
-        config.accounts.insert(id.clone(), cfg);
-        config.save(&self.config_path)?;
-
-        if let Some(password) = spec.password.filter(|p| !p.is_empty()) {
-            credentials::install(&id, Credential::Password(password));
-        }
+    /// Adds an account. The rules live in `mailbox_core::accounts` (§9), so
+    /// the iOS setup screen, the CLI, and any future window agree about what a
+    /// valid account is instead of each having an opinion.
+    pub fn add_account(&self, spec: AddAccount) -> Result<Value> {
+        let added = accounts::add(&self.config_path, &spec.into())?;
         self.reload()?;
-        Ok(json!({ "id": id, "address": address }))
+        Ok(serde_json::to_value(added)?)
     }
 
     pub fn remove_account(&self, id: &str) -> Result<Value> {
-        let mut config = Config::load(&self.config_path)?;
-        if config.accounts.remove(id).is_none() {
-            return Err(Error::not_found("account", id));
-        }
-        config.save(&self.config_path)?;
-        credentials::forget(id);
+        let store = accounts::remove(&self.config_path, id)?;
         self.reload()?;
-        Ok(json!({ "removed": id }))
+        Ok(json!({ "removed": id, "store": store.display().to_string() }))
     }
 
     pub fn providers(&self, address: &str) -> Result<Value> {
@@ -588,20 +527,6 @@ fn parse_one_address(s: &str) -> Result<Address> {
     Ok(Address::new(None, s))
 }
 
-fn account_id_from_address(address: &str) -> String {
-    let local = address.split('@').next().unwrap_or(address);
-    let s: String = local
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        .collect::<String>()
-        .to_ascii_lowercase();
-    if s.is_empty() {
-        "account".into()
-    } else {
-        s
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct ListArgs {
     query: Option<String>,
@@ -685,6 +610,35 @@ pub struct AddAccount {
     pub smtp_user: Option<String>,
     pub password: Option<String>,
     pub require_tls: Option<bool>,
+    #[serde(default)]
+    pub oauth_provider: Option<String>,
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+}
+
+/// The shell's wire shape is the core's, field for field; keeping the two
+/// types distinct is what lets the FFI stay a stable ABI while the core's grows
+/// a field.
+impl From<AddAccount> for accounts::NewAccount {
+    fn from(a: AddAccount) -> accounts::NewAccount {
+        accounts::NewAccount {
+            id: a.id,
+            address: a.address,
+            imap_host: a.imap_host,
+            imap_port: a.imap_port,
+            imap_security: a.imap_security,
+            imap_user: a.imap_user,
+            smtp_host: a.smtp_host,
+            smtp_port: a.smtp_port,
+            smtp_security: a.smtp_security,
+            smtp_user: a.smtp_user,
+            password: a.password,
+            credential_command: None,
+            require_tls: a.require_tls,
+            oauth_provider: a.oauth_provider,
+            oauth_client_id: a.oauth_client_id,
+        }
+    }
 }
 
 pub use c::{mailbox_close, mailbox_exec, mailbox_open, mailbox_string_free};

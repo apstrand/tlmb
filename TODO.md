@@ -27,6 +27,18 @@ off, and the gaps found along the way.
   one, which is the honest workaround. A thread per account fixes this and the
   two idling items above together.
 
+- **Autoconfig discovery.** §9 wants `autoconfig`/`autodiscover`, DNS SRV, and
+  the Mozilla ISPDB behind `accounts add`; there is a built-in table for the
+  big providers and nothing else, so an unknown domain needs `--imap-host`.
+  The HTTPS client that OAuth2 needed (`https.rs`) is most of what the first
+  two want; DNS SRV needs a resolver, which is the part worth thinking about
+  before starting.
+- **No OAuth2 screen in the iOS shell.** The flow is in the core and the FFI
+  can add an account with `oauth_provider`, but nothing there drives
+  `oauth::login` — and a loopback redirect is not how a phone does this: iOS
+  wants `ASWebAuthenticationSession` and a custom URL scheme. The core's
+  `Redirect` would need a sibling that takes the callback URL from the shell.
+
 ## Verification gaps
 
 - **L2 against Cyrus and Stalwart.** M2 requires it (§15) and it is the one

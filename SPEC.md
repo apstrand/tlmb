@@ -793,3 +793,24 @@ Recorded so they are not relitigated. Each names what would justify reopening it
 - **Snooze: local-only first, low priority.** A timer plus a local record; the
   message returns on the device that snoozed it. The UI states this rather than
   implying sync. Cross-device snooze rides the state folder in M8.
+
+- **No OAuth2 client id ships with mailbox.** For an installed application the
+  client id is public by design — PKCE, not secrecy, is what protects the flow
+  — but it is still an identity registered with the provider by whoever
+  publishes the application. Shipping one would mean every user's traffic
+  arriving at Google under a single unverified app subject to that project's
+  quota and review status, and borrowing another client's is against every
+  provider's terms and one rotation away from breaking every install at once.
+  So `oauth_client_id` is per-account config, the endpoints and scopes are
+  built in, and the error a user hits before they have one links to the right
+  console. *Reopen if* mailbox acquires a publisher who can register and
+  verify an application, and stand behind its quota.
+
+- **The OAuth2 access token is cached on disk.** The refresh token goes to the
+  OS keychain where there is one; the access token, and the refresh token where
+  there is no keychain, go to `oauth.json` in the account's state directory —
+  mode 0600 inside a directory that is 0700, which is the protection §9 already
+  gives the mail itself. The alternative is a token exchange with the provider
+  before every `mailbox ls`, which is a network round trip on a command that
+  should not touch the network at all. *Reopen if* the encrypted store of §9
+  lands, at which point the tokens belong inside it.

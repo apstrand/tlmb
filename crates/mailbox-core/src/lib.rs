@@ -5,6 +5,7 @@
 //! here, that logic belongs here. The CLI in `mailbox-cli` is argument parsing
 //! and rendering; the TUI, GUI, and web shells will be the same.
 
+pub mod accounts;
 pub mod attach;
 pub mod bench;
 pub mod clipboard;
@@ -17,10 +18,12 @@ pub mod fixture;
 pub mod flags;
 pub mod hex;
 pub mod history;
+pub mod https;
 pub mod id;
 pub mod imap;
 pub mod mime;
 pub mod notify;
+pub mod oauth;
 pub mod open;
 pub mod owner;
 pub mod pair;

@@ -39,6 +39,8 @@ than retrofitted.
 | Desktop notifications | done (§11, M3) |
 | TUI: mutt keys, incremental search, `keys.toml` | done (§7, M3) |
 | Pairing: QR, LAN, encrypted export file | done (§8, M4) |
+| `accounts add`/`edit`/`remove`, built-in provider table | done (§9) |
+| OAuth2: PKCE, loopback redirect, refresh, `XOAUTH2` | done (§9) |
 | Snooze, local-only (§7) | done (M5) |
 | Background sync: `IDLE`, poll fallback, one owner | done (§5.3, §4.1) |
 | Compose and reply in the web UI and the GUI | done (§7) |
@@ -246,21 +248,19 @@ runs without it.
 
 The iOS app is a thin SwiftUI shell over `mailbox-ffi` — the same core, no web
 view (§3). Inbox, thread, compose, search, and account setup are in
-[`ios/`](ios/README.md). Android is not started. OAuth2 and the optional
-push notifier of §11 are not in this cut.
+[`ios/`](ios/README.md). Android is not started. The OAuth2 flow is in the
+core, so the shell needs a screen for it rather than an implementation; the
+optional push notifier of §11 is not in this cut.
 
 ### Not built yet
 
-- **OAuth2 and `accounts add`.** Autoconfig discovery and the system-browser
-  PKCE flow. A built-in host table covers Gmail/Fastmail/Outlook/Yahoo/iCloud/
-  Proton so the iOS setup can skip the hosts for those.
 - **The §4.1 owner socket.** The advisory lock is built — exactly one process
   is an account's sync engine, and a loser is told so truthfully, since its
   local writes are already queued and the owner pushes them. What is missing is
   the socket that would let the loser have its writes performed *now*.
-- **Account setup.** `accounts add` and autoconfig discovery. An account is
-  configured by hand (below), and credentials come from `credential_command`,
-  the OS keychain via its own CLI, or an environment variable.
+- **Autoconfig discovery.** `accounts add` uses a built-in table for the big
+  providers; §9 also wants `autoconfig`/`autodiscover`, DNS SRV, and the
+  Mozilla ISPDB, so that an unknown domain does not need `--imap-host`.
 - **`COMPRESS=DEFLATE`** and `raw:` server-side search passthrough.
 - **The cross-device state folder** (§5.4), and with it shared tags, saved
   searches, and snooze that follows you between machines. All three are local
@@ -276,8 +276,59 @@ No runtime, no daemon, no database server. SQLite is compiled in.
 
 ## Adding an account
 
-`accounts add` and autoconfig discovery are not built. For now an account is a stanza
-in `$XDG_CONFIG_HOME/mailbox/config.toml` (default
+```sh
+mailbox accounts add peter@gmail.com
+```
+
+For the providers in the built-in table — Gmail, Fastmail, Outlook, Yahoo,
+iCloud, Proton — that is the whole of it; anywhere else needs at least
+`--imap-host`. Full autoconfig discovery is still to come, so an unknown domain
+asks rather than guesses. `accounts edit <id>` changes a setting, `accounts
+remove <id>` takes the account out of the config and leaves the mail cached on
+disk (it names the directory so you can delete it deliberately), and `accounts
+test <id>` connects and reports what the server offers.
+
+The password never reaches the config file (§9). `--credential-command 'pass
+show mail/work'` is the durable way to supply one; `--password-stdin` reads it
+from a pipe for a one-off.
+
+```sh
+mailbox accounts add peter@example.org \
+    --imap-host imap.example.org \
+    --credential-command 'pass show mail/work'
+```
+
+### OAuth2
+
+```sh
+mailbox accounts add peter@gmail.com --oauth google \
+    --oauth-client-id 1234.apps.googleusercontent.com --login
+mailbox accounts login peter          # again, whenever the grant is revoked
+```
+
+The system browser opens, the redirect comes back to a loopback port bound
+before the browser is launched, and PKCE (S256) is what stops anyone who sees
+the authorization code from using it. Google, Microsoft, and Yahoo are known;
+`oauth_auth_url`, `oauth_token_url`, and `oauth_scope` point at anything else.
+On a machine with no browser, `--no-browser` prints the URL and waits.
+
+**No client id ships with mailbox.** For an installed application the client id
+is public by design — PKCE, not secrecy, is what protects the flow — but it is
+still an identity registered with the provider by whoever publishes the
+application, and borrowing another program's is both against their terms and
+one rotation away from breaking. Register one (the error message links to the
+right console) and pass `--oauth-client-id`. See §16.
+
+The refresh token goes to the OS keychain where there is one, and otherwise to
+`oauth.json` in the account's state directory, mode 0600 inside a directory
+that is 0700 — the same protection §9 gives the mail itself. The access token
+is cached beside it and renewed automatically when it expires, so no command
+waits on a browser. `mailbox pair` carries the refresh token, so a second
+device does not repeat the flow.
+
+### By hand
+
+An account is a stanza in `$XDG_CONFIG_HOME/mailbox/config.toml` (default
 `~/.config/mailbox/config.toml`); everything is optional except the address and
 the server ([§12](SPEC.md)):
 

@@ -170,6 +170,15 @@ fn needs_write(cmd: &Command) -> bool {
         // The server reads; each write it performs opens its own session
         // (§4.1), so the handle it holds stays read-only.
         Command::Serve(_) => false,
+        // Adding, editing, or removing an account rewrites the config; a
+        // login writes a token file. Listing and testing do not.
+        Command::Accounts(args) => matches!(
+            args.action,
+            Some(cli::AccountsAction::Add(_))
+                | Some(cli::AccountsAction::Edit(_))
+                | Some(cli::AccountsAction::Remove { .. })
+                | Some(cli::AccountsAction::Login(_))
+        ),
         // Receiving a pairing rewrites the config, and may create a store.
         Command::Pair(_) => true,
         // `show` and `attach` fetch a body they do not have (§5.1), which is a

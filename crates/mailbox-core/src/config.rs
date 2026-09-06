@@ -142,7 +142,7 @@ pub struct Pair {
     pub relay: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountConfig {
     pub address: String,
@@ -182,6 +182,35 @@ pub struct AccountConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_command: Option<String>,
 
+    /// `google` | `microsoft` | `yahoo` — authenticate with OAuth2 rather than
+    /// a password (§9). `mailbox accounts login <id>` performs the flow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_provider: Option<String>,
+
+    /// The OAuth2 client id registered for this installation.
+    ///
+    /// Config rather than a credential, and deliberately: for an installed
+    /// application the client id is public by design — PKCE is what protects
+    /// the flow — so it is an identifier, not a secret. No id ships with
+    /// mailbox; see §16.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client_id: Option<String>,
+
+    /// A client *secret*, for the providers that still insist on one for a
+    /// native app. It is not a secret in any real sense once it is on a
+    /// laptop, which is why it may also be supplied through
+    /// `MAILBOX_OAUTH_CLIENT_SECRET_<ACCOUNT>` and kept out of the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_client_secret: Option<String>,
+
+    /// Overrides for a provider the built-in table does not know.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_auth_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_token_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_scope: Option<String>,
+
     /// §9. Turning this off is only honoured for a loopback host.
     #[serde(default = "default_true")]
     pub require_tls: bool,
@@ -189,6 +218,40 @@ pub struct AccountConfig {
     /// `none` | `recent` | `full` (§5.1).
     #[serde(default = "default_offline")]
     pub offline: String,
+}
+
+/// Written out rather than derived, so that `AccountConfig::default()` and a
+/// deserialized empty stanza agree.
+///
+/// A derived `Default` gives `require_tls: false`, while `#[serde(default =
+/// "default_true")]` gives `true` — and the two are used interchangeably by
+/// anything that builds a config with `..Default::default()`. That
+/// disagreement is a silent downgrade to plaintext, which is the worst
+/// possible field to have it on.
+impl Default for AccountConfig {
+    fn default() -> AccountConfig {
+        AccountConfig {
+            address: String::new(),
+            identities: Vec::new(),
+            imap_host: None,
+            imap_port: None,
+            imap_security: None,
+            imap_user: None,
+            smtp_host: None,
+            smtp_port: None,
+            smtp_security: None,
+            smtp_user: None,
+            credential_command: None,
+            oauth_provider: None,
+            oauth_client_id: None,
+            oauth_client_secret: None,
+            oauth_auth_url: None,
+            oauth_token_url: None,
+            oauth_scope: None,
+            require_tls: default_true(),
+            offline: default_offline(),
+        }
+    }
 }
 
 impl AccountConfig {

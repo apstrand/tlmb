@@ -683,8 +683,300 @@ pub fn folders(ctx: &Ctx<'_>, args: &FoldersArgs) -> Result<()> {
 pub fn accounts(ctx: &Ctx<'_>, args: &AccountsArgs) -> Result<()> {
     match &args.action {
         Some(AccountsAction::Test { account }) => accounts_test(ctx, account.as_deref()),
+        Some(AccountsAction::Add(args)) => accounts_add(ctx, args),
+        Some(AccountsAction::Edit(args)) => accounts_edit(ctx, args),
+        Some(AccountsAction::Remove { id }) => accounts_remove(ctx, id),
+        Some(AccountsAction::Login(args)) => accounts_login(ctx, args),
         _ => accounts_list(ctx),
     }
+}
+
+/// The config file being edited. `--config` wins, else the XDG path.
+fn config_path(ctx: &Ctx<'_>) -> std::path::PathBuf {
+    ctx.global
+        .config
+        .clone()
+        .unwrap_or_else(mailbox_core::paths::config_file)
+}
+
+/// Turns the shared flags into a core [`NewAccount`].
+fn account_spec(
+    ctx: &Ctx<'_>,
+    settings: &crate::cli::AccountSettings,
+    address: &str,
+) -> Result<mailbox_core::accounts::NewAccount> {
+    Ok(mailbox_core::accounts::NewAccount {
+        id: String::new(),
+        address: address.to_string(),
+        imap_host: settings.imap_host.clone(),
+        imap_port: settings.imap_port,
+        imap_security: settings.imap_security.clone(),
+        imap_user: settings.imap_user.clone(),
+        smtp_host: settings.smtp_host.clone(),
+        smtp_port: settings.smtp_port,
+        smtp_security: settings.smtp_security.clone(),
+        smtp_user: settings.smtp_user.clone(),
+        password: if settings.password_stdin {
+            Some(read_password(ctx)?)
+        } else {
+            None
+        },
+        credential_command: settings.credential_command.clone(),
+        require_tls: if settings.insecure { Some(false) } else { None },
+        oauth_provider: settings.oauth.clone(),
+        oauth_client_id: settings.oauth_client_id.clone(),
+    })
+}
+
+/// Reads a password from stdin.
+///
+/// stdin rather than a prompt or a flag: a flag lands in the shell history and
+/// in `ps`, and §6.4 forbids prompting when stdin is not a terminal — which,
+/// for a command whose whole input is a secret, is most of the time.
+fn read_password(ctx: &Ctx<'_>) -> Result<String> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(|e| Error::usage(format!("reading the password from stdin: {e}")))?;
+    let password = buf.trim_end_matches(['\n', '\r']).to_string();
+    if password.is_empty() {
+        return Err(Error::usage("stdin held no password"));
+    }
+    let _ = ctx;
+    Ok(password)
+}
+
+fn accounts_add(ctx: &Ctx<'_>, args: &crate::cli::AddAccountArgs) -> Result<()> {
+    ctx.confirm("accounts add")?;
+    let path = config_path(ctx);
+    let mut spec = account_spec(ctx, &args.settings, &args.address)?;
+    spec.id = args.id.clone().unwrap_or_default();
+
+    if ctx.global.dry_run {
+        let payload = serde_json::json!({
+            "would_add": spec.address,
+            "config": path.display().to_string(),
+            "discovered": mailbox_core::providers::hints_for(&spec.address).is_some(),
+        });
+        if ctx.out.is_structured() {
+            ctx.out.reply("accounts add", &payload)?;
+        } else {
+            ctx.out
+                .print(format!("would add {} to {}", spec.address, path.display()));
+        }
+        return Ok(());
+    }
+
+    let added = mailbox_core::accounts::add(&path, &spec)?;
+
+    // The login is offered rather than assumed: it opens a browser, which is
+    // not something a command should do without having been asked.
+    if args.login {
+        let mut opts = ctx.opts.clone();
+        opts.account = Some(added.id.clone());
+        run_login(ctx, &opts, &added.id, 300, false)?;
+    }
+
+    if ctx.out.is_structured() {
+        ctx.out.reply("accounts add", &added)?;
+    } else {
+        ctx.out.print(format!(
+            "{} {} as `{}`{}",
+            ctx.out.paint("added", GREEN),
+            added.address,
+            added.id,
+            if added.discovered {
+                ctx.out.dim(" (servers from the built-in table)")
+            } else {
+                String::new()
+            }
+        ));
+        match &added.credential {
+            Some(source) => ctx.out.print(format!("  credential: {source}")),
+            None => ctx.out.print(ctx.out.dim(&format!(
+                "  no credential yet — set `credential_command`, or export MAILBOX_PASSWORD_{}",
+                mailbox_core::credentials::env_key(&added.id)
+            ))),
+        }
+        ctx.out.print(ctx.out.dim(&format!(
+            "  test it with `mailbox accounts test {}`",
+            added.id
+        )));
+    }
+    Ok(())
+}
+
+fn accounts_edit(ctx: &Ctx<'_>, args: &crate::cli::EditAccountArgs) -> Result<()> {
+    ctx.confirm("accounts edit")?;
+    let path = config_path(ctx);
+    let mut spec = account_spec(ctx, &args.settings, args.address.as_deref().unwrap_or(""))?;
+    spec.id = args.id.clone();
+    let updated = mailbox_core::accounts::edit(&path, &args.id, &spec)?;
+
+    if ctx.out.is_structured() {
+        ctx.out.reply(
+            "accounts edit",
+            &serde_json::json!({
+                "id": args.id,
+                "address": updated.address,
+                "imap_host": updated.imap_host,
+                "smtp_host": updated.smtp_host,
+                "oauth_provider": updated.oauth_provider,
+            }),
+        )?;
+    } else {
+        ctx.out.print(format!(
+            "{} `{}` — {} at {}",
+            ctx.out.paint("updated", GREEN),
+            args.id,
+            updated.address,
+            updated.imap_host.clone().unwrap_or_default()
+        ));
+    }
+    Ok(())
+}
+
+fn accounts_remove(ctx: &Ctx<'_>, id: &str) -> Result<()> {
+    ctx.confirm("accounts remove")?;
+    let path = config_path(ctx);
+
+    if ctx.global.dry_run {
+        let payload = serde_json::json!({ "would_remove": id });
+        if ctx.out.is_structured() {
+            ctx.out.reply("accounts remove", &payload)?;
+        } else {
+            ctx.out.print(format!("would remove `{id}`"));
+        }
+        return Ok(());
+    }
+
+    let store = mailbox_core::accounts::remove(&path, id)?;
+    let payload = serde_json::json!({
+        "removed": id,
+        // Named rather than deleted: a mailbox's local cache is not something
+        // to lose to a mistyped id, and re-adding the account finds it again.
+        "store": store.display().to_string(),
+        "store_removed": false,
+    });
+    if ctx.out.is_structured() {
+        ctx.out.reply("accounts remove", &payload)?;
+    } else {
+        ctx.out
+            .print(format!("{} `{id}`", ctx.out.paint("removed", GREEN)));
+        if store.exists() {
+            ctx.out.print(ctx.out.dim(&format!(
+                "  its mail is still cached in {} — delete that directory to reclaim the space",
+                store.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `accounts login` (§9): the OAuth2 flow, through the system browser.
+fn accounts_login(ctx: &Ctx<'_>, args: &crate::cli::LoginArgs) -> Result<()> {
+    ctx.confirm("accounts login")?;
+    let mut opts = ctx.opts.clone();
+    if let Some(account) = &args.account {
+        opts.account = Some(account.clone());
+    }
+    let session = Session::open(&opts, ctx.tracer.clone(), ctx.clock.clone())?;
+    let id = session.account_id.clone();
+    run_login(ctx, &opts, &id, args.wait, args.no_browser)
+}
+
+fn run_login(
+    ctx: &Ctx<'_>,
+    opts: &SessionOptions,
+    account_id: &str,
+    wait: u64,
+    no_browser: bool,
+) -> Result<()> {
+    let config = match &opts.config_path {
+        Some(path) => mailbox_core::config::Config::load(path)?,
+        None => mailbox_core::config::Config::load_default()?,
+    };
+    let cfg = config.account(account_id)?;
+    let endpoints = mailbox_core::oauth::endpoints_for(cfg)?;
+    let client_id = cfg.oauth_client_id.clone().ok_or_else(|| {
+        let register = cfg
+            .oauth_provider
+            .as_deref()
+            .and_then(|p| mailbox_core::oauth::provider(p).ok())
+            .map(|p| format!(" Register one at {}.", p.register_url))
+            .unwrap_or_default();
+        Error::usage(format!(
+            "account `{account_id}` has no oauth_client_id. No client id ships with mailbox: \
+             an OAuth2 client id identifies the application to the provider, and borrowing \
+             another program's is against their terms.{register}"
+        ))
+    })?;
+
+    let request = mailbox_core::oauth::LoginRequest {
+        client_id,
+        client_secret: mailbox_core::credentials::client_secret(account_id, cfg),
+        endpoints,
+        login_hint: Some(cfg.address.clone()),
+        timeout: std::time::Duration::from_secs(wait.clamp(5, 3600)),
+        open_browser: !no_browser,
+    };
+
+    let quiet = ctx.out.is_structured();
+    let tokens = mailbox_core::oauth::login(&request, &session_rng(), &ctx.clock, |url| {
+        // stderr, in every mode. The URL is an instruction to a person, and
+        // the result of this command is the one JSON document §6.4 promises on
+        // stdout — which cannot be true if a URL is printed there first.
+        if no_browser {
+            eprintln!("{url}");
+        } else {
+            if !quiet {
+                ctx.out
+                    .print(ctx.out.dim("opening your browser to sign in…"));
+            }
+            eprintln!("{url}");
+        }
+    })?;
+
+    mailbox_core::oauth::cache(account_id, &tokens)?;
+
+    // The refresh token is the durable half, and §9 puts it where credentials
+    // go — which on a desktop without a keychain CLI means telling the user
+    // rather than inventing a place for it.
+    let stored = tokens
+        .refresh_token
+        .as_deref()
+        .map(|token| mailbox_core::credentials::store_refresh_token(account_id, token))
+        .unwrap_or(Ok(false))?;
+
+    let payload = serde_json::json!({
+        "account": account_id,
+        "expires_at": tokens.expires_at,
+        "refresh_token": tokens.refresh_token.is_some(),
+        "refresh_token_stored": stored,
+    });
+    if ctx.out.is_structured() {
+        ctx.out.reply("accounts login", &payload)?;
+    } else {
+        ctx.out.print(format!(
+            "{} signed in as {account_id}",
+            ctx.out.paint("ok", GREEN)
+        ));
+        if tokens.refresh_token.is_none() {
+            ctx.out.warn(
+                "the provider issued no refresh token, so this sign-in expires in about an hour",
+            );
+        } else if !stored {
+            ctx.out.print(ctx.out.dim(
+                "  the refresh token is cached for this account; no keychain was found to hold it",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn session_rng() -> mailbox_core::Rng {
+    mailbox_core::Rng::from_env()
 }
 
 fn accounts_list(ctx: &Ctx<'_>) -> Result<()> {

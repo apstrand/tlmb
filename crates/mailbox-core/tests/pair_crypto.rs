@@ -365,3 +365,56 @@ fn print_the_vectors() {
         )
     );
 }
+
+/// §8: "No re-entering passwords, no re-doing OAuth."
+///
+/// The second half of that is only true if what travels is the *refresh*
+/// token. An access token expires about an hour after the pairing, and a
+/// device that had to log in again would make the promise false in the least
+/// visible way — it would work, on the day it was set up.
+#[test]
+fn an_oauth_account_pairs_its_refresh_token_and_not_an_access_token() {
+    let dir = std::env::temp_dir().join(format!("mailbox-pair-oauth-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("oauthy")).expect("temp dir");
+    // The token cache lives under the state directory, so point that here.
+    mailbox_core::paths::set_state_root(&dir);
+
+    mailbox_core::oauth::cache(
+        "oauthy",
+        &mailbox_core::oauth::Tokens {
+            access_token: "an-access-token".into(),
+            refresh_token: Some("the-refresh-token".into()),
+            expires_at: i64::MAX,
+        },
+    )
+    .expect("cache the tokens");
+
+    let mut config = mailbox_core::config::Config::default();
+    config.accounts.insert(
+        "oauthy".into(),
+        mailbox_core::config::AccountConfig {
+            address: "peter@gmail.com".into(),
+            imap_host: Some("imap.gmail.com".into()),
+            oauth_provider: Some("google".into()),
+            oauth_client_id: Some("abc".into()),
+            ..Default::default()
+        },
+    );
+
+    let clock = Clock::fixed(1_788_264_000);
+    let rng = Rng::seeded(b"pair-oauth");
+    let payload = Payload::build(&config, "laptop", &clock, &rng);
+
+    match &payload.accounts[0].credential {
+        Some(PairedCredential::OAuth2 { refresh_token }) => {
+            assert_eq!(
+                refresh_token, "the-refresh-token",
+                "the access token would have expired within the hour"
+            );
+        }
+        other => panic!("expected an OAuth2 credential, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

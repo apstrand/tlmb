@@ -537,6 +537,116 @@ pub enum AccountsAction {
         /// Which account. Defaults to `--account` or the only one configured.
         account: Option<String>,
     },
+    /// Add an account (§9).
+    Add(AddAccountArgs),
+    /// Change an existing account's settings.
+    Edit(EditAccountArgs),
+    /// Remove an account from the config. The local store is left alone.
+    Remove {
+        /// The account id, as `accounts list` prints it.
+        id: String,
+    },
+    /// Sign in with OAuth2 through the system browser (§9).
+    Login(LoginArgs),
+}
+
+/// The settings `accounts add` and `accounts edit` share.
+#[derive(Debug, Args, Clone, Default)]
+pub struct AccountSettings {
+    #[arg(long, value_name = "HOST")]
+    pub imap_host: Option<String>,
+    #[arg(long, value_name = "PORT")]
+    pub imap_port: Option<u16>,
+    /// `implicit` (993) | `starttls` (143) | `none`.
+    #[arg(long, value_name = "MODE")]
+    pub imap_security: Option<String>,
+    /// The login name, when it is not the address.
+    #[arg(long, value_name = "USER")]
+    pub imap_user: Option<String>,
+
+    #[arg(long, value_name = "HOST")]
+    pub smtp_host: Option<String>,
+    #[arg(long, value_name = "PORT")]
+    pub smtp_port: Option<u16>,
+    /// `starttls` (587) | `implicit` (465) | `none`.
+    #[arg(long, value_name = "MODE")]
+    pub smtp_security: Option<String>,
+    #[arg(long, value_name = "USER")]
+    pub smtp_user: Option<String>,
+
+    /// §9's hook: a command that prints the password on stdout, such as
+    /// `pass show mail/work`. The recommended way to hold a password.
+    #[arg(long, value_name = "COMMAND")]
+    pub credential_command: Option<String>,
+
+    /// Read a password from stdin and hand it to the keychain (§9).
+    ///
+    /// Never written to the config. Without a keychain to put it in, this
+    /// installs it for the running process only, which is enough to finish a
+    /// setup and test it.
+    #[arg(long)]
+    pub password_stdin: bool,
+
+    /// Authenticate with OAuth2: `google`, `microsoft`, or `yahoo`.
+    #[arg(long, value_name = "PROVIDER")]
+    pub oauth: Option<String>,
+
+    /// The OAuth2 client id registered for this installation (§9). Public by
+    /// design for an installed app; no id ships with mailbox.
+    #[arg(long, value_name = "ID")]
+    pub oauth_client_id: Option<String>,
+
+    /// Allow plaintext. Honoured only for a loopback host (§9).
+    #[arg(long)]
+    pub insecure: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AddAccountArgs {
+    /// The email address. Everything else is discovered or defaulted.
+    pub address: String,
+
+    /// The config key, and what `--account` takes. Defaults to the local part
+    /// of the address.
+    #[arg(long)]
+    pub id: Option<String>,
+
+    #[command(flatten)]
+    pub settings: AccountSettings,
+
+    /// Run the OAuth2 login straight after adding the account.
+    #[arg(long, requires = "oauth")]
+    pub login: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct EditAccountArgs {
+    /// The account id, as `accounts list` prints it.
+    pub id: String,
+
+    /// Change the address this account sends and receives as.
+    #[arg(long)]
+    pub address: Option<String>,
+
+    #[command(flatten)]
+    pub settings: AccountSettings,
+}
+
+#[derive(Debug, Args)]
+pub struct LoginArgs {
+    /// Which account. Defaults to `--account` or the only one configured.
+    pub account: Option<String>,
+
+    /// Print the URL and wait, without opening a browser.
+    ///
+    /// For a machine with no browser: open the URL somewhere that has one, and
+    /// forward this machine's redirect port to finish the flow.
+    #[arg(long)]
+    pub no_browser: bool,
+
+    /// How long to wait for the browser, in seconds.
+    #[arg(long, default_value_t = 300, value_name = "SECONDS")]
+    pub wait: u64,
 }
 
 /// `mailbox mcp` (§6.4): the contract as MCP tools.
