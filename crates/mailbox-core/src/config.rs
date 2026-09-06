@@ -372,7 +372,10 @@ impl Config {
         }
         let text = toml::to_string_pretty(self)
             .map_err(|e| Error::usage(format!("{}: could not serialise: {e}", path.display())))?;
-        std::fs::write(path, text)?;
+        // Owner-only: the config carries no password (§9), but it does carry
+        // `oauth_client_secret`, and a mail account's server and login name are
+        // not something to leave world-readable either.
+        crate::paths::write_private(path, text.as_bytes())?;
         Ok(())
     }
 

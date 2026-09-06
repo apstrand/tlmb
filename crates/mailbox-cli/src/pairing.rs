@@ -207,7 +207,7 @@ fn export(ctx: &Ctx<'_>, path: &std::path::Path, args: &PairArgs) -> Result<()> 
     );
     let bytes = file::export(&payload, &passphrase, &rng)?;
 
-    write_private(path, &bytes)?;
+    mailbox_core::paths::write_private(path, &bytes)?;
 
     let payload_summary = payload.describe();
     if ctx.out.is_structured() {
@@ -284,7 +284,7 @@ fn apply(ctx: &Ctx<'_>, payload: &Payload, mode: ApplyMode) -> Result<()> {
 
     let text = toml::to_string_pretty(&config)
         .map_err(|e| Error::usage(format!("could not write the config: {e}")))?;
-    write_private(&path, text.as_bytes())?;
+    mailbox_core::paths::write_private(&path, text.as_bytes())?;
 
     // §9: credentials never land in the config file. They come out of the
     // payload and go to the keychain where one exists; where none does, the
@@ -431,37 +431,6 @@ fn load_config(ctx: &Ctx<'_>) -> Result<Config> {
     match &ctx.global.config {
         Some(path) => Config::load(path),
         None => Config::load_default(),
-    }
-}
-
-/// Writes a file only the owner can read.
-///
-/// Both the config and an export carry credentials, so the permissions are set
-/// before the bytes go in — creating world-readable and fixing it afterwards
-/// leaves a window.
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(bytes)?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, bytes)?;
-        Ok(())
     }
 }
 

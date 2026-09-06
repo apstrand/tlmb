@@ -1,8 +1,40 @@
+[general]
+editor = "$EDITOR"
+unified_inbox = true
+send_policy = "immediate"
+state_sync = true
+limit = 50
+
+[accounts.apstrand]
+address = "apstrand@gmail.com"
+imap_host = "imap.gmail.com"
+imap_port = 993
+imap_security = "implicit"
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+smtp_security = "starttls"
+oauth_provider = "google"
+oauth_client_id = "422857402182-190cji9r47v4babepe94j8scellvhdt7.apps.googleusercontent.com"
+require_tls = true
+offline = "recent"
+
 [accounts.ps]
 address = "peter@zarquon.se"
 imap_host = "mail.zarquon.se"
-imap_user = "zarq"
 imap_port = 993
 imap_security = "tls"
+imap_user = "zarq"
+smtp_host = "mail.zarquon.se"
 require_tls = false
+offline = "recent"
 
+[threading]
+subject = true
+subject_window_days = 14
+
+[notify]
+enabled = true
+query = "is:unread in:inbox NOT tag:muted"
+max_per_sync = 5
+
+[pair]

@@ -327,3 +327,42 @@ fn an_oauth_account_reports_its_missing_token_rather_than_a_missing_password() {
         run.stderr
     );
 }
+
+/// §9 keeps passwords out of the config, but the config still carries an
+/// account's servers, its login name, and — for OAuth2 — a client secret.
+/// None of that belongs to every other user on the machine.
+#[test]
+#[cfg(unix)]
+fn the_config_is_written_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let w = World::new();
+    let run = w.run(&["accounts", "add", "peter@gmail.com"]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+
+    let mode = std::fs::metadata(&w.config)
+        .expect("stat the config")
+        .permissions()
+        .mode();
+    assert_eq!(
+        mode & 0o077,
+        0,
+        "the config should not be readable by anyone else: {mode:o}"
+    );
+}
+
+/// And an existing config written before that rule gets tightened rather than
+/// left as it was found.
+#[test]
+#[cfg(unix)]
+fn an_existing_world_readable_config_is_tightened_on_the_next_write() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let w = World::new();
+    w.run(&["accounts", "add", "peter@gmail.com"]);
+    std::fs::set_permissions(&w.config, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    w.run(&["accounts", "add", "other@gmail.com", "--id", "other"]);
+    let mode = std::fs::metadata(&w.config).unwrap().permissions().mode();
+    assert_eq!(mode & 0o077, 0, "{mode:o}");
+}

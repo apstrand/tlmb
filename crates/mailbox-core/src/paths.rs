@@ -125,3 +125,40 @@ pub fn device_name() -> String {
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "this device".to_string())
 }
+
+/// Writes a file only its owner can read.
+///
+/// The mode is set in `open` rather than with a `chmod` afterwards: a chmod
+/// leaves a window in which the file is world-readable, and the files that go
+/// through here are exactly what something else on the machine is looking for.
+///
+/// Used for the config (which may carry an OAuth2 client secret), the token
+/// cache, and anything pairing writes.
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+
+    // An existing file keeps the mode it already had, so tighten it too —
+    // a config written before this existed is still readable by everyone.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}

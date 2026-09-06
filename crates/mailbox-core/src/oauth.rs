@@ -26,7 +26,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use base64::Engine;
@@ -582,28 +582,12 @@ pub fn cache(account_id: &str, tokens: &Tokens) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    write_private(&path, serde_json::to_string(tokens)?.as_bytes())
+    Ok(crate::paths::write_private(
+        &path,
+        serde_json::to_string(tokens)?.as_bytes(),
+    )?)
 }
 
 pub fn forget_tokens(account_id: &str) {
     let _ = std::fs::remove_file(token_path(account_id));
-}
-
-/// Writes a file that only its owner can read.
-///
-/// The mode is set in `open`, not afterwards: a `chmod` after the fact leaves
-/// a window in which the token is world-readable, and a token is exactly the
-/// sort of thing something else on the machine is looking for.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::fs::OpenOptions;
-    let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)?;
-    Ok(())
 }
