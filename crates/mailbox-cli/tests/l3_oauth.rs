@@ -510,6 +510,36 @@ mod cli {
         })
     }
 
+    /// The regression: an account carrying `oauth_client_id` — written before
+    /// this build shipped credentials, or by someone following the older
+    /// instructions — must still send the secret that goes with that id.
+    ///
+    /// Google's answer when it does not is `invalid_request — client_secret is
+    /// missing`, which says nothing about the config line responsible.
+    #[test]
+    fn a_configured_client_id_still_sends_a_secret() {
+        let server = OauthServer::start().expect("start");
+        let world = World::new(&server);
+
+        // As `accounts add --oauth-client-id` writes it.
+        let config = std::fs::read_to_string(&world.config).unwrap();
+        std::fs::write(
+            &world.config,
+            format!("{config}oauth_client_secret = \"configured-secret\"\n"),
+        )
+        .unwrap();
+
+        login(&world, &server);
+        let sent = server.requests();
+        let exchange = sent.last().expect("a token request");
+        assert_eq!(
+            exchange.get("client_secret"),
+            Some("configured-secret"),
+            "the token request went out without a secret: {:?}",
+            exchange.fields
+        );
+    }
+
     #[test]
     fn logging_in_stores_a_token_the_next_command_can_use() {
         let server = OauthServer::start().expect("start");

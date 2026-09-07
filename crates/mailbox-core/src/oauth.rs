@@ -182,12 +182,19 @@ pub fn choose_client(
     builtin: Option<&BuiltinClient>,
 ) -> Option<Client> {
     if let Some(id) = configured_id.filter(|s| !s.is_empty()) {
+        let secret = configured_secret.map(str::to_string).or_else(|| {
+            // The build's secret belongs to the build's id. It applies when
+            // the configured id is that same id — which is what a config
+            // written before this build shipped credentials looks like — and
+            // never otherwise: one application's id with another's secret is
+            // an `invalid_client` nobody can debug.
+            builtin
+                .filter(|b| b.id == id)
+                .and_then(|b| b.secret.map(str::to_string))
+        });
         return Some(Client {
             id: id.to_string(),
-            // A configured id with no secret means no secret. Falling back to
-            // the build's would send one application's secret with another's
-            // id, which every provider rejects — confusingly.
-            secret: configured_secret.map(str::to_string),
+            secret,
             builtin: false,
         });
     }

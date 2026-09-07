@@ -399,13 +399,40 @@ mod oauth_client {
     /// The mismatch that produces a baffling `invalid_client` from the
     /// provider: one application's id sent with another's secret.
     #[test]
-    fn a_configured_id_never_borrows_the_builtin_secret() {
+    fn a_different_configured_id_never_borrows_the_builtin_secret() {
         let client = oauth::choose_client(Some("mine"), None, Some(&SHIPPED)).expect("a client");
         assert_eq!(client.id, "mine");
         assert_eq!(
             client.secret, None,
-            "a configured id with no secret means no secret"
+            "a different application's secret is worse than none"
         );
+    }
+
+    /// But the *same* id is the same application, and its secret applies.
+    ///
+    /// This is what a config written before the build shipped credentials
+    /// looks like: `oauth_client_id` set by hand to the id the build now
+    /// carries. Sending it without the secret gets `invalid_request —
+    /// client_secret is missing` from Google, which says nothing about the
+    /// config line that caused it.
+    #[test]
+    fn a_configured_id_that_matches_the_build_uses_the_builds_secret() {
+        let client =
+            oauth::choose_client(Some(SHIPPED.id), None, Some(&SHIPPED)).expect("a client");
+        assert_eq!(client.id, SHIPPED.id);
+        assert_eq!(
+            client.secret.as_deref(),
+            Some("GOCSPX-shipped"),
+            "the same application has the same secret"
+        );
+    }
+
+    /// And an explicitly configured secret still wins over the build's.
+    #[test]
+    fn a_configured_secret_is_never_overridden() {
+        let client =
+            oauth::choose_client(Some(SHIPPED.id), Some("mine"), Some(&SHIPPED)).expect("a client");
+        assert_eq!(client.secret.as_deref(), Some("mine"));
     }
 
     #[test]
