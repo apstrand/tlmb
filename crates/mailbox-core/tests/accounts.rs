@@ -213,19 +213,11 @@ fn a_security_mode_that_does_not_exist_is_refused() {
 
 // ---- OAuth2 ----
 
+/// A provider that does not exist is always refused; a missing client id
+/// depends on what the build ships (§16), so the two are checked apart.
 #[test]
-fn an_oauth_account_needs_a_client_id_and_a_provider_that_exists() {
+fn an_oauth_provider_that_does_not_exist_is_refused() {
     let fx = Fx::new();
-    let error = accounts::add(
-        &fx.path,
-        &NewAccount {
-            oauth_provider: Some("google".into()),
-            ..spec("peter@gmail.com")
-        },
-    )
-    .expect_err("no client id");
-    assert!(error.to_string().contains("oauth_client_id"), "{error}");
-
     let error = accounts::add(
         &fx.path,
         &NewAccount {
@@ -239,7 +231,11 @@ fn an_oauth_account_needs_a_client_id_and_a_provider_that_exists() {
         error.to_string().contains("google, microsoft, yahoo"),
         "{error}"
     );
+}
 
+#[test]
+fn an_oauth_account_with_a_client_id_is_always_fine() {
+    let fx = Fx::new();
     accounts::add(
         &fx.path,
         &NewAccount {
@@ -248,7 +244,42 @@ fn an_oauth_account_needs_a_client_id_and_a_provider_that_exists() {
             ..spec("peter@gmail.com")
         },
     )
-    .expect("both given");
+    .expect("provider and client id both given");
+}
+
+/// Without one, the answer depends on the build: a release that ships a client
+/// accepts the account, and a build that ships none refuses it and says where
+/// to register one. What is pinned here is that the two agree.
+#[test]
+fn an_oauth_account_without_a_client_id_follows_the_build() {
+    let fx = Fx::new();
+    let result = accounts::add(
+        &fx.path,
+        &NewAccount {
+            oauth_provider: Some("google".into()),
+            ..spec("peter@gmail.com")
+        },
+    );
+
+    let ships = mailbox_core::oauth::has_builtin("google");
+    match (ships, result) {
+        (true, Ok(_)) => {
+            let account = fx.config().account("peter").expect("added").clone();
+            assert!(
+                account.oauth_client_id.is_none(),
+                "the built-in client belongs to the build, not to the account"
+            );
+        }
+        (false, Err(error)) => {
+            assert!(error.to_string().contains("oauth_client_id"), "{error}");
+            assert!(
+                error.to_string().contains("console.cloud.google.com"),
+                "and where to register one: {error}"
+            );
+        }
+        (true, Err(e)) => panic!("this build ships a Google client, but the add failed: {e}"),
+        (false, Ok(_)) => panic!("this build ships no Google client, but the add succeeded"),
+    }
 }
 
 // ---- editing and removing ----
@@ -333,4 +364,77 @@ fn removing_takes_the_account_and_leaves_the_mail() {
 
     let error = accounts::remove(&fx.path, "peter").expect_err("already gone");
     assert!(error.to_string().contains("peter"), "{error}");
+}
+
+// ---- §16: whose OAuth2 client is used ----
+
+mod oauth_client {
+    use mailbox_core::oauth::{self, BuiltinClient};
+
+    const SHIPPED: BuiltinClient = BuiltinClient {
+        id: "shipped.apps.googleusercontent.com",
+        secret: Some("GOCSPX-shipped"),
+    };
+
+    #[test]
+    fn an_account_that_registered_its_own_uses_it() {
+        let client = oauth::choose_client(Some("mine"), Some("my-secret"), Some(&SHIPPED))
+            .expect("a client");
+        assert_eq!(client.id, "mine");
+        assert_eq!(client.secret.as_deref(), Some("my-secret"));
+        assert!(
+            !client.builtin,
+            "it is this user's registration, and their quota"
+        );
+    }
+
+    #[test]
+    fn an_account_with_none_falls_back_to_what_the_build_ships() {
+        let client = oauth::choose_client(None, None, Some(&SHIPPED)).expect("a client");
+        assert_eq!(client.id, SHIPPED.id);
+        assert_eq!(client.secret.as_deref(), Some("GOCSPX-shipped"));
+        assert!(client.builtin);
+    }
+
+    /// The mismatch that produces a baffling `invalid_client` from the
+    /// provider: one application's id sent with another's secret.
+    #[test]
+    fn a_configured_id_never_borrows_the_builtin_secret() {
+        let client = oauth::choose_client(Some("mine"), None, Some(&SHIPPED)).expect("a client");
+        assert_eq!(client.id, "mine");
+        assert_eq!(
+            client.secret, None,
+            "a configured id with no secret means no secret"
+        );
+    }
+
+    #[test]
+    fn a_build_that_ships_nothing_has_nothing_to_fall_back_to() {
+        assert!(oauth::choose_client(None, None, None).is_none());
+        // …but a configured id still works, which is the source-build case.
+        let client = oauth::choose_client(Some("mine"), None, None).expect("a client");
+        assert_eq!(client.id, "mine");
+    }
+
+    #[test]
+    fn an_empty_configured_id_is_not_an_id() {
+        let client = oauth::choose_client(Some(""), None, Some(&SHIPPED)).expect("a client");
+        assert!(
+            client.builtin,
+            "an empty string in the config should not defeat the fallback"
+        );
+    }
+
+    /// Microsoft's public clients authenticate without a secret, and the type
+    /// has to be able to say so rather than sending an empty one.
+    #[test]
+    fn a_provider_can_ship_an_id_and_no_secret() {
+        const PUBLIC: BuiltinClient = BuiltinClient {
+            id: "public-client",
+            secret: None,
+        };
+        let client = oauth::choose_client(None, None, Some(&PUBLIC)).expect("a client");
+        assert_eq!(client.id, "public-client");
+        assert_eq!(client.secret, None);
+    }
 }

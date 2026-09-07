@@ -591,8 +591,11 @@ pub struct AccountSettings {
     #[arg(long, value_name = "PROVIDER")]
     pub oauth: Option<String>,
 
-    /// The OAuth2 client id registered for this installation (§9). Public by
-    /// design for an installed app; no id ships with mailbox.
+    /// Use this OAuth2 client rather than the one this build ships (§9).
+    ///
+    /// Register an application with the provider if you would rather spend
+    /// your own quota and show your own consent screen. Public by design for
+    /// an installed app: PKCE, not secrecy, protects the flow.
     #[arg(long, value_name = "ID")]
     pub oauth_client_id: Option<String>,
 

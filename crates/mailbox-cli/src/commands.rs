@@ -899,23 +899,25 @@ fn run_login(
     };
     let cfg = config.account(account_id)?;
     let endpoints = mailbox_core::oauth::endpoints_for(cfg)?;
-    let client_id = cfg.oauth_client_id.clone().ok_or_else(|| {
-        let register = cfg
-            .oauth_provider
-            .as_deref()
-            .and_then(|p| mailbox_core::oauth::provider(p).ok())
-            .map(|p| format!(" Register one at {}.", p.register_url))
-            .unwrap_or_default();
-        Error::usage(format!(
-            "account `{account_id}` has no oauth_client_id. No client id ships with mailbox: \
-             an OAuth2 client id identifies the application to the provider, and borrowing \
-             another program's is against their terms.{register}"
-        ))
-    })?;
+    let configured_secret = mailbox_core::credentials::client_secret(account_id, cfg);
+    let client =
+        mailbox_core::oauth::client_for(cfg, configured_secret.as_deref()).ok_or_else(|| {
+            let register = cfg
+                .oauth_provider
+                .as_deref()
+                .and_then(|p| mailbox_core::oauth::provider(p).ok())
+                .map(|p| format!(" Register one at {}.", p.register_url))
+                .unwrap_or_default();
+            Error::usage(format!(
+                "account `{account_id}` has no OAuth2 client id, and this build ships none. \
+                 A client id identifies the application to the provider; borrowing another \
+                 program's is against their terms.{register}"
+            ))
+        })?;
 
     let request = mailbox_core::oauth::LoginRequest {
-        client_id,
-        client_secret: mailbox_core::credentials::client_secret(account_id, cfg),
+        client_id: client.id.clone(),
+        client_secret: client.secret.clone(),
         endpoints,
         login_hint: Some(cfg.address.clone()),
         timeout: std::time::Duration::from_secs(wait.clamp(5, 3600)),
@@ -954,6 +956,9 @@ fn run_login(
         "expires_at": tokens.expires_at,
         "refresh_token": tokens.refresh_token.is_some(),
         "refresh_token_stored": stored,
+        // Whose registration was used, because it decides whose quota this
+        // account spends and which consent screen the user just saw.
+        "client": if client.builtin { "built-in" } else { "configured" },
     });
     if ctx.out.is_structured() {
         ctx.out.reply("accounts login", &payload)?;

@@ -128,14 +128,16 @@ fn oauth_credential(account_id: &str, cfg: &crate::config::AccountConfig) -> Res
     };
 
     let endpoints = crate::oauth::endpoints_for(cfg)?;
-    let client_id = cfg
-        .oauth_client_id
-        .clone()
-        .ok_or_else(|| Error::Auth(format!("account `{account_id}` has no oauth_client_id")))?;
+    let client = crate::oauth::client_for(cfg, client_secret(account_id, cfg).as_deref())
+        .ok_or_else(|| {
+            Error::Auth(format!(
+                "account `{account_id}` has no OAuth2 client id, and this build ships none"
+            ))
+        })?;
     let refreshed = crate::oauth::refresh(
         &endpoints.token_url,
-        &client_id,
-        client_secret(account_id, cfg).as_deref(),
+        &client.id,
+        client.secret.as_deref(),
         &refresh_token,
         &clock,
     )?;
@@ -280,8 +282,12 @@ fn keychain_store(service: &str, account_id: &str, secret: &str) -> bool {
     child.wait().map(|s| s.success()).unwrap_or(false)
 }
 
-/// The client secret, from the environment first so it need not be in the
-/// config file at all.
+/// The configured client secret, from the environment first so it need not be
+/// in the config file at all.
+///
+/// `None` here does not mean "no secret": the build may ship one, which
+/// [`crate::oauth::client_for`] applies. Only the *configured* one is read
+/// here, because only that one has an environment override.
 pub fn client_secret(account_id: &str, cfg: &crate::config::AccountConfig) -> Option<String> {
     env_secret(&format!(
         "MAILBOX_OAUTH_CLIENT_SECRET_{}",

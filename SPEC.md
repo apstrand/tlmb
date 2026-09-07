@@ -794,17 +794,21 @@ Recorded so they are not relitigated. Each names what would justify reopening it
   message returns on the device that snoozed it. The UI states this rather than
   implying sync. Cross-device snooze rides the state folder in M8.
 
-- **No OAuth2 client id ships with mailbox.** For an installed application the
-  client id is public by design — PKCE, not secrecy, is what protects the flow
-  — but it is still an identity registered with the provider by whoever
-  publishes the application. Shipping one would mean every user's traffic
-  arriving at Google under a single unverified app subject to that project's
-  quota and review status, and borrowing another client's is against every
-  provider's terms and one rotation away from breaking every install at once.
-  So `oauth_client_id` is per-account config, the endpoints and scopes are
-  built in, and the error a user hits before they have one links to the right
-  console. *Reopen if* mailbox acquires a publisher who can register and
-  verify an application, and stand behind its quota.
+- **The OAuth2 client is a build-time input, not a source constant.** An
+  installed application cannot hold a confidential secret (RFC 8252): whatever
+  ships is in every copy of the binary. So the question is not how to protect
+  it but whose registration a given build uses, and there are three answers
+  that all have to work. A release carries the project's own credentials, from
+  `MAILBOX_<PROVIDER>_CLIENT_ID`/`_CLIENT_SECRET` at compile time, so setup is
+  one command. A distribution builds with its own rather than putting every
+  user of the package under someone else's quota and verification status. A
+  plain `cargo build` carries none and says so, which is better than a dead id
+  committed to the repository. An account's `oauth_client_id` overrides all of
+  it. The credentials are held beside the endpoints and never in the credential
+  chain: routing them through the keychain would imply a confidentiality that
+  RFC 8252 says does not exist. *Reopen if* a provider offers native clients a
+  genuinely confidential credential — attestation-backed, per install — at
+  which point the fallback should use it and the embedded one should go.
 
 - **The OAuth2 access token is cached on disk.** The refresh token goes to the
   OS keychain where there is one; the access token, and the refresh token where

@@ -53,6 +53,9 @@ impl World {
             .env("MAILBOX_STATE_DIR", self.dir.join("state"))
             .env("XDG_RUNTIME_DIR", &self.dir)
             .env("NO_COLOR", "1")
+            // Nothing here may put a consent screen on the desktop of whoever
+            // is running `cargo test`.
+            .env("MAILBOX_OPENER", "/bin/true")
             .env_remove("MAILBOX_AGENT");
         cmd
     }
@@ -269,8 +272,36 @@ fn removing_an_account_that_is_not_there_is_not_found() {
 
 // ---- OAuth2 ----
 
+/// Whether this build ships an OAuth2 client for Google (§16).
+///
+/// Discovered by asking the binary rather than by reading the environment:
+/// the credentials are compiled in, so the test binary's own environment says
+/// nothing about what the binary under test was built with.
+fn ships_a_google_client(w: &World) -> bool {
+    let run = w.run(&[
+        "--json",
+        "accounts",
+        "add",
+        "probe@gmail.com",
+        "--id",
+        "probe",
+        "--oauth",
+        "google",
+    ]);
+    let shipped = run.status == 0;
+    if shipped {
+        w.run(&["accounts", "remove", "probe"]);
+    }
+    shipped
+}
+
+/// A release carries its own client, so `--oauth google` is the whole command.
+/// A source build carries none, and has to say so and link to the console.
+///
+/// Both are correct; which one this is depends on how the binary was built,
+/// and what the test pins is that the two halves agree with each other.
 #[test]
-fn an_oauth_account_without_a_client_id_says_where_to_get_one() {
+fn an_oauth_account_uses_the_shipped_client_or_explains_its_absence() {
     let w = World::new();
     let run = w.run(&[
         "--json",
@@ -280,14 +311,65 @@ fn an_oauth_account_without_a_client_id_says_where_to_get_one() {
         "--oauth",
         "google",
     ]);
-    assert_eq!(run.status, 2, "{}", run.stdout);
-    assert!(run.stderr.contains("oauth_client_id"), "{}", run.stderr);
+
+    if run.status == 0 {
+        assert!(
+            !w.config_text().contains("oauth_client_id"),
+            "the built-in client belongs to the build, not to the account:\n{}",
+            w.config_text()
+        );
+    } else {
+        assert_eq!(run.status, 2, "{}", run.stdout);
+        assert!(run.stderr.contains("oauth_client_id"), "{}", run.stderr);
+        assert!(
+            run.stderr.contains("console.cloud.google.com"),
+            "and it should say where to register one: {}",
+            run.stderr
+        );
+    }
 }
 
+/// An account may always register its own, whatever the build ships — which is
+/// how someone spends their own quota rather than this project's.
 #[test]
-fn logging_in_without_a_client_id_explains_why_none_ships() {
+fn a_configured_client_id_is_written_and_used() {
     let w = World::new();
-    // Written by hand, since `add` refuses to create this state.
+    let run = w.run(&[
+        "--json",
+        "accounts",
+        "add",
+        "peter@gmail.com",
+        "--oauth",
+        "google",
+        "--oauth-client-id",
+        "mine.apps.googleusercontent.com",
+    ]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+    assert!(w.config_text().contains("mine.apps.googleusercontent.com"));
+
+    // And it reaches the provider: the authorization URL carries it.
+    let out = w
+        .command(&["accounts", "login", "peter", "--no-browser", "--wait", "5"])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("client_id=mine.apps.googleusercontent.com"),
+        "the configured id should be the one asked for: {stderr}"
+    );
+}
+
+/// Without any client at all — no configured id, no shipped one — a login
+/// cannot start, and the error has to say where to get one.
+#[test]
+fn logging_in_with_no_client_anywhere_says_where_to_get_one() {
+    let w = World::new();
+    if ships_a_google_client(&w) {
+        // This build has one, so there is no such state to test. The case
+        // above covers what it does instead.
+        return;
+    }
+
     std::fs::write(
         &w.config,
         "[accounts.work]\naddress = \"peter@example.com\"\n\
@@ -301,7 +383,7 @@ fn logging_in_without_a_client_id_explains_why_none_ships() {
     assert!(message.contains("client id"), "{}", run.stderr);
     assert!(
         message.contains("console.cloud.google.com"),
-        "and it should say where to register one: {}",
+        "and where to register one: {}",
         run.stderr
     );
 }

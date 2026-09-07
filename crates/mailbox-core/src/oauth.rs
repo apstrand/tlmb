@@ -45,6 +45,50 @@ pub struct Provider {
     /// Where to register an application, for the error message that matters
     /// most: the one someone hits before they have a client id.
     pub register_url: &'static str,
+    /// The credentials this build ships, if it ships any.
+    ///
+    /// From the environment at *compile* time, so a release can carry the
+    /// project's own registration, a distribution can substitute its own, and
+    /// a plain `cargo build` carries none and says so. See §16.
+    pub builtin: Option<BuiltinClient>,
+}
+
+/// A client id, and the parameter Google and Yahoo insist on calling a secret.
+///
+/// Not a credential, and deliberately not routed through
+/// [`crate::credentials`]: for an installed application both halves ship in
+/// every copy of the binary, and treating the second one as confidential —
+/// keychain, redaction — would imply a protection that does not exist. RFC
+/// 8252 is explicit that a native client cannot hold one; PKCE is what
+/// actually protects the flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Client {
+    pub id: String,
+    pub secret: Option<String>,
+    /// True when this came from the build rather than from the account's
+    /// config, which is the difference between "your quota" and "ours".
+    pub builtin: bool,
+}
+
+/// The same, in the form a `const` table can hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinClient {
+    pub id: &'static str,
+    pub secret: Option<&'static str>,
+}
+
+/// What this build ships for a provider, read from the environment at compile
+/// time. `build.rs` asks cargo to rebuild when either variable changes.
+macro_rules! builtin {
+    ($id_var:literal, $secret_var:literal) => {
+        match option_env!($id_var) {
+            Some(id) => Some(BuiltinClient {
+                id,
+                secret: option_env!($secret_var),
+            }),
+            None => None,
+        }
+    };
 }
 
 pub const PROVIDERS: &[Provider] = &[
@@ -55,6 +99,7 @@ pub const PROVIDERS: &[Provider] = &[
         token_url: "https://oauth2.googleapis.com/token",
         scope: "https://mail.google.com/",
         register_url: "https://console.cloud.google.com/apis/credentials",
+        builtin: builtin!("MAILBOX_GOOGLE_CLIENT_ID", "MAILBOX_GOOGLE_CLIENT_SECRET"),
     },
     Provider {
         id: "microsoft",
@@ -66,6 +111,10 @@ pub const PROVIDERS: &[Provider] = &[
         scope: "offline_access https://outlook.office.com/IMAP.AccessAsUser.All \
                 https://outlook.office.com/SMTP.Send",
         register_url: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps",
+        builtin: builtin!(
+            "MAILBOX_MICROSOFT_CLIENT_ID",
+            "MAILBOX_MICROSOFT_CLIENT_SECRET"
+        ),
     },
     Provider {
         id: "yahoo",
@@ -74,6 +123,7 @@ pub const PROVIDERS: &[Provider] = &[
         token_url: "https://api.login.yahoo.com/oauth2/get_token",
         scope: "mail-w",
         register_url: "https://developer.yahoo.com/apps/",
+        builtin: builtin!("MAILBOX_YAHOO_CLIENT_ID", "MAILBOX_YAHOO_CLIENT_SECRET"),
     },
 ];
 
@@ -113,6 +163,63 @@ impl From<&Provider> for Endpoints {
             scope: p.scope.to_string(),
         }
     }
+}
+
+/// Which client credentials an account will use.
+///
+/// The account's own first, then whatever the build ships. That order is the
+/// whole policy: someone who registered their own project gets their own
+/// quota and their own consent screen, and everyone else gets a client that
+/// works out of the box.
+///
+/// A pure function of its arguments — the built-in is passed in rather than
+/// read here — because `option_env!` is fixed when the crate is compiled, and
+/// a rule that can only be exercised in the configuration the test binary
+/// happened to be built with is a rule with no tests.
+pub fn choose_client(
+    configured_id: Option<&str>,
+    configured_secret: Option<&str>,
+    builtin: Option<&BuiltinClient>,
+) -> Option<Client> {
+    if let Some(id) = configured_id.filter(|s| !s.is_empty()) {
+        return Some(Client {
+            id: id.to_string(),
+            // A configured id with no secret means no secret. Falling back to
+            // the build's would send one application's secret with another's
+            // id, which every provider rejects — confusingly.
+            secret: configured_secret.map(str::to_string),
+            builtin: false,
+        });
+    }
+    builtin.map(|b| Client {
+        id: b.id.to_string(),
+        secret: b.secret.map(str::to_string),
+        builtin: true,
+    })
+}
+
+/// The client credentials for one account, from its config and this build.
+///
+/// `secret` comes from the caller because the environment overrides the config
+/// for it ([`crate::credentials::client_secret`]) and this module does not read
+/// the environment.
+pub fn client_for(
+    cfg: &crate::config::AccountConfig,
+    configured_secret: Option<&str>,
+) -> Option<Client> {
+    let builtin = cfg
+        .oauth_provider
+        .as_deref()
+        .and_then(|id| provider(id).ok())
+        .and_then(|p| p.builtin.as_ref());
+    choose_client(cfg.oauth_client_id.as_deref(), configured_secret, builtin)
+}
+
+/// Whether this build ships credentials for a provider at all.
+pub fn has_builtin(provider_id: &str) -> bool {
+    provider(provider_id)
+        .map(|p| p.builtin.is_some())
+        .unwrap_or(false)
 }
 
 /// The endpoints an account will use: the table's, with config overriding.

@@ -241,13 +241,18 @@ fn validate(cfg: &AccountConfig) -> Result<()> {
             cfg.imap_host.as_deref().unwrap_or("")
         )));
     }
-    if cfg.oauth_provider.is_some() && cfg.oauth_client_id.is_none() {
-        return Err(Error::usage(
-            "an OAuth2 account needs oauth_client_id — see `mailbox accounts login --help`",
-        ));
-    }
-    if let Some(provider) = &cfg.oauth_provider {
-        crate::oauth::provider(provider)?;
+    if let Some(id) = &cfg.oauth_provider {
+        let provider = crate::oauth::provider(id)?;
+        // A client id is only required when the build ships none: a release
+        // that carries its own registration should let `--oauth google` be the
+        // whole of it (§16).
+        if cfg.oauth_client_id.is_none() && provider.builtin.is_none() {
+            return Err(Error::usage(format!(
+                "this build ships no {} client, so an OAuth2 account needs oauth_client_id. \
+                 Register an application at {} and pass --oauth-client-id",
+                provider.name, provider.register_url
+            )));
+        }
     }
     Ok(())
 }

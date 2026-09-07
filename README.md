@@ -274,6 +274,20 @@ cargo build --release      # target/release/mailbox
 
 No runtime, no daemon, no database server. SQLite is compiled in.
 
+A build carries whatever OAuth2 client credentials are in the environment when
+it is compiled, and none if there are none:
+
+```sh
+MAILBOX_GOOGLE_CLIENT_ID=… MAILBOX_GOOGLE_CLIENT_SECRET=… \
+MAILBOX_MICROSOFT_CLIENT_ID=… MAILBOX_YAHOO_CLIENT_ID=… MAILBOX_YAHOO_CLIENT_SECRET=… \
+    cargo build --release
+```
+
+Packagers should use their own rather than inherit this project's quota and
+verification status; see [Adding an account](#oauth2). The test suite passes
+either way, and asserts that the binary's behaviour matches what it was built
+with.
+
 ## Adding an account
 
 ```sh
@@ -301,8 +315,7 @@ mailbox accounts add peter@example.org \
 ### OAuth2
 
 ```sh
-mailbox accounts add peter@gmail.com --oauth google \
-    --oauth-client-id 1234.apps.googleusercontent.com --login
+mailbox accounts add peter@gmail.com --oauth google --login
 mailbox accounts login peter          # again, whenever the grant is revoked
 ```
 
@@ -312,12 +325,41 @@ the authorization code from using it. Google, Microsoft, and Yahoo are known;
 `oauth_auth_url`, `oauth_token_url`, and `oauth_scope` point at anything else.
 On a machine with no browser, `--no-browser` prints the URL and waits.
 
-**No client id ships with mailbox.** For an installed application the client id
-is public by design — PKCE, not secrecy, is what protects the flow — but it is
-still an identity registered with the provider by whoever publishes the
-application, and borrowing another program's is both against their terms and
-one rotation away from breaking. Register one (the error message links to the
-right console) and pass `--oauth-client-id`. See §16.
+#### Whose registration
+
+A release build carries mailbox's own OAuth2 client, so the command above is
+the whole of it. `--oauth-client-id` overrides it per account, which is what
+you want if you would rather spend your own quota, show your own consent
+screen, or not be subject to this project's verification status:
+
+```sh
+mailbox accounts add peter@gmail.com --oauth google \
+    --oauth-client-id 1234.apps.googleusercontent.com
+```
+
+The client *secret* Google and Yahoo ask for is not one. RFC 8252 is explicit
+that an installed application cannot hold a confidential secret — it ships in
+every copy of the binary — so it is an identifier that happens to be
+awkwardly named, and PKCE is what actually protects the flow. Set it with
+`oauth_client_secret` in the account's stanza, or with
+`MAILBOX_OAUTH_CLIENT_SECRET_<ACCOUNT>` to keep it out of the file. Microsoft
+needs no secret at all: Azure public clients authenticate without one.
+
+**Packaging.** The built-in credentials come from the environment at build
+time, not from the source tree:
+
+```sh
+MAILBOX_GOOGLE_CLIENT_ID=… MAILBOX_GOOGLE_CLIENT_SECRET=… \
+MAILBOX_MICROSOFT_CLIENT_ID=… \
+    cargo build --release
+```
+
+A build with none of them set ships none, and `--oauth google` then asks for
+`--oauth-client-id` and links to the right console — which is the right
+behaviour for a distribution that would rather register its own application
+than put every user of the package under someone else's quota. `mailbox
+accounts login --json` reports `"client": "built-in"` or `"configured"`, so it
+is always answerable whose registration an account is using. See §16.
 
 The refresh token goes to the OS keychain where there is one, and otherwise to
 `oauth.json` in the account's state directory, mode 0600 inside a directory
