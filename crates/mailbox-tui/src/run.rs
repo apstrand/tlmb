@@ -34,6 +34,13 @@ use crate::keys::{describe_key, Action, Keymap};
 /// idle interface costs no measurable CPU — §10 budgets idle at about zero.
 const TICK: Duration = Duration::from_millis(100);
 
+/// How often to ask whether anything else changed the mailbox.
+///
+/// A second is under what anyone notices for someone else's change, and it
+/// keeps the idle cost to one indexed query per account per second — which is
+/// what §10's "idle CPU ~0%" allows.
+const EXTERNAL_CHECK: Duration = Duration::from_secs(1);
+
 /// Runs the interface until the user quits.
 pub fn run(opts: SessionOptions, tracer: Tracer, clock: Clock) -> Result<()> {
     let mut workspace = Workspace::open(&opts, tracer.clone(), clock.clone())?;
@@ -101,6 +108,14 @@ fn event_loop(
     // repaints ten times a second forever.
     let mut needs_redraw = true;
 
+    // Where this interface has read the change feed to (§6.4). Anything that
+    // moves it — the web interface, a `sync --watch` in another terminal, a
+    // `mailbox flag` in a script — is something this listing has to notice,
+    // and until it did the TUI would sit showing mail that had been moved or
+    // deleted somewhere else.
+    let mut seen = latest_change(workspace);
+    let mut last_checked = Instant::now();
+
     loop {
         if needs_redraw {
             let mut links = Vec::new();
@@ -124,6 +139,20 @@ fn event_loop(
                     app.dirty = true;
                 }
                 Update::Status(text) => app.status = text,
+            }
+        }
+
+        // Cheap enough to do on a timer: one indexed `MAX(seq)` per account,
+        // and only when a second has passed since the last look.
+        if last_checked.elapsed() >= EXTERNAL_CHECK {
+            last_checked = Instant::now();
+            let now = latest_change(workspace);
+            if now != seen {
+                seen = now;
+                app.dirty = true;
+                // Not a status message: a listing quietly staying correct is
+                // not news, and the alternative is a line that appears every
+                // time anything anywhere touches the mailbox.
             }
         }
 
@@ -232,7 +261,19 @@ fn handle_key(
 
     let effect = app.handle(action);
     if action == Action::Open || action == Action::Thread {
-        load_open_message(app, workspace)?;
+        // A row can name a message that is no longer there: something else
+        // moved or expunged it between the last reload and this keystroke.
+        // That is a stale listing, not a failure — say so, put the listing
+        // right, and stay in the interface.
+        if let Err(e) = load_open_message(app, workspace) {
+            if matches!(e, Error::NotFound { .. }) {
+                app.back_to_list();
+                app.status = "that message is gone — the list was out of date".into();
+                app.dirty = true;
+                return Ok(false);
+            }
+            return Err(e);
+        }
     }
     apply_effect(app, workspace, opts, tracer, clock, tx, effect)
 }
@@ -280,6 +321,19 @@ fn as_prefix_search(text: &str) -> String {
     } else {
         text.to_string()
     }
+}
+
+/// Where every account's change feed stands, as one comparable value.
+///
+/// Errors collapse to zero rather than propagating: this is a "has anything
+/// happened" check, and failing the whole interface because one store was
+/// briefly locked would be a poor trade.
+fn latest_change(workspace: &Workspace) -> Vec<i64> {
+    workspace
+        .sessions()
+        .iter()
+        .map(|s| s.store().latest_change().unwrap_or(0))
+        .collect()
 }
 
 fn load_open_message(app: &mut App, workspace: &Workspace) -> Result<()> {

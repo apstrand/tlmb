@@ -212,6 +212,17 @@ impl App {
     ///
     /// Reads only — §4.1's fast path — so it never contends with a sync in
     /// progress, which is what lets the list repaint while one is running.
+    /// Drops back to the listing, forgetting whatever was open.
+    ///
+    /// Used when a message turns out not to exist any more: staying in a
+    /// message view with nothing in it would leave the interface showing the
+    /// previous message's body under the missing one's name.
+    pub fn back_to_list(&mut self) {
+        self.view = View::List;
+        self.open = None;
+        self.body_scroll = 0;
+    }
+
     pub fn reload(&mut self, workspace: &Workspace) -> Result<()> {
         let opts = ListOptions {
             limit: 500,

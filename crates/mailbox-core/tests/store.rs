@@ -754,3 +754,38 @@ fn the_feed_separates_this_devices_writes_from_the_servers() {
         .filter(|c| c.event == "new")
         .all(|c| !c.local));
 }
+
+/// The property the TUI's "did anything change" check rests on: a write made
+/// by *another* connection is visible to a reader that asks again.
+///
+/// Obvious for one connection, and not obvious across two — which is the case
+/// that matters, because the web interface and the TUI are separate processes
+/// and each holds its own handle to the same file.
+#[test]
+fn a_second_connection_sees_the_first_ones_changes() {
+    let dir = tempdir::TempDir::new();
+    let mut writer = Store::open(dir.path(), "test", Tracer::disabled(), Clock::fixed(0))
+        .expect("open for writing");
+    let fixture = Fixture::parse(FIXTURE).expect("parse");
+    let ids = fixture.seed_store(&mut writer).expect("seed");
+
+    let reader = Store::open_read_only(dir.path(), "test", Tracer::disabled(), Clock::fixed(0))
+        .expect("open for reading");
+    let before = reader.latest_change().expect("read the feed");
+
+    let id = ids.get("root").expect("the fixture message").clone();
+    writer
+        .set_flags(&id, &["flagged".to_string()], &[])
+        .expect("flag it");
+
+    let after = reader.latest_change().expect("read the feed again");
+    assert!(
+        after > before,
+        "a reader that asked again should see the write: {before} -> {after}"
+    );
+
+    let page = reader.changes_since(before, 10).expect("read");
+    assert_eq!(page.changes.len(), 1);
+    assert_eq!(page.changes[0].event, "flag");
+    assert_eq!(page.changes[0].message.as_deref(), Some(id.as_str()));
+}

@@ -110,6 +110,12 @@ The keys are the terminal's where they can be: `j`/`k`, `/`, `u`, `f`, `s`,
 `d`, `z`. Below 45rem it folds to one pane at a time, which is what the QR code
 `serve` prints is for.
 
+Every interface follows the change feed, so a message deleted in the browser
+disappears from the terminal within a second, and a flag set in one window
+shows up in the other. A row that goes stale anyway — something expunged the
+message between the last refresh and your keystroke — says so and puts the
+listing right instead of failing.
+
 A message you read is marked read. In the web and graphical interfaces the
 reading pane fills in as the cursor moves, so it takes a second and a half of
 actually being shown — hold `j` down through a mailbox and nothing is marked.

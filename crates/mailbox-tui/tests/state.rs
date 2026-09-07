@@ -639,3 +639,25 @@ fn moving_the_cursor_marks_nothing() {
         assert_eq!(app.handle(Action::Up), Effect::None);
     }
 }
+
+// ---- a listing that went stale under someone ----
+
+/// A message opened and then found to be gone drops back to the list rather
+/// than leaving the interface in a message view with nothing in it.
+///
+/// The sequence this comes from: the web interface deletes a message, the TUI
+/// still has the row, and the next Enter finds nothing behind it.
+#[test]
+fn losing_the_open_message_returns_to_the_listing() {
+    let mut app = app_with(2);
+    app.handle(Action::Open);
+    assert_eq!(app.view, View::Message);
+
+    app.back_to_list();
+    assert_eq!(app.view, View::List);
+    assert!(
+        app.open.is_none(),
+        "the previous body must not stay on screen under a missing message"
+    );
+    assert_eq!(app.body_scroll, 0);
+}
