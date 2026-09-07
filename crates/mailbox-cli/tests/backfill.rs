@@ -87,6 +87,9 @@ impl World {
             .env("MAILBOX_SEED", "backfill")
             .env("XDG_RUNTIME_DIR", &self.dir)
             .env("NO_COLOR", "1")
+            // Nothing here may put a popup on the desktop of
+            // whoever ran the suite (§11).
+            .env("MAILBOX_NOTIFIER", "none")
             .output()
             .expect("run");
         Run {

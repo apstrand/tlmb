@@ -82,6 +82,9 @@ impl Serving {
             .args(["debug", "fixture", "load", manifest.to_str().unwrap()])
             .env("MAILBOX_CONFIG", &config)
             .env("MAILBOX_STATE_DIR", &state)
+            // Nothing here may put a popup on the desktop of
+            // whoever ran the suite (§11).
+            .env("MAILBOX_NOTIFIER", "none")
             .env("MAILBOX_CLOCK", "2026-09-01T12:00:00Z")
             .output()
             .expect("seed");
@@ -91,6 +94,9 @@ impl Serving {
             .args(["--json", "serve", "--port", &port.to_string()])
             .env("MAILBOX_CONFIG", &config)
             .env("MAILBOX_STATE_DIR", &state)
+            // Nothing here may put a popup on the desktop of
+            // whoever ran the suite (§11).
+            .env("MAILBOX_NOTIFIER", "none")
             .env("MAILBOX_CLOCK", "2026-09-01T12:00:00Z")
             .env("MAILBOX_SEED", format!("serve-{port}"))
             .stdout(Stdio::piped())
@@ -273,6 +279,9 @@ fn serving_the_network_without_a_token_is_refused() {
         .args(["serve", "--bind", "0.0.0.0", "--no-token", "--dry-run-url"])
         .env("MAILBOX_CONFIG", &config)
         .env("MAILBOX_STATE_DIR", dir.join("state"))
+        // Nothing here may put a popup on the desktop of
+        // whoever ran the suite (§11).
+        .env("MAILBOX_NOTIFIER", "none")
         .output()
         .expect("run");
 

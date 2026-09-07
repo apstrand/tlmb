@@ -157,7 +157,13 @@ fn event_loop(
         }
 
         if app.dirty {
-            app.reload(workspace)?;
+            // A failed reload is a status line, not the end of the session:
+            // the store can be locked for a moment by another process, and
+            // dropping someone out of their mail for it would be absurd.
+            if let Err(e) = app.reload(workspace) {
+                app.status = format!("could not reload the list: {e}");
+                app.dirty = false;
+            }
             needs_redraw = true;
         }
 
@@ -167,8 +173,22 @@ fn event_loop(
         match event::read()? {
             Event::Key(key) => {
                 let started = Instant::now();
-                if handle_key(app, workspace, keymap, opts, tracer, clock, tx, key)? {
-                    return Ok(());
+                // Whatever goes wrong in handling one key, the answer is
+                // almost never "close the mail client". Before this, any error
+                // from any handler propagated out of the loop and the
+                // interface vanished — taking the session, the search, and
+                // whatever was half-typed with it. The error belongs on the
+                // status line, where it can be read.
+                match handle_key(app, workspace, keymap, opts, tracer, clock, tx, key) {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracer.emit1("tui.key_failed", "error", e.to_string());
+                        app.status = e.to_string();
+                        // The list is the most likely thing to be out of date
+                        // when a key fails, so put it right on the way out.
+                        app.dirty = true;
+                    }
                 }
                 needs_redraw = true;
                 // §10 budgets a keystroke at 16 ms. Recorded rather than
@@ -267,8 +287,15 @@ fn handle_key(
         // right, and stay in the interface.
         if let Err(e) = load_open_message(app, workspace) {
             if matches!(e, Error::NotFound { .. }) {
+                // Named, because "that message is gone" is untraceable: the id
+                // is what makes it possible to check with `mailbox show`
+                // whether the store really lost it or something else is wrong.
+                let id = app.current_id().unwrap_or_default();
                 app.back_to_list();
-                app.status = "that message is gone — the list was out of date".into();
+                app.status = format!(
+                    "{} is not in the store any more — the list was out of date",
+                    &id[..id.len().min(7)]
+                );
                 app.dirty = true;
                 return Ok(false);
             }

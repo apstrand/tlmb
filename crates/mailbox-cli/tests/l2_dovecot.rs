@@ -600,6 +600,9 @@ fn run_with_password(w: &World, args: &[&str], password: &str) -> (String, i32) 
         .args(args)
         .env("MAILBOX_CONFIG", &w.config)
         .env("MAILBOX_STATE_DIR", &w.state)
+        // Nothing here may put a popup on the desktop of
+        // whoever ran the suite (§11).
+        .env("MAILBOX_NOTIFIER", "none")
         .env("MAILBOX_PASSWORD_TEST", password)
         .env("XDG_RUNTIME_DIR", &w.dir)
         .output()

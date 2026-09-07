@@ -79,6 +79,18 @@ impl World {
             .env("MAILBOX_SEED", "l3imap")
             .env("XDG_RUNTIME_DIR", &self.dir)
             .env("NO_COLOR", "1")
+            // Nothing here may put a popup on the desktop of whoever ran the
+            // suite (§11) — except where a test has installed a script to
+            // capture them, which is testing `notify.command` from the config
+            // and must be allowed to reach it.
+            .env(
+                "MAILBOX_NOTIFIER",
+                if self.dir.join("notifier.sh").exists() {
+                    ""
+                } else {
+                    "none"
+                },
+            )
             // A short timeout so a hang shows up as a failing test rather than
             // as a suite that never finishes.
             .env("MAILBOX_TEST", "1")

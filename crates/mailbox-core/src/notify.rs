@@ -73,8 +73,22 @@ pub enum Notifier {
 }
 
 impl Notifier {
-    /// Picks a notifier: the configured command, else whatever the platform has.
+    /// Picks a notifier: `MAILBOX_NOTIFIER`, else the configured command, else
+    /// whatever the platform has.
+    ///
+    /// The environment comes first because it is the override for a context
+    /// the config cannot know about — a test run, a CI job, a shared machine.
+    /// `MAILBOX_NOTIFIER=none` raises nothing at all; anything else is a
+    /// command, as `notify.command` is; empty is the same as unset, so a
+    /// wrapper script can clear it without having to unset it. Without this a
+    /// test suite that syncs new mail puts real popups on the desktop of
+    /// whoever ran it, which is how it came to exist.
     pub fn discover(configured: Option<&str>) -> Notifier {
+        match std::env::var("MAILBOX_NOTIFIER") {
+            Ok(v) if v.trim() == "none" => return Notifier::Unavailable,
+            Ok(v) if !v.trim().is_empty() => return Notifier::Custom(v),
+            _ => {}
+        }
         if let Some(command) = configured.filter(|c| !c.trim().is_empty()) {
             return Notifier::Custom(command.to_string());
         }

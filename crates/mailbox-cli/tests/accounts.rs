@@ -53,6 +53,9 @@ impl World {
             .env("MAILBOX_STATE_DIR", self.dir.join("state"))
             .env("XDG_RUNTIME_DIR", &self.dir)
             .env("NO_COLOR", "1")
+            // Nothing here may put a popup on the desktop of
+            // whoever ran the suite (§11).
+            .env("MAILBOX_NOTIFIER", "none")
             // Nothing here may put a consent screen on the desktop of whoever
             // is running `cargo test`.
             .env("MAILBOX_OPENER", "/bin/true")

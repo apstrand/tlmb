@@ -38,6 +38,9 @@ fn record_the_l1_corpus() {
         .args(["--json", "sync", "--once"])
         .env("MAILBOX_CONFIG", &config)
         .env("MAILBOX_STATE_DIR", dir.join("state"))
+        // Nothing here may put a popup on the desktop of
+        // whoever ran the suite (§11).
+        .env("MAILBOX_NOTIFIER", "none")
         .env("MAILBOX_PASSWORD_TEST", "testpass")
         .env("MAILBOX_CLOCK", "2026-09-02T12:00:00Z")
         .env("MAILBOX_SEED", "l1")

@@ -635,6 +635,11 @@ cargo test -p mailbox-cli --test multi_account # several accounts, no Docker
 cargo test -p mailbox-cli --test l2_dovecot   # L2: a real Dovecot in Docker
 ```
 
+`MAILBOX_NOTIFIER=none` silences desktop notifications, and any other value is
+a command to run instead of the platform's (`{summary}` and `{body}` as
+arguments) — which is how the suite tests §11 without putting popups on the
+desktop of whoever ran it. Every harness sets it.
+
 L1 replays a recorded IMAP conversation against the sync engine with no server
 at all. `MAILBOX_RECORD=<scenario> MAILBOX_RECORD_PATH=<file> mailbox sync`
 records one from whatever server is in front of it; `mailbox debug replay <file>`

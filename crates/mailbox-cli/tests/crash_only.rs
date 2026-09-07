@@ -75,6 +75,9 @@ impl World {
             .env("MAILBOX_SEED", "crash")
             .env("XDG_RUNTIME_DIR", &self.dir)
             .env("NO_COLOR", "1")
+            // Nothing here may put a popup on the desktop of
+            // whoever ran the suite (§11).
+            .env("MAILBOX_NOTIFIER", "none")
             .env_remove("MAILBOX_AGENT")
             .env_remove("MAILBOX_CRASH_AT");
         if let Some(event) = crash_at {

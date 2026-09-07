@@ -129,6 +129,9 @@ impl Cli {
             .env("XDG_RUNTIME_DIR", &self.dir)
             .env("COLUMNS", "100")
             .env("NO_COLOR", "1")
+            // Nothing here may put a popup on the desktop of
+            // whoever ran the suite (§11).
+            .env("MAILBOX_NOTIFIER", "none")
             .env_remove("MAILBOX_AGENT")
             .output()
             .expect("run the binary");
