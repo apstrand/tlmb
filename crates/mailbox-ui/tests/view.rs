@@ -119,6 +119,7 @@ fn loaded() -> (App, Fake) {
             ],
             cursor: None,
             total: None,
+            partial: false,
         }))),
     ));
     app.pump(&mut backend);
@@ -248,6 +249,7 @@ fn a_message_with_nothing_in_it_still_draws() {
             messages: vec![empty.clone()],
             cursor: None,
             total: None,
+            partial: false,
         }))),
     ));
     app.pump(&mut backend);

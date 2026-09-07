@@ -20,6 +20,7 @@ than retrofitted.
 | Stable message id | done (§5.2) |
 | IMAP read sync: `QRESYNC`, `CONDSTORE`, full-listing fallback | done (§5.3) |
 | Lazy body fetch, prefetch window, `sync --full` | done (§5.1) |
+| Newest-first chunked backfill, and saying when a mailbox is partial | done (§5.1) |
 | Local JWZ threading, narrowed subject grouping | done (§5.6) |
 | Query language, with unknown keys as errors | done (§6.2) |
 | `ls`, `show`, `search`, `folders`, `accounts`, `sync`, `status`, `schema` | done (§6.1) |
@@ -293,6 +294,36 @@ Packagers should use their own rather than inherit this project's quota and
 verification status; see [Adding an account](#oauth2). The test suite passes
 either way, and asserts that the binary's behaviour matches what it was built
 with.
+
+### A mailbox with twenty years in it
+
+The first sync does not fetch twenty years before showing you anything. Each
+pass takes the newest few thousand messages a folder is still missing and walks
+backwards, so the inbox is readable after the first one and a dropped
+connection costs a chunk rather than the lot.
+
+While that is going on the store holds *part* of a mailbox, and everything says
+so — because a search over a partial mailbox that does not announce itself is a
+wrong answer with no way to tell:
+
+```
+$ mailbox ls
+     id       date         from            subject
+●    ffe8c3f  Sep 01       Alice           Message 3138
+…
+still fetching older mail — about 3000 more, back to 2024-03-11; run `mailbox sync` again
+
+$ mailbox status
+work (peter@example.com)
+  2000 messages, 2000 unread, 1 folders
+  still fetching older mail: about 3000 messages to go — synced back to 2024-03-11
+    INBOX: 2000 of 5000
+```
+
+`ls --json` and `search --json` carry `"partial": true` for the same reason,
+and `status --json` carries the detail under `coverage`. Both stop saying
+anything once the walk reaches the bottom. `sync --watch` finishes the backfill
+on its own; otherwise each `mailbox sync` advances it.
 
 ## Adding an account
 

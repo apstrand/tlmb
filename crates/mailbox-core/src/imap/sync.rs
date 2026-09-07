@@ -29,6 +29,19 @@ use crate::trace::event;
 /// How many bodies one `--full` pass will fetch per folder.
 const FULL_FETCH_CHUNK: usize = 100_000;
 
+/// How many message headers one pass fetches per folder while backfilling.
+///
+/// The first sync of a twenty-year mailbox is the case this exists for. It
+/// works newest-first: the first pass brings back the most recent few
+/// thousand, so the inbox is usable in seconds, and later passes walk
+/// backwards until the folder is complete. A whole mailbox in one fetch means
+/// staring at nothing for an hour and losing all of it to one dropped
+/// connection.
+///
+/// Big enough that a normal mailbox finishes in one pass and never notices
+/// this exists.
+const BACKFILL_CHUNK: usize = 2_000;
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncOptions {
     /// `sync --full`: fetch every body, for offline use (§5.1).
@@ -212,6 +225,8 @@ struct FolderOutcome {
     updated: u32,
     removed: u32,
     bodies: u32,
+    /// Messages this folder still has waiting on the server, after this pass.
+    backfill_remaining: u32,
     uidvalidity_reset: bool,
     state: FolderState,
 }
@@ -343,9 +358,32 @@ fn sync_folder(
         }
     }
 
-    // Fetch and store the new messages.
+    // Fetch and store the new messages, newest first and a chunk at a time.
+    //
+    // `new_uids` for a first sync of a large folder is every message there has
+    // ever been. Fetching the newest slice and recording where the walk got to
+    // is what makes an account usable immediately instead of after an hour —
+    // and what makes a dropped connection cost one chunk rather than
+    // everything (§5.1).
+    // Carried forward: a pass that does not look at the whole folder — a
+    // CONDSTORE delta, a `--since` window — must not overwrite what an earlier
+    // full listing established about how far back the store reaches.
+    let mut backfill_uid = prev.backfill_uid;
+    let mut complete = prev.complete;
+    let backfilling = listed_everything && new_uids.len() > BACKFILL_CHUNK;
     if !new_uids.is_empty() {
-        let uids: Vec<u32> = new_uids.iter().copied().collect();
+        let uids: Vec<u32> = if backfilling {
+            // A `BTreeSet` is ascending, so the newest are at the end.
+            new_uids
+                .iter()
+                .rev()
+                .take(BACKFILL_CHUNK)
+                .copied()
+                .collect()
+        } else {
+            new_uids.iter().copied().collect()
+        };
+        let lowest_fetched = uids.iter().copied().min().unwrap_or(0);
         let fetched = client.fetch_headers(&uids)?;
         let batch: Vec<Incoming> = fetched
             .iter()
@@ -376,6 +414,22 @@ fn sync_folder(
             event::SYNC_MESSAGES_APPLIED,
             serde_json::json!({ "folder": path, "count": applied.len() }),
         );
+
+        // The low-water mark of the walk. Recorded only when a chunk was
+        // actually held back: a folder fetched whole has nothing left below.
+        if backfilling {
+            backfill_uid = lowest_fetched;
+            outcome.backfill_remaining = (new_uids.len() - uids.len()) as u32;
+        }
+    }
+
+    // Complete when this pass saw the whole folder and left nothing behind.
+    // A windowed pass (`--since`) never claims it: it did not look.
+    if listed_everything {
+        complete = !backfilling;
+        if complete {
+            backfill_uid = 0;
+        }
     }
 
     // Bodies: everything with `--full`, the recent window otherwise (§5.1).
@@ -421,13 +475,25 @@ fn sync_folder(
         // Only claim a MODSEQ when this pass actually reconciled the whole
         // folder against it. Claiming one after a windowed pass would make the
         // next pass believe it had already seen everything older.
-        highestmodseq: if listed_everything || used_qresync || opts.since.is_none() {
+        //
+        // `complete` is part of that condition and load-bearing: a MODSEQ
+        // claimed halfway through a backfill sends the next pass down the
+        // CONDSTORE delta path, which never lists the folder again — and the
+        // walk backwards stops for good, a few thousand messages in, silently.
+        highestmodseq: if complete && (listed_everything || used_qresync || opts.since.is_none()) {
+            selected.highestmodseq
+        } else if used_qresync {
+            // A QRESYNC pass on an already-complete folder still advances.
             selected.highestmodseq
         } else {
             prev.highestmodseq
         },
         max_uid: store.max_uid(folder_id)?,
         last_sync: clock.now(),
+        backfill_uid,
+        complete,
+        // What the server says is there, for the progress the interfaces show.
+        server_total: selected.exists,
     };
     Ok(outcome)
 }

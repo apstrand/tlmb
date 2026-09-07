@@ -708,8 +708,10 @@ fn a_reused_uid_replaces_the_message_that_held_it() {
     assert_eq!(w.stored_subjects().len(), 3);
 
     // Different messages at the UIDs already held, plus one genuinely new UID
-    // so the client issues a fetch at all. The L3 server answers a fetch with
-    // everything it has, which is how the reused UIDs arrive.
+    // so the client issues a fetch at all. The server volunteers rows nobody
+    // asked for, which is the only way a client ever sees a UID it already
+    // holds carrying different mail.
+    w.server.set_fault(ImapFault::FetchIgnoresUidSet);
     w.server.set_messages(vec![
         Message::simple(1, "Replacement one", "new1@example.com"),
         Message::simple(2, "Replacement two", "new2@example.com"),

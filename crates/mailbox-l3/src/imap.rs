@@ -33,6 +33,14 @@ pub enum ImapFault {
     /// §5.3 promises a rescan; this is what proves the promise is kept when the
     /// change arrives in the middle of a pass rather than between them.
     BumpUidValidityAfterFirstSelect,
+    /// Answer a `UID FETCH` with every message, ignoring the set asked for.
+    ///
+    /// Real servers do volunteer rows nobody asked for — that is how a client
+    /// ever sees a UID it already holds carrying a different message. It is a
+    /// fault rather than the default because a server that always did it makes
+    /// a chunked fetch indistinguishable from a whole one, and a client that
+    /// asked for the wrong UIDs would pass every test.
+    FetchIgnoresUidSet,
     /// Send `BYE` partway through a `FETCH` response.
     ByeDuringFetch,
     /// Advertise `QRESYNC` in `CAPABILITY` and then refuse to `ENABLE` it.
@@ -199,7 +207,11 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream);
 
     let fault = shared.fault.lock().expect("fault lock").clone();
-    let advertises_qresync = !matches!(fault, ImapFault::None);
+    // Advertised whenever a fault is armed, so the QRESYNC-specific faults
+    // have something to lie about — but not for faults about something else,
+    // which would otherwise send the client down the QRESYNC path and test a
+    // different thing than the one that was asked for.
+    let advertises_qresync = !matches!(fault, ImapFault::None | ImapFault::FetchIgnoresUidSet);
 
     write!(
         out,
@@ -357,7 +369,14 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) -> std::io::Result<()> {
                             write!(out, "{tag} BAD no mailbox selected\r\n")?;
                         } else {
                             let wants_full = rest.contains("BODY.PEEK[]");
-                            if fetch(&mut out, &shared, &fault, wants_full, &tag)? {
+                            // `UID FETCH <set> <items>` — the set is the third
+                            // word. Honouring it is what lets a test see that
+                            // a client asked for a *slice*; a server that
+                            // returns everything however little was asked for
+                            // makes a chunked fetch indistinguishable from a
+                            // whole one.
+                            let set = rest.split(' ').nth(2).unwrap_or("1:*").to_string();
+                            if fetch(&mut out, &shared, &fault, wants_full, &tag, &set)? {
                                 return Ok(());
                             }
                         }
@@ -399,6 +418,52 @@ fn capabilities(qresync: bool, idle: bool) -> String {
     caps
 }
 
+/// An IMAP UID set: `5`, `3001:5000`, `1,3,7:9`, `4:*`.
+#[derive(Debug, Clone)]
+struct UidSet {
+    ranges: Vec<(u32, u32)>,
+}
+
+impl UidSet {
+    /// `highest` is what `*` means, which the server knows and the set does not.
+    fn parse(set: &str, highest: u32) -> UidSet {
+        let mut ranges = Vec::new();
+        for part in set.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let bound = |s: &str| -> u32 {
+                if s == "*" {
+                    highest
+                } else {
+                    s.parse().unwrap_or(0)
+                }
+            };
+            match part.split_once(':') {
+                Some((lo, hi)) => {
+                    let (a, b) = (bound(lo), bound(hi));
+                    ranges.push((a.min(b), a.max(b)));
+                }
+                None => {
+                    let uid = bound(part);
+                    ranges.push((uid, uid));
+                }
+            }
+        }
+        // An unparseable set is everything, which is what this server did
+        // before it read the set at all — a fault should have to be asked for.
+        if ranges.is_empty() {
+            ranges.push((1, highest.max(1)));
+        }
+        UidSet { ranges }
+    }
+
+    fn contains(&self, uid: u32) -> bool {
+        self.ranges.iter().any(|(lo, hi)| uid >= *lo && uid <= *hi)
+    }
+}
+
 /// Writes a `FETCH` response, injecting whichever literal fault is armed.
 ///
 /// Returns true when the connection should be dropped afterwards.
@@ -408,8 +473,19 @@ fn fetch(
     fault: &ImapFault,
     wants_full: bool,
     tag: &str,
+    set: &str,
 ) -> std::io::Result<bool> {
-    let messages = shared.messages.lock().expect("messages").clone();
+    let all = shared.messages.lock().expect("messages").clone();
+    let highest = all.iter().map(|m| m.uid).max().unwrap_or(0);
+    let wanted = UidSet::parse(set, highest);
+    let messages: Vec<Message> = if *fault == ImapFault::FetchIgnoresUidSet {
+        all.clone()
+    } else {
+        all.iter()
+            .filter(|m| wanted.contains(m.uid))
+            .cloned()
+            .collect()
+    };
 
     for (i, m) in messages.iter().enumerate() {
         let payload = if wants_full {

@@ -140,6 +140,8 @@ impl Mailbox {
                 messages: Vec::new(),
                 cursor: None,
                 total: Some(0),
+                // No account, so nothing is missing from what was asked for.
+                partial: false,
             }),
             other => other,
         }

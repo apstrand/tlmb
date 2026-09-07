@@ -356,4 +356,42 @@ pub struct AccountStatus {
     pub last_sync: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// How much of the mailbox is here yet (§5.1).
+    ///
+    /// Always present. A caller that acts on a search result needs to know
+    /// whether the store has everything to search, and a field that appears
+    /// only when the answer is "no" is one nobody checks for.
+    pub coverage: Coverage,
+}
+
+/// What a store holds of what the server has (§5.1).
+///
+/// A first sync of a large mailbox works newest-first, so for a while the
+/// store is a recent slice of a long archive. Every interface says so while
+/// that is true, because a search over a partial mailbox that does not
+/// announce itself is a wrong answer with no way to tell.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct Coverage {
+    /// True when every folder has been filled in to the bottom.
+    pub complete: bool,
+    /// Folders still being filled in, newest-first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backfilling: Vec<FolderCoverage>,
+    /// Messages still to fetch across those folders, as far as the last pass
+    /// could tell.
+    #[serde(default)]
+    pub remaining: u64,
+    /// The date of the oldest message the store holds, RFC3339. What "synced
+    /// back to" means to a person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FolderCoverage {
+    pub folder: String,
+    /// Messages held locally for this folder.
+    pub have: u64,
+    /// What the server said the folder holds, at the last pass.
+    pub total: u64,
 }

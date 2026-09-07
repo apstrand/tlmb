@@ -185,6 +185,13 @@ impl Workspace {
             messages: rows,
             cursor,
             total,
+            // Any account still filling in makes the unified listing partial:
+            // a caller acting on this page cannot tell which account a missing
+            // message would have come from.
+            partial: self
+                .accounts
+                .iter()
+                .any(|s| !s.store().sync_state().backfilling().is_empty()),
         })
     }
 

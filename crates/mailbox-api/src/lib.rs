@@ -74,6 +74,16 @@ pub struct MessageList {
     pub cursor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<u64>,
+    /// True when the store is still filling in older mail, so this listing is
+    /// drawn from part of the mailbox (§5.1).
+    ///
+    /// A bare boolean rather than the whole of [`Coverage`], because it rides
+    /// on every listing and every search: one field to check on the result you
+    /// are about to act on, with `mailbox status` for the detail. Always
+    /// present — a flag that appears only when the news is bad is one nobody
+    /// writes the check for.
+    #[serde(default)]
+    pub partial: bool,
 }
 
 /// `ls --threads` payload.

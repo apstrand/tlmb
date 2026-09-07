@@ -191,6 +191,8 @@ impl Session {
             messages: listing.messages,
             cursor: listing.cursor,
             total: listing.total,
+            // Cheap: it is read from `state.toml`, which is already loaded.
+            partial: !self.store.sync_state().backfilling().is_empty(),
         }
     }
 
@@ -396,8 +398,35 @@ impl Session {
                 conflicts: self.conflicts()?,
                 last_sync: (state.last_full_sync > 0).then(|| format_rfc3339(state.last_full_sync)),
                 last_error: None,
+                coverage: self.coverage()?,
             }],
             store_bytes: self.store.disk_usage(),
+        })
+    }
+
+    /// How much of this account's mail is here yet (§5.1).
+    ///
+    /// A store that is still filling in has to say so everywhere it is asked,
+    /// because every listing and every search it answers is a partial answer.
+    pub fn coverage(&self) -> Result<mailbox_api::Coverage> {
+        let state = self.store.sync_state();
+        let mut backfilling = Vec::new();
+        let mut remaining = 0u64;
+        for (path, folder) in state.backfilling() {
+            let have = self.store.folder_message_count(path)?;
+            let total = folder.server_total as u64;
+            remaining += total.saturating_sub(have);
+            backfilling.push(mailbox_api::FolderCoverage {
+                folder: path.to_string(),
+                have,
+                total,
+            });
+        }
+        Ok(mailbox_api::Coverage {
+            complete: backfilling.is_empty(),
+            backfilling,
+            remaining,
+            oldest: self.store.oldest_message_date()?.map(format_rfc3339),
         })
     }
 

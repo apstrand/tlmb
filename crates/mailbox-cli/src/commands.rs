@@ -158,9 +158,46 @@ fn render_messages(
             if list.cursor.is_some() {
                 ctx.out.note("more results: pass --cursor to continue");
             }
+            // Last, because it qualifies everything above it: this is a
+            // listing of part of the mailbox, and saying so after the rows is
+            // where someone reading the rows will see it.
+            if list.partial {
+                partial_note(ctx, workspace);
+            }
         }
     }
     Ok(())
+}
+
+/// Says that a listing was drawn from an incomplete store (§5.1).
+///
+/// Reaches for the detail only when there is something to say, so an ordinary
+/// listing costs nothing.
+fn partial_note(ctx: &Ctx<'_>, workspace: &Workspace) {
+    let mut remaining = 0u64;
+    let mut oldest: Option<String> = None;
+    for session in workspace.sessions() {
+        if let Ok(coverage) = session.coverage() {
+            remaining += coverage.remaining;
+            // The oldest across accounts is the earliest date any of them
+            // reaches, which is the honest bound on "you can see back to".
+            if let Some(date) = coverage.oldest {
+                oldest = Some(match oldest {
+                    Some(current) if current <= date => current,
+                    _ => date,
+                });
+            }
+        }
+    }
+    if remaining == 0 {
+        return;
+    }
+    let back_to = oldest
+        .map(|d| format!(", back to {}", &d[..d.len().min(10)]))
+        .unwrap_or_default();
+    ctx.out.note(format!(
+        "still fetching older mail — about {remaining} more{back_to}; run `mailbox sync` again"
+    ));
 }
 
 fn render_threads(ctx: &Ctx<'_>, workspace: &Workspace, list: &MessageList) -> Result<()> {
@@ -1358,6 +1395,16 @@ pub fn status(ctx: &Ctx<'_>) -> Result<()> {
             a.last_sync.clone().unwrap_or_else(|| "never".into()),
             format::human_size(status.store_bytes),
         ));
+        if !a.coverage.complete {
+            ctx.out
+                .print(format!("  {}", coverage_line(ctx, &a.coverage)));
+            for f in &a.coverage.backfilling {
+                ctx.out.print(
+                    ctx.out
+                        .dim(&format!("    {}: {} of {}", f.folder, f.have, f.total)),
+                );
+            }
+        }
         if a.queued_ops > 0 {
             ctx.out.print(format!(
                 "  {} local {} not yet pushed — run `mailbox sync`",
@@ -1384,6 +1431,31 @@ pub fn status(ctx: &Ctx<'_>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// One line saying how much of the mailbox is here (§5.1).
+///
+/// Shown by everything that answers a question about the mail, because until
+/// the backfill finishes every listing and every search is a partial answer,
+/// and a partial answer that does not say so is a wrong one.
+pub fn coverage_line(ctx: &Ctx<'_>, coverage: &mailbox_api::Coverage) -> String {
+    let back_to = coverage
+        .oldest
+        .as_deref()
+        .map(|d| format!(" — synced back to {}", &d[..d.len().min(10)]))
+        .unwrap_or_default();
+    ctx.out.paint(
+        &format!(
+            "still fetching older mail: about {} {} to go{back_to}",
+            coverage.remaining,
+            if coverage.remaining == 1 {
+                "message"
+            } else {
+                "messages"
+            },
+        ),
+        YELLOW,
+    )
 }
 
 /// `tui` (§6.1): launch the terminal interface.

@@ -37,6 +37,31 @@ pub struct FolderState {
     /// Unix seconds of the last pass that completed for this folder.
     #[serde(default)]
     pub last_sync: i64,
+
+    /// The oldest UID this folder has been filled in down to (§5.1).
+    ///
+    /// A first sync of a twenty-year mailbox works newest-first in chunks, so
+    /// the inbox is usable in seconds and the archive arrives behind it. This
+    /// is the low-water mark of that walk: everything at or above it has been
+    /// fetched, and everything below is still on the server only.
+    ///
+    /// Zero means nothing has been backfilled yet — which for a folder that
+    /// has never synced is the same as "all of it is still to come".
+    #[serde(default)]
+    pub backfill_uid: u32,
+
+    /// True when every message in the folder is in the store.
+    ///
+    /// Tracked rather than derived from `backfill_uid <= 1`: UIDs are sparse,
+    /// so the lowest one that exists is not 1 and a walk that has reached the
+    /// bottom cannot be recognised by arithmetic.
+    #[serde(default)]
+    pub complete: bool,
+
+    /// How many messages the server says are in this folder, from the last
+    /// pass. What the progress in `status` is a fraction *of*.
+    #[serde(default)]
+    pub server_total: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,6 +119,15 @@ impl SyncState {
 
     pub fn set_folder(&mut self, path: &str, state: FolderState) {
         self.folders.insert(path.to_string(), state);
+    }
+
+    /// Folders that still have older mail to fetch, newest-first.
+    pub fn backfilling(&self) -> Vec<(&str, &FolderState)> {
+        self.folders
+            .iter()
+            .filter(|(_, f)| !f.complete && f.uidvalidity != 0)
+            .map(|(path, state)| (path.as_str(), state))
+            .collect()
     }
 
     /// Drops bookkeeping for folders the server no longer lists, so a renamed

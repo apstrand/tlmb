@@ -401,6 +401,30 @@ impl Store {
             })? as u64)
     }
 
+    /// How many messages are placed in one folder, by path.
+    pub fn folder_message_count(&self, path: &str) -> Result<u64> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM placements p JOIN folders f ON f.id = p.folder_id
+             WHERE f.path = ?1",
+            [path],
+            |r| r.get::<_, i64>(0),
+        )? as u64)
+    }
+
+    /// The date of the oldest message held, unix seconds. `None` when empty.
+    ///
+    /// What "synced back to" means to a person — the store's reach expressed
+    /// in the only unit anyone thinks in.
+    pub fn oldest_message_date(&self) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row("SELECT MIN(date) FROM messages", [], |r| {
+                r.get::<_, Option<i64>>(0)
+            })
+            .ok()
+            .flatten())
+    }
+
     pub fn folder_count(&self) -> Result<u32> {
         Ok(self
             .conn

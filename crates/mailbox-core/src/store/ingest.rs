@@ -712,61 +712,13 @@ fn expand_scope(
 
     while !frontier.is_empty() {
         let mut next: HashSet<i64> = HashSet::new();
-        let ph = placeholders(frontier.len());
-        let vals: Vec<rusqlite::types::Value> = frontier
-            .iter()
-            .map(|i| rusqlite::types::Value::Integer(*i))
-            .collect();
-
-        // Everything already assigned to the same thread as a frontier message.
-        collect(
-            conn,
-            &format!(
-                "SELECT rowid FROM messages WHERE thread_id IN
-                    (SELECT thread_id FROM messages WHERE rowid IN ({ph}) AND thread_id IS NOT NULL)"
-            ),
-            &vals,
-            &mut next,
-        )?;
-
-        // Anything the frontier's Message-IDs are referenced by, or that the
-        // frontier's References point at.
-        collect(
-            conn,
-            &format!(
-                "SELECT r.message_rowid FROM message_refs r WHERE r.ref IN
-                    (SELECT message_id FROM messages WHERE rowid IN ({ph}) AND message_id IS NOT NULL)"
-            ),
-            &vals,
-            &mut next,
-        )?;
-        collect(
-            conn,
-            &format!(
-                "SELECT m.rowid FROM messages m WHERE m.message_id IN
-                    (SELECT ref FROM message_refs WHERE message_rowid IN ({ph}))"
-            ),
-            &vals,
-            &mut next,
-        )?;
-
-        // Subject grouping can join otherwise unlinked messages (§5.6), so the
-        // window has to come along or a scoped rebuild would miss the join.
-        let mut window_vals = vals.clone();
-        window_vals.push(rusqlite::types::Value::Integer(subject_window));
-        collect(
-            conn,
-            &format!(
-                "SELECT m.rowid FROM messages m
-                 JOIN messages s ON s.rowid IN ({ph})
-                 WHERE m.subject_norm <> ''
-                   AND m.subject_norm = s.subject_norm
-                   AND ABS(m.date - s.date) <= ?{}",
-                frontier.len() + 1
-            ),
-            &window_vals,
-            &mut next,
-        )?;
+        // One SQL parameter per frontier message, against a limit SQLite
+        // enforces and will not raise. A sync pass that brought in more
+        // messages than that failed the whole pass with "too many SQL
+        // variables" — so a first sync of any large folder could not complete.
+        for chunk in frontier.chunks(SCOPE_CHUNK) {
+            expand_frontier(conn, chunk, subject_window, &mut next)?;
+        }
 
         frontier = next.into_iter().filter(|id| scope.insert(*id)).collect();
     }
@@ -774,6 +726,77 @@ fn expand_scope(
     // Deterministic order, so a scoped rebuild hashes the same as a full one.
     out.sort_unstable();
     Ok(out)
+}
+
+/// How many rowids one scope query may name.
+///
+/// SQLite's default `SQLITE_MAX_VARIABLE_NUMBER` is 999 on the build this
+/// bundles. Well under it, because the subject-window query adds one more.
+const SCOPE_CHUNK: usize = 500;
+
+/// One frontier batch: everything the given messages are threaded with.
+fn expand_frontier(
+    conn: &rusqlite::Connection,
+    frontier: &[i64],
+    subject_window: i64,
+    next: &mut HashSet<i64>,
+) -> Result<()> {
+    let ph = placeholders(frontier.len());
+    let vals: Vec<rusqlite::types::Value> = frontier
+        .iter()
+        .map(|i| rusqlite::types::Value::Integer(*i))
+        .collect();
+
+    // Everything already assigned to the same thread as a frontier message.
+    collect(
+        conn,
+        &format!(
+            "SELECT rowid FROM messages WHERE thread_id IN
+                (SELECT thread_id FROM messages WHERE rowid IN ({ph}) AND thread_id IS NOT NULL)"
+        ),
+        &vals,
+        next,
+    )?;
+
+    // Anything the frontier's Message-IDs are referenced by, or that the
+    // frontier's References point at.
+    collect(
+        conn,
+        &format!(
+            "SELECT r.message_rowid FROM message_refs r WHERE r.ref IN
+                (SELECT message_id FROM messages WHERE rowid IN ({ph}) AND message_id IS NOT NULL)"
+        ),
+        &vals,
+        next,
+    )?;
+    collect(
+        conn,
+        &format!(
+            "SELECT m.rowid FROM messages m WHERE m.message_id IN
+                (SELECT ref FROM message_refs WHERE message_rowid IN ({ph}))"
+        ),
+        &vals,
+        next,
+    )?;
+
+    // Subject grouping can join otherwise unlinked messages (§5.6), so the
+    // window has to come along or a scoped rebuild would miss the join.
+    let mut window_vals = vals.clone();
+    window_vals.push(rusqlite::types::Value::Integer(subject_window));
+    collect(
+        conn,
+        &format!(
+            "SELECT m.rowid FROM messages m
+             JOIN messages s ON s.rowid IN ({ph})
+             WHERE m.subject_norm <> ''
+               AND m.subject_norm = s.subject_norm
+               AND ABS(m.date - s.date) <= ?{}",
+            frontier.len() + 1
+        ),
+        &window_vals,
+        next,
+    )?;
+    Ok(())
 }
 
 fn collect(

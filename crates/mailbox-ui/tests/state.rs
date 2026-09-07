@@ -92,6 +92,7 @@ fn listing(ids: &[&str]) -> Response {
             .collect(),
         cursor: None,
         total: None,
+        partial: false,
     })))
 }
 
@@ -301,6 +302,7 @@ fn read_and_flagged_toggle_rather_than_only_set() {
             ],
             cursor: None,
             total: None,
+            partial: false,
         }))),
     ));
     app.pump(&mut backend);
@@ -748,6 +750,7 @@ fn an_already_read_message_is_left_alone() {
             messages: vec![message("read", "already read", &["seen"])],
             cursor: None,
             total: None,
+            partial: false,
         }))),
     ));
     app.pump(&mut backend);

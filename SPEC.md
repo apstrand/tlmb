@@ -150,6 +150,15 @@ of the unified inbox, and every thread you open). `mailbox sync --full` fetches
 everything for offline use. Attachments are fetched on demand unless small
 (< 256 KB) or the account is marked `offline = "full"`.
 
+**Headers arrive newest-first, in chunks.** An account with twenty years of
+mail is usable after the first pass rather than after the last one: each pass
+takes the newest slice a folder is still missing and walks backwards, so a
+dropped connection costs one chunk instead of everything. Until a folder is
+complete the store holds part of a mailbox, and **every interface says so** —
+`ls` and `search` carry `partial`, `status` reports how much is left and how
+far back the store reaches. A search over a partial mailbox that does not
+announce itself is a wrong answer with no way to tell.
+
 ### 5.2 Identity of a message
 
 CLI and API expose a stable `id`: a BLAKE3 of the account ID plus the
