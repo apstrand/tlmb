@@ -211,6 +211,18 @@ li.message .preview {
 li.message .preview { color: var(--text-dim); font-size: 13px; }
 li.message .marks { color: var(--flagged); }
 
+/* §7: one list, a colour per account, only when there is more than one. */
+li.message.multi-account {
+    border-left: 3px solid hsl(var(--account-hue) 55% 48%);
+    padding-left: calc(.7rem - 3px);
+}
+
+@media (prefers-color-scheme: dark) {
+    li.message.multi-account {
+        border-left-color: hsl(var(--account-hue) 50% 62%);
+    }
+}
+
 /* ---- the reading pane ---- */
 
 #reader { display: flex; flex-direction: column; }

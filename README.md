@@ -46,7 +46,7 @@ than retrofitted.
 | Background sync: `IDLE`, poll fallback, one owner | done (§5.3, §4.1) |
 | Compose and reply in the web UI and the GUI | done (§7) |
 | `serve`: the local web API, token-gated | done (§3, M5) |
-| GUI (egui) and web (DOM), on one contract | done (§7, M5) |
+| GUI (Tauri) and web (DOM), one page | done (§7, M5) |
 | JSON contract: `--json`, `--ndjson`, `--fields`, cursors, exit codes | done (§6.4, §6.6) |
 | `watch`: the mailbox as a cursored event stream | done (§6.4, M7) |
 | `mcp`: the same operations as MCP tools over stdio | done (§6.4, M7) |
@@ -83,13 +83,10 @@ there is deliberately no route that runs a command.
 ### The GUI and the web interface
 
 `mailbox gui` opens a window; `mailbox serve` hands a browser a page. They are
-two implementations sharing one contract rather than one implementation shared
-two ways, and §16 records why.
-
-The desktop GUI is immediate-mode (egui), which suits a native window and will
-suit the mobile targets of M6. The web interface is DOM — plain HTML, CSS and
-modules, no bundler and no framework, which is the same reasoning as the
-hand-written HTTP it talks to. Being a document rather than a canvas is what
+the same DOM client — plain HTML, CSS and modules, no bundler and no framework,
+which is the same reasoning as the hand-written HTTP it talks to — sitting on
+the §6.4 contract. The window is Tauri (WebKitGTK on Linux, WKWebView on
+macOS, WebView2 on Windows). Being a document rather than a canvas is what
 gives it selection, find-in-page, the platform's own text rendering, and the
 ability to show the sanitized HTML of §9 *as HTML*:
 
@@ -280,6 +277,12 @@ cargo build --release      # target/release/mailbox
 ```
 
 No runtime, no daemon, no database server. SQLite is compiled in.
+
+`mailbox gui` uses the platform webview rather than vendoring one: WebKitGTK
+4.1 on Linux (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`), WKWebView on macOS,
+WebView2 on Windows. Those are the same class of dependency as the keychain —
+a system library, not a second copy of a browser in the binary. Without a
+display, `mailbox serve` is the same interface in a browser.
 
 A build carries whatever OAuth2 client credentials are in the environment when
 it is compiled, and none if there are none:
@@ -733,8 +736,8 @@ crates/mailbox-api    the JSON contract — types only, no logic
 crates/mailbox-core   store, sync, query, threading, MIME
 crates/mailbox-cli    the `mailbox` binary
 crates/mailbox-tui    the terminal interface
-crates/mailbox-ui     the GUI (egui)
-crates/mailbox-web    the local web UI
+crates/mailbox-ui     the GUI (Tauri, around the web client)
+crates/mailbox-web    the local web UI, and the page the GUI shows
 crates/mailbox-ffi    C ABI for the native mobile shells
 ios/                  SwiftUI app over mailbox-ffi
 tests/dovecot         the L2 server, configured in-tree

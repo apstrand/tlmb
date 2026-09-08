@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The mailbox window may load the local store's page and nothing else.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

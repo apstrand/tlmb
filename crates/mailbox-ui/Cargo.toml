@@ -1,14 +1,19 @@
 [package]
 name = "mailbox-ui"
-description = "The shared graphical interface (§7): one implementation, rendered by the desktop shell and by the browser."
+description = "The desktop GUI (§7): a Tauri window around the shared DOM client."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
 mailbox-api.workspace = true
+mailbox-core.workspace = true
+mailbox-web.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-egui = "0.28"
+tauri = { version = "2", default-features = true }

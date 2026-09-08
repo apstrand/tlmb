@@ -2,10 +2,8 @@
 //!
 //! The interface never touches a store and never opens a socket. It hands a
 //! [`Request`] to a [`Backend`] and, some frames later, collects a
-//! [`Response`]. Everything that makes the desktop shell and the browser
-//! different lives behind that line — the desktop's backend reads `meta.db` on
-//! a worker thread, the browser's fetches from `mailbox serve` — and nothing
-//! above it knows which it is talking to.
+//! [`Response`]. The production GUI fetches from the local server; the tests
+//! in this crate answer from a fake. Nothing above this line knows which.
 //!
 //! The line is drawn there for a reason beyond tidiness. In a browser there are
 //! no threads and no blocking calls; if the interface could block, it could not

@@ -1,16 +1,14 @@
-//! The interface's state, and every transition it can make.
+//! The rules the graphical interface follows, without a window.
 //!
-//! Free of egui, exactly as the TUI's state machine is free of ratatui, and for
-//! the same payoff: §15 says M5's UI work is "covered through the same
-//! CLI/JSON assertions rather than a screenshot suite", and this is what makes
-//! that possible. Every rule §7 states about the GUI — a single search field
-//! taking the §6.2 grammar, keyboard triage, multi-account invisible until you
-//! want it — is checked here against a fake backend, in microseconds, with no
-//! window.
+//! The production GUI is the DOM client in a Tauri webview — the same page
+//! `mailbox serve` hands a browser. This module is how those rules stay
+//! testable the way §15 asks: a fake backend, microseconds, no screenshot
+//! suite. Every rule §7 states about the GUI — a single search field taking
+//! the §6.2 grammar, keyboard triage, a compose window whose *From* is one
+//! keystroke away — is checked here.
 //!
 //! Nothing here blocks. Work goes out as a [`Request`] and comes back later,
-//! which is what lets the same code run in a browser where blocking does not
-//! exist.
+//! which is the same shape a `fetch` has.
 
 use mailbox_api::{DraftSpec, Folder, Identity, MessageDetail, MessageSummary};
 

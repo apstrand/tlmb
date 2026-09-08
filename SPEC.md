@@ -51,9 +51,10 @@ port, prints a URL with a one-time token, and prints a QR code for that URL so a
 phone on the same LAN can open it (`--bind 0.0.0.0` required for off-host
 access, and it refuses to bind non-loopback without a token).
 
-The web interface is a document, not a picture of one: it builds DOM, and it
-shares the §6.4 contract with the desktop GUI rather than sharing an
-implementation. See §16 for why that is worth a second frontend.
+The web interface is a document, not a picture of one: it builds DOM. The
+desktop GUI is that same document in a native webview (Tauri), so selection,
+find-in-page, and the sanitized HTML of §9 as HTML are the platform's rather
+than something we reimplement. Both sit on the §6.4 contract. See §16.
 
 Mobile builds are the Rust core compiled to a static library with a thin native
 UI layer (SwiftUI / Jetpack Compose). No web view for the main UI.
@@ -62,7 +63,7 @@ UI layer (SwiftUI / Jetpack Compose). No web view for the main UI.
 
 ```
                 +---------------------------------------------+
-   frontends    |  CLI    TUI    GUI    web (wasm)   mobile UI |
+   frontends    |  CLI    TUI    GUI    web (DOM)    mobile UI |
                 +-----------------------+---------------------+
                                         | mailbox-api (in-proc or unix socket / http+json)
                 +-----------------------+---------------------+
@@ -774,21 +775,25 @@ Recorded so they are not relitigated. Each names what would justify reopening it
   *Reopen if* setup telemetry — which we do not collect — is replaced by actual
   user reports that camera-less, different-network pairing is common enough to
   hurt.
-- **The web interface builds DOM; the GUI is an immediate-mode canvas.** The
-  first version of §3 said they were one implementation compiled twice, and
-  they were — an egui interface, rendered to a `<canvas>` through WebGL. It
-  worked, and it was wrong for a mail client. A canvas is opaque to the
-  browser: no text selection, no find-in-page, no "copy link", scrollbars and
-  fonts that are drawn rather than the platform's, and accessibility that has
-  to be reimplemented instead of inherited. Reading mail is selecting a
-  sentence, searching a long thread, and following a link. What is shared is
-  the *contract*, not the pixels — which §4 already required of every frontend,
-  and which the CLI, the TUI, and now the web all sit on equally. The
-  immediate-mode interface stays for the desktop GUI and for the mobile targets
-  of M6, where it renders natively and none of the above applies. *Reopen if* a
-  second implementation proves to drift in behaviour rather than only in
-  appearance — the interfaces are allowed to look different, but `is:unread`
-  had better mean the same thing in all of them.
+- **The graphical interfaces are a document, in a browser or in a webview.**
+  The first version of §3 said they were one implementation compiled twice, and
+  they were — an egui interface, rendered to a `<canvas>` through WebGL on the
+  desktop and in the browser. It worked, and it was wrong for a mail client. A
+  canvas is opaque: no text selection, no find-in-page, no "copy link",
+  scrollbars and fonts that are drawn rather than the platform's, and
+  accessibility that has to be reimplemented instead of inherited. Reading mail
+  is selecting a sentence, searching a long thread, and following a link. The
+  web interface was rewritten as DOM for that reason. The desktop GUI followed,
+  as a Tauri webview of the same page, because an immediate-mode canvas in a
+  native window has the same opacity to the platform — and because two
+  implementations of "reply" is how reply starts meaning different things in
+  different windows. What is shared is the document and the §6.4 contract.
+  Mobile (M6) stays native (SwiftUI / Compose) over `mailbox-ffi`, with no web
+  view for the main UI, as §3 already required. *Reopen if* the system webview
+  (WebKitGTK, WKWebView, WebView2) becomes an unacceptable dependency for a
+  build that wants to stay a single static binary — the engine is the
+  platform's, not something we vendor, which is the same choice as the
+  keychain.
 - **The double-send window: retry, and accept the duplicate.** When SMTP
   submission accepts `DATA` and the connection drops before the `250`, the
   client cannot know whether the message was queued. The outbox retries. That

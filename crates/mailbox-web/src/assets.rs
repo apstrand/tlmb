@@ -6,8 +6,9 @@
 //! path read at runtime is a path someone can substitute.
 //!
 //! Three files and no build step. That is a consequence of §16's decision to
-//! build the web interface from DOM: there is no bundler, no wasm module, and
-//! no toolchain to install before `cargo build` produces something that works.
+//! build the graphical interface from DOM: there is no bundler, no wasm
+//! module, and no toolchain to install before `cargo build` produces something
+//! that works. `mailbox gui` shows the same three files in a webview.
 
 use crate::http::Response;
 
@@ -48,5 +49,32 @@ pub fn serve(path: &str, token: Option<&str>) -> Response {
             SCRIPT.as_bytes().to_vec(),
         ),
         _ => Response::text(404, "not found"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The DOM client *is* the GUI. These are the keys §7 shares with the
+    /// terminal, plus `g` for sync. A missing one here is a missing one in
+    /// the window.
+    #[test]
+    fn the_client_has_the_terminals_keys() {
+        let js = super::SCRIPT;
+        for needle in [
+            "j:", "k:", "u:", "f:", "s:", "d:", "z:", r#""/":"#, "m:", "r:", "R:", "F:", "g:",
+        ] {
+            assert!(
+                js.contains(needle),
+                "mailbox.js is missing the {needle} binding"
+            );
+        }
+        assert!(
+            js.contains("__MAILBOX_SHELL__"),
+            "the desktop shell has no way to introduce itself"
+        );
+        assert!(
+            js.contains("multi-account"),
+            "§7's per-account colour has nowhere to land"
+        );
     }
 }

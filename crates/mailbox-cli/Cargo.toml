@@ -25,8 +25,6 @@ mailbox-tui = { version = "0.1.0", path = "../mailbox-tui" }
 mailbox-ui = { version = "0.1.0", path = "../mailbox-ui" }
 mailbox-web = { version = "0.1.0", path = "../mailbox-web" }
 
-egui = "0.28"
-eframe = { version = "0.28", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 qrcode = { version = "0.14.1", default-features = false }
 toml = "1.1.5"
 

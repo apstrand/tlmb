@@ -67,13 +67,12 @@ off, and the gaps found along the way.
 
 ## After M5
 
-- **Share the Markdown parser.** The TUI styles bodies as Markdown; the desktop
-  GUI shows the flattened text form instead. (The web interface no longer needs
-  it — it renders the sanitized HTML directly.) The inline rules — what
+- **Share the Markdown parser.** The TUI styles bodies as Markdown; the GUI and
+  the web interface render the sanitized HTML directly. The inline rules — what
   counts as emphasis, when a marker is punctuation — live in
   `mailbox-tui/src/markdown.rs`, and a second copy would be two sets of subtle
-  rules that drift. Extracting the parser into a crate both can use is the fix;
-  duplicating it is not.
+  rules that drift. Extracting the parser into a crate the TUI and any other
+  text-mode view can use is the fix; duplicating it is not.
 - **§15's "the wasm build runs L0 in-browser" no longer has a wasm build.**
   The web interface is DOM now (§16), so there is nothing compiled to wasm to
   run L0 in. The clause needs rewriting or dropping: what it was buying — proof

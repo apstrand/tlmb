@@ -1,14 +1,17 @@
-// The web interface (§7): a client of the §6.4 contract.
+// The graphical interface (§7): a client of the §6.4 contract.
 //
 // Plain modules, no build step and no framework — the same reasoning as the
-// hand-written HTTP it talks to. What is shared with the desktop GUI is the
-// contract, not the implementation (§16): every route this calls is one the
-// CLI prints with `--json`, and there is deliberately no route that runs a
-// command.
+// hand-written HTTP it talks to. `mailbox serve` loads this in a browser;
+// `mailbox gui` loads it in a Tauri webview. Same page, same keys, same
+// routes: every call here is one the CLI prints with `--json`, and there is
+// deliberately no route that runs a command.
 //
 // The token goes out as a header on every request and never into a URL, so it
 // stays out of history and out of any `Referer`. The cookie the server set is
 // `HttpOnly` and cannot be read from here, which is the point of it.
+//
+// The desktop shell sets `window.__MAILBOX_SHELL__` before this module runs,
+// so the status line can say "local store" rather than an ephemeral port.
 
 const token = document.getElementById("config").dataset.token;
 
@@ -91,6 +94,11 @@ async function reload() {
 }
 
 function drawList() {
+    // §7: multi-account is invisible until you want it — one list, a colour
+    // per account. A single-account mailbox has nothing to colour.
+    const accounts = new Set(state.messages.map((m) => m.account).filter(Boolean));
+    const multi = accounts.size > 1;
+
     listEl.replaceChildren(...state.messages.map((message, index) => {
         const row = document.createElement("li");
         row.className = "message";
@@ -98,6 +106,10 @@ function drawList() {
         row.dataset.index = String(index);
         row.id = `message-${index}`;
         if (!message.flags.includes("seen")) row.classList.add("unread");
+        if (multi) {
+            row.classList.add("multi-account");
+            row.style.setProperty("--account-hue", String(hue(message.account)));
+        }
 
         const marks =
             (message.flags.includes("flagged") ? "★" : "") +
@@ -116,6 +128,15 @@ function drawList() {
     }));
 
     el("list-empty").hidden = state.messages.length > 0;
+}
+
+/** Stable hue from an account id, so the same account is the same colour. */
+function hue(account) {
+    let h = 0;
+    for (let i = 0; i < account.length; i++) {
+        h = (h * 33 + account.charCodeAt(i)) >>> 0;
+    }
+    return h % 360;
 }
 
 function span(className, text) {
@@ -567,6 +588,9 @@ const keys = {
     // `f` is flag in the terminal, so forwarding takes the next letter along
     // rather than stealing it.
     F: () => replyTo("forward"),
+    // Sync has a button; `g` is the convenience, and `r` belongs to reply
+    // the way it does in the terminal.
+    g: () => syncNow(),
 };
 
 function move(delta) {
@@ -638,14 +662,18 @@ el("search-form").addEventListener("submit", (event) => {
     el("search").blur();
 });
 
-el("sync").addEventListener("click", () =>
-    change(async () => {
+function syncNow() {
+    return change(async () => {
         const result = await post("/api/sync", {});
         const added = (result.synced ?? []).reduce((n, r) => n + r.messages_added, 0);
         say(`synced — ${added} new message${added === 1 ? "" : "s"}`);
-    }, "synced"));
+    }, "synced");
+}
 
-el("host").textContent = location.host;
+el("sync").addEventListener("click", () => syncNow());
+
+el("host").textContent =
+    window.__MAILBOX_SHELL__ === "gui" ? "local store" : location.host;
 
 loadFolders();
 loadIdentities();
