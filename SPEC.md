@@ -497,14 +497,24 @@ sender                          relay (stateless)                receiver
 
 ### 8.2 The relay service (M8)
 
+The slot is allocated by the relay and is public routing, not a derived secret
+— see §8.1. `POST /a` returns one; the code the user reads out is
+`slot-secret`.
+
+
 Deliberately trivial, so that running your own is a five-minute job and trusting
 the default one is a small decision:
 
 ```
+POST /a                                         -> 201 {"slot":"7","ttl":300}
 POST /r/{cid}      body: opaque bytes ≤ 64 KB   -> 201, or 409 if occupied
 GET  /r/{cid}                                   -> 200 + bytes, then deleted
                                                    404 if absent/expired
 ```
+
+`{cid}` is `{slot}.{offer|answer|payload}`: the three messages one pairing
+needs, each written once and read once. A `409` on a second write is what burns
+a channel somebody raced.
 
 - In-memory only. No database, no disk, no logs beyond aggregate counters. No
   credentials, plaintext, account addresses, or IPs are persisted.

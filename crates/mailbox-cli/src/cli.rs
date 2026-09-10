@@ -141,6 +141,8 @@ pub enum Command {
 
     /// Start the web interface (§3).
     Serve(ServeArgs),
+    /// Run a pairing rendezvous relay (§8.2).
+    Relay(RelayArgs),
 
     /// Launch the graphical interface (§7).
     Gui,
@@ -809,6 +811,23 @@ pub struct SyncArgs {
     pub until: Option<String>,
 }
 
+/// `mailbox relay` (§8.2): the rendezvous service.
+#[derive(Debug, Args)]
+pub struct RelayArgs {
+    /// Address to bind. Defaults to loopback, so putting it on a network is a
+    /// decision rather than an accident.
+    #[arg(long, default_value = "127.0.0.1", value_name = "ADDR")]
+    pub bind: String,
+
+    /// Port to listen on. `0` picks a free one and prints it.
+    #[arg(long, default_value_t = 8788, value_name = "PORT")]
+    pub port: u16,
+
+    /// Stop after this many requests. For tests.
+    #[arg(long, hide = true)]
+    pub max_requests: Option<u64>,
+}
+
 #[derive(Debug, Args)]
 pub struct PairArgs {
     #[command(subcommand)]
@@ -847,6 +866,16 @@ pub struct PairArgs {
     /// Print the pairing link as text only, without the QR block.
     #[arg(long)]
     pub no_qr: bool,
+
+    /// Pair through a rendezvous relay (§8.2), using a short typed code
+    /// instead of a link.
+    ///
+    /// For two machines that are not on the same network. Defaults to
+    /// `[pair] relay` in the config; the relay never sees a key or a
+    /// plaintext, so trusting one is a small decision — and `mailbox relay`
+    /// runs your own.
+    #[arg(long, value_name = "URL")]
+    pub relay: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

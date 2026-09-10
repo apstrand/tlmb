@@ -72,6 +72,19 @@ pub fn post_xml(url: &str, body: &str) -> Result<Response> {
     send(url, "POST", Some(("text/xml", body.as_bytes())), "text/xml")
 }
 
+/// `POST` opaque bytes — what the pairing relay carries (§8.2).
+///
+/// The relay never learns what these are, so there is no content type worth
+/// claiming beyond "bytes".
+pub fn post_bytes(url: &str, body: &[u8]) -> Result<Response> {
+    send(
+        url,
+        "POST",
+        Some(("application/octet-stream", body)),
+        "application/octet-stream",
+    )
+}
+
 /// `GET` a document, following up to [`MAX_REDIRECTS`] redirects.
 pub fn get(url: &str) -> Result<Response> {
     let mut url = url.to_string();

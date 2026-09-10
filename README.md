@@ -156,6 +156,42 @@ disk at either end. The payload is still sealed under a passphrase
 passphrase protects it if it is ever saved. Drop the `ssh` half and redirect to
 a file for an air-gapped move.
 
+#### The short code, through a relay
+
+For two machines that are not on the same network. One runs a rendezvous relay
+— yours or someone's — and the only thing that crosses by hand is a code short
+enough to read down a phone line:
+
+```
+new device:   $ mailbox pair --relay https://pair.example
+              → On the other device run:
+              →   mailbox pair send 7-K7M-4QB-XZ2
+
+old device:   $ mailbox pair --relay https://pair.example send 7-K7M-4QB-XZ2
+              → 2 accounts, 2 identities from apollo
+              → confirm words: bronze-coral-89-cargo
+
+new device:   → confirm words: bronze-coral-89-cargo  [y/N]
+```
+
+Set `[pair] relay` in the config and `--relay` becomes unnecessary.
+
+The code is two parts, and the split is load-bearing. `7` is the **slot** — a
+public routing number the relay hands out, no more secret than a locker
+number. `K7M-4QB-XZ2` is the **secret**: 45 bits that never reach the relay in
+any form, used as the password to the §8.1 PAKE. Deriving the slot from the
+secret, as the spec originally said, would let anyone who saw a channel try all
+2^45 codes offline; keeping them separate is what makes "one online guess" true.
+
+A wrong code does not pair. It cannot be detected during the handshake — see
+below — so it surfaces twice: the two devices show different words, and the
+payload fails to authenticate. Both are tested, including with the word check
+skipped.
+
+The sender is fire-and-forget: the relay carries three messages one way each
+and has no channel for an acknowledgement, so unlike the LAN transport the
+sending device never learns whether the other one accepted. It says so.
+
 #### The short code
 
 The handshake behind §8.1's nine-character code is built —
@@ -178,6 +214,92 @@ takes a code today, and two things must be settled first:
   draws its scalars internally with no way to inject a deterministic RNG.
 
 TODO.md carries both, and what a review would still need to cover.
+
+### Running a relay
+
+```sh
+mailbox relay                          # 127.0.0.1:8788
+mailbox relay --bind 0.0.0.0 --port 8788
+```
+
+The whole service is three routes:
+
+```
+POST /a                                        -> 201 {"slot":"7","ttl":300}
+POST /r/{slot}.{offer|answer|payload}          -> 201, or 409 if already used
+GET  /r/{slot}.{offer|answer|payload}          -> 200 + bytes, then deleted
+                                                  404 if absent or expired
+GET  /health                                   -> 200, what this is
+```
+
+It holds bytes in memory for at most 300 seconds, hands each to the first
+caller that asks, and forgets it. No database, no disk, no configuration, no
+accounts. A restart drops pairings in flight, and that is fine — the user
+starts again with a new code.
+
+**It must sit behind TLS.** Clients refuse plaintext to anything that is not
+loopback (§9), so a relay on a public address without a certificate simply will
+not be talked to. Terminate TLS in front of it:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name pair.example;
+    ssl_certificate     /etc/letsencrypt/live/pair.example/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pair.example/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8788;
+        proxy_read_timeout 310s;   # a client waits out the 300 s TTL
+    }
+}
+```
+
+Caddy is two lines and gets a certificate itself:
+
+```
+pair.example {
+    reverse_proxy 127.0.0.1:8788
+}
+```
+
+As a systemd unit — note that it needs no state directory, no user data, and no
+write access to anything:
+
+```ini
+[Unit]
+Description=mailbox pairing relay
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/mailbox relay --bind 127.0.0.1 --port 8788
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+MemoryMax=128M
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**What you are trusting an operator with.** Not much, by construction. A relay
+sees three opaque blobs and two IP addresses. It cannot read a payload (sealed
+under a key derived from a code it never receives), cannot substitute one
+(a substitution changes the transcript, which changes the words both devices
+display), and cannot guess the code (one online attempt per slot, and a used
+box is refused). A hostile relay is a denial of service, not a disclosure —
+which is what lets §2 call it optional and self-hostable without hedging.
+
+What it does leak is metadata: that two addresses paired, and when. If that
+matters to you, run your own — the point of it being this small is that doing
+so is a five-minute job.
+
+Built-in limits: 64 KB per message, 4096 live slots, 120 requests per minute
+per address, 128 concurrent connections. All of them exist so that a relay
+someone finds cannot be turned into free storage or made to fall over.
 
 ### The terminal interface
 

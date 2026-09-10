@@ -277,6 +277,12 @@ const COVERAGE: &[(&str, Coverage)] = &[
         "serve",
         Coverage::NoDocument("runs a web server until interrupted"),
     ),
+    (
+        "relay",
+        Coverage::NoDocument(
+            "runs a rendezvous service until interrupted; `tests/relay.rs` drives it",
+        ),
+    ),
     ("gui", Coverage::NoDocument("opens a window")),
     ("tui", Coverage::NoDocument("takes over the terminal")),
     (

@@ -50,9 +50,180 @@ pub fn pair(ctx: &Ctx<'_>, args: &PairArgs) -> Result<()> {
         return import(ctx, path, args);
     }
     match &args.action {
-        Some(PairAction::Send { link, yes }) => send(ctx, link, *yes),
-        None => receive(ctx, args),
+        Some(PairAction::Send { link, yes }) => match relay_of(ctx, args) {
+            Some(relay) => relay_send(ctx, args, &relay, link, *yes),
+            None => send(ctx, link, *yes),
+        },
+        None => match relay_of(ctx, args) {
+            Some(relay) => relay_receive(ctx, args, &relay),
+            None => receive(ctx, args),
+        },
     }
+}
+
+/// The relay to use, if this run wants one: `--relay`, else `[pair] relay`
+/// from the config (§12).
+fn relay_of(ctx: &Ctx<'_>, args: &PairArgs) -> Option<mailbox_core::pair::relay::Relay> {
+    args.relay
+        .clone()
+        .or_else(|| load_config(ctx).ok().and_then(|c| c.pair.relay.clone()))
+        .filter(|url| !url.is_empty())
+        .map(|url| mailbox_core::pair::relay::Relay::new(&url))
+}
+
+/// The receiving device, over a relay (§8.2).
+///
+/// The same shape as [`receive`] — show something, wait, confirm the words,
+/// apply — with a rendezvous instead of a socket. The only real difference is
+/// where the secret comes from: not generated here and carried in a link, but
+/// *agreed* with the other device through the PAKE, so the thing the user
+/// reads out can be short enough to say aloud.
+fn relay_receive(
+    ctx: &Ctx<'_>,
+    args: &PairArgs,
+    relay: &mailbox_core::pair::relay::Relay,
+) -> Result<()> {
+    use mailbox_core::pair::pake;
+    use mailbox_core::pair::relay::{Box_, Code};
+
+    let mode = apply_mode(ctx, args)?;
+    let slot = relay.allocate()?;
+    let secret_code = pake::generate_code(&mailbox_core::Rng::from_env());
+    let code = Code {
+        slot: slot.clone(),
+        secret: pake::normalize_code(&secret_code)?,
+    };
+    let rendered = code.render();
+
+    if ctx.out.is_structured() {
+        ctx.out.reply(
+            "pair",
+            &serde_json::json!({
+                "code": rendered,
+                "relay": relay.base(),
+                "expires_in_seconds": mailbox_core::pair::relay::TTL_SECONDS,
+            }),
+        )?;
+    } else {
+        ctx.out.print(format!(
+            "On the other device run:\n\n  {} {}\n",
+            ctx.out.bold("mailbox pair send"),
+            rendered
+        ));
+        ctx.out.note("waiting — Ctrl-C to stop");
+    }
+
+    // The other device speaks first: it has the accounts, so it starts the
+    // handshake and later fills the payload box.
+    let offer_bytes = relay.take(&slot, Box_::Offer, &ctx.clock)?;
+    let offer: [u8; pake::OFFER_BYTES] = offer_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::protocol("the other device sent a malformed handshake"))?;
+
+    let (established, answer) = pake::respond(&code.secret, &offer)?;
+    relay.put(&slot, Box_::Answer, &answer)?;
+
+    let script = pake::transcript(&offer, &answer);
+    let sas = crypto::short_authentication_string(established.secret(), &script);
+
+    let sealed = relay.take(&slot, Box_::Payload, &ctx.clock)?;
+
+    // §8.1: the words first, then anything is written. A wrong code reaches
+    // exactly here and no further — the words differ, and the payload will not
+    // open either.
+    if !confirm_sas(ctx, &sas, "the sending device")? {
+        return Err(Error::usage(
+            "pairing refused — the words did not match, which means something is between \
+             the two devices",
+        ));
+    }
+
+    let payload = Payload::open(established.secret(), &sealed, ctx.clock.now())?;
+    apply(ctx, &payload, mode)
+}
+
+/// The sending device, over a relay (§8.2).
+fn relay_send(
+    ctx: &Ctx<'_>,
+    _args: &PairArgs,
+    relay: &mailbox_core::pair::relay::Relay,
+    typed: &str,
+    skip_confirmation: bool,
+) -> Result<()> {
+    use mailbox_core::pair::pake;
+    use mailbox_core::pair::relay::{Box_, Code};
+
+    let code = Code::parse(typed)?;
+    let config = load_config(ctx)?;
+    if config.accounts.is_empty() {
+        return Err(Error::usage("this device has no accounts to send"));
+    }
+
+    let (pending, offer) = pake::begin(&code.secret)?;
+    relay.put(&code.slot, Box_::Offer, &offer)?;
+
+    let answer_bytes = relay.take(&code.slot, Box_::Answer, &ctx.clock)?;
+    let answer: [u8; pake::ANSWER_BYTES] = answer_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::protocol("the other device sent a malformed handshake"))?;
+    let established = pending.finish(&answer)?;
+
+    let script = pake::transcript(&offer, &answer);
+    let sas = crypto::short_authentication_string(established.secret(), &script);
+
+    let rng = mailbox_core::Rng::from_env();
+    let payload = Payload::build(
+        &config,
+        &mailbox_core::paths::device_name(),
+        &ctx.clock,
+        &rng,
+    );
+    let summary = payload.describe();
+    let missing: Vec<&str> = payload
+        .accounts
+        .iter()
+        .filter(|a| a.credential.is_none())
+        .map(|a| a.id.as_str())
+        .collect();
+    if !missing.is_empty() && !ctx.out.is_structured() {
+        ctx.out.warn(format!(
+            "no credential could be read for: {}. Those accounts will need a password on \
+             the new device.",
+            missing.join(", ")
+        ));
+    }
+
+    let sealed = payload.seal(established.secret(), &rng)?;
+    relay.put(&code.slot, Box_::Payload, &sealed)?;
+
+    if ctx.out.is_structured() {
+        ctx.out.reply(
+            "pair",
+            &serde_json::json!({
+                "sent": payload.accounts.len(),
+                "relay": relay.base(),
+                "words": sas,
+            }),
+        )?;
+    } else {
+        ctx.out.print(format!("  {summary}"));
+        ctx.out
+            .print(format!("  confirm words: {}", ctx.out.paint(&sas, GREEN)));
+        if !skip_confirmation {
+            ctx.out
+                .note("check these match on the other device before accepting there");
+        }
+        // Unlike the LAN transport, there is no answer coming back: the relay
+        // carries three messages one way each and has no channel for an
+        // acknowledgement. Saying so is better than implying a success this
+        // device cannot observe.
+        ctx.out.note(
+            "sent — the other device decides whether to accept, and this one will not hear which",
+        );
+    }
+    Ok(())
 }
 
 /// The receiving device: generate a secret, show it, wait (§8.3).

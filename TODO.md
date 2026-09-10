@@ -95,10 +95,21 @@ things follow from that, and the first is a design problem rather than a task.
   deterministic around it: the alphabet, the identity strings, the AD, and the
   HKDF label. Real vectors want either an upstream change taking an RNG, or a
   cross-check against the libsodium C implementation's own vectors.
-- **Nothing uses it yet.** No transport carries a PAKE handshake: `pair send`
-  still takes a full link. The LAN case needs a rendezvous — either a broadcast
-  beacon, or the relay — and that choice is the one blocked on the channel-id
-  question above.
+- **The LAN has no short-code path.** The relay carries one now, but two
+  machines on the same network still need the full link, because a short code
+  needs a rendezvous and on a LAN that means discovery — a broadcast beacon, or
+  the mDNS `transport.rs` deliberately dropped. Worth doing only if pairing two
+  machines on one network through an external relay turns out to grate.
+- **The relay sender cannot tell whether it was accepted.** Three one-way
+  messages and no channel for an acknowledgement, so `pair send` over a relay
+  reports "sent" and stops. The LAN transport gets a real answer. A fourth box
+  would fix it and is not obviously worth the round trip; the command says
+  plainly that it does not know.
+- **The relay holds state in memory.** §8.2 calls it stateless and it is, in
+  the sense that nothing is written down and a restart forgets everything. A
+  deployment wanting more than one instance behind a load balancer would need
+  sticky routing or a shared store, and the shared store is the thing worth
+  avoiding — two relays are better run as two relays.
 
 What a review would still need to cover, beyond the protocol itself: that the
 identities and AD bind what they should, that folding two directional keys into
