@@ -816,13 +816,19 @@ pub struct PairArgs {
 
     /// Write the payload to an encrypted file instead, for an air-gapped move.
     ///
+    /// `-` writes it to stdout, which is the desktop-to-desktop path: two
+    /// machines with SSH between them already have an authenticated channel,
+    /// and this way the credentials never touch a disk at either end.
+    ///
+    ///     mailbox pair --export-file - | ssh other-host mailbox pair --import-file -
+    ///
     /// Mutually exclusive with `send` and `--import-file`; clap cannot express a
     /// conflict against a subcommand, so `pair` checks it and says which.
-    #[arg(long)]
+    #[arg(long, value_name = "PATH")]
     pub export_file: Option<std::path::PathBuf>,
 
-    /// Read a payload from an encrypted file.
-    #[arg(long)]
+    /// Read a payload from an encrypted file, or from stdin with `-`.
+    #[arg(long, value_name = "PATH")]
     pub import_file: Option<std::path::PathBuf>,
 
     /// Add the incoming accounts to this device's. The default (§8.3).

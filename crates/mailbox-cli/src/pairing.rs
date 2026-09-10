@@ -191,10 +191,38 @@ fn send(ctx: &Ctx<'_>, link: &str, skip_confirmation: bool) -> Result<()> {
     Ok(())
 }
 
+/// Whether a `--export-file`/`--import-file` path means the standard streams.
+///
+/// `-` is the convention every other tool uses, and it is what makes the
+/// desktop-to-desktop case a pipe rather than a file: two machines that can
+/// already reach each other over SSH have an authenticated channel, and
+/// writing every credential the user owns to a file on both ends — to move it
+/// between two machines that were already talking — is a worse answer than
+/// never letting it touch a disk at all.
+fn is_stdio(path: &std::path::Path) -> bool {
+    path.as_os_str() == "-"
+}
+
 fn export(ctx: &Ctx<'_>, path: &std::path::Path, args: &PairArgs) -> Result<()> {
     let config = load_config(ctx)?;
     if config.accounts.is_empty() {
         return Err(Error::usage("this device has no accounts to export"));
+    }
+    // The payload owns stdout when it is going there, so there is nowhere for
+    // a JSON document to go that would not corrupt one or the other.
+    if is_stdio(path) && ctx.out.is_structured() {
+        return Err(Error::usage(
+            "`--export-file -` writes the payload to stdout, so it cannot also carry --json; \
+             export to a file, or drop --json",
+        ));
+    }
+    // A sealed payload is binary. Spraying it across somebody's terminal is
+    // never what they meant, and the mistake is easy to make.
+    if is_stdio(path) && std::io::stdout().is_terminal() {
+        return Err(Error::usage(
+            "`--export-file -` writes binary to stdout; pipe it somewhere, such as \
+             `mailbox pair --export-file - | ssh other-host mailbox pair --import-file -`",
+        ));
     }
     let passphrase = passphrase(ctx, args, true)?;
 
@@ -207,6 +235,18 @@ fn export(ctx: &Ctx<'_>, path: &std::path::Path, args: &PairArgs) -> Result<()> 
     );
     let bytes = file::export(&payload, &passphrase, &rng)?;
 
+    if is_stdio(path) {
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(&bytes)?;
+        stdout.flush()?;
+        // Everything else goes to stderr: stdout is the payload.
+        ctx.out.note(format!(
+            "{} → stdout ({} bytes)",
+            payload.describe(),
+            bytes.len()
+        ));
+        return Ok(());
+    }
     mailbox_core::paths::write_private(path, &bytes)?;
 
     let payload_summary = payload.describe();
@@ -234,8 +274,17 @@ fn export(ctx: &Ctx<'_>, path: &std::path::Path, args: &PairArgs) -> Result<()> 
 
 fn import(ctx: &Ctx<'_>, path: &std::path::Path, args: &PairArgs) -> Result<()> {
     let mode = apply_mode(ctx, args)?;
-    let bytes =
-        std::fs::read(path).map_err(|e| Error::usage(format!("{}: {e}", path.display())))?;
+    let bytes = if is_stdio(path) {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        std::io::stdin().lock().read_to_end(&mut buf)?;
+        buf
+    } else {
+        std::fs::read(path).map_err(|e| Error::usage(format!("{}: {e}", path.display())))?
+    };
+    // Reading the payload from stdin means the passphrase cannot also come
+    // from there; `passphrase` already refuses to prompt without a terminal
+    // and names the two flags that work.
     let passphrase = passphrase(ctx, args, false)?;
 
     let payload = file::import(&bytes, &passphrase, ctx.clock.now())?;

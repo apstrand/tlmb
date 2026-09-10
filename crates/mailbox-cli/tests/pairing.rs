@@ -106,6 +106,43 @@ impl Device {
         }
     }
 
+    /// Like [`Device::run`], but keeps stdout as bytes. A sealed payload is
+    /// binary, and the lossy string `run` produces would corrupt it.
+    fn run_raw(&self, args: &[&str]) -> (i32, Vec<u8>, String) {
+        let out = self.command(args).output().expect("run");
+        (
+            out.status.code().unwrap_or(-1),
+            out.stdout,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    /// Runs with `input` on stdin, for `--import-file -`.
+    fn run_with_input(&self, args: &[&str], input: &[u8]) -> Run {
+        use std::io::Write;
+        use std::process::Stdio;
+
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(input)
+            .expect("write");
+        let out = child.wait_with_output().expect("wait");
+        Run {
+            status: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    }
+
     fn config_text(&self) -> String {
         std::fs::read_to_string(&self.config).unwrap_or_default()
     }
@@ -576,4 +613,119 @@ fn accounts_without_a_credential_are_reported() {
         .map(|v| v.as_str().unwrap())
         .collect();
     assert_eq!(missing, vec!["home"]);
+}
+
+// ---- `-`, the desktop-to-desktop path ----
+//
+// Two desktops have no camera to scan the QR with, and the link is a hundred
+// characters nobody is going to type. What they almost always do have is a
+// channel that is already authenticated — SSH — so the export learns to be a
+// pipe, and every credential the user owns moves without touching a disk at
+// either end.
+
+#[test]
+fn an_export_can_be_piped_instead_of_written() {
+    let old = Device::enrolled();
+    let new = Device::blank();
+
+    let (status, payload, stderr) = old.run_raw(&[
+        "pair",
+        "--export-file",
+        "-",
+        "--passphrase",
+        "correct horse battery staple",
+    ]);
+    assert_eq!(status, 0, "{stderr}");
+    // The container announces itself in a clear-text header line, so `head`
+    // on a saved copy answers "what is this".
+    assert!(
+        String::from_utf8_lossy(&payload[..payload.len().min(64)]).contains("mailbox-pair/v1"),
+        "the container should name its format"
+    );
+    // The summary belongs on stderr: stdout is the payload.
+    assert!(stderr.contains("stdout"), "{stderr}");
+
+    let imported = new.run_with_input(
+        &[
+            "--json",
+            "pair",
+            "--import-file",
+            "-",
+            "--passphrase",
+            "correct horse battery staple",
+        ],
+        &payload,
+    );
+    assert_eq!(imported.status, 0, "{}", imported.stderr);
+
+    let config = new.config_text();
+    assert!(config.contains("peter@work.example"), "{config}");
+    assert!(config.contains("peter@home.example"), "{config}");
+}
+
+/// Nothing readable may cross the pipe, exactly as nothing readable may sit in
+/// the file — the channel it travels over is not what protects it.
+#[test]
+fn a_piped_export_is_opaque() {
+    let old = Device::enrolled();
+    let (status, payload, _) =
+        old.run_raw(&["pair", "--export-file", "-", "--passphrase", "a passphrase"]);
+    assert_eq!(status, 0);
+    let text = String::from_utf8_lossy(&payload);
+    for secret in ["peter@work.example", "hunter2", "peter@home.example"] {
+        assert!(
+            !text.contains(secret),
+            "`{secret}` was readable in the pipe"
+        );
+    }
+}
+
+/// stdout carries the payload, so it cannot also carry a JSON document. Said
+/// as a usage error naming both ways out, rather than emitting a mixture that
+/// parses as neither.
+#[test]
+fn a_piped_export_refuses_to_share_stdout_with_json() {
+    let old = Device::enrolled();
+    let run = old.run(&[
+        "--json",
+        "pair",
+        "--export-file",
+        "-",
+        "--passphrase",
+        "a passphrase",
+    ]);
+    assert_ne!(run.status, 0);
+    assert_eq!(run.error_code(), "usage");
+    assert!(run.stderr.contains("--json"), "{}", run.stderr);
+}
+
+/// A wrong passphrase on the pipe fails the same single way it does on a file.
+#[test]
+fn a_piped_import_with_the_wrong_passphrase_does_not_authenticate() {
+    let old = Device::enrolled();
+    let new = Device::blank();
+    let (_, payload, _) = old.run_raw(&[
+        "pair",
+        "--export-file",
+        "-",
+        "--passphrase",
+        "the right one",
+    ]);
+
+    let imported = new.run_with_input(
+        &[
+            "pair",
+            "--import-file",
+            "-",
+            "--passphrase",
+            "the wrong one",
+        ],
+        &payload,
+    );
+    assert_ne!(imported.status, 0);
+    assert!(
+        new.config_text().is_empty(),
+        "a failed import must write nothing: {}",
+        new.config_text()
+    );
 }

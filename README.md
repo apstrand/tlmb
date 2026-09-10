@@ -137,12 +137,30 @@ between the two machines (§8.1).
 ```
 
 Pairing is additive; `--replace` wipes this device's accounts first and needs
-`--yes`. For an air-gapped move, `--export-file` writes the same payload sealed
-under a passphrase and `--import-file` reads it back. **The mail store never
-moves** — the new device syncs that from IMAP.
+`--yes`. **The mail store never moves** — the new device syncs that from IMAP.
 
-The relay and the short code are M8: a 45-bit code guarded by an unreviewed
-PAKE is a credential leak rather than a convenience (§16).
+#### Desktop to desktop
+
+The QR is no use without a camera, and the link is around a hundred characters
+because the secret in it *is* the authentication — 256 bits, and no shorter
+form of it is safe. So on two machines that already have SSH between them, use
+the channel you already have:
+
+```sh
+mailbox pair --export-file - | ssh other-host mailbox pair --import-file -
+```
+
+`-` means stdin/stdout, so every credential you own moves without touching a
+disk at either end. The payload is still sealed under a passphrase
+(`--passphrase`, or `MAILBOX_PAIR_PASSPHRASE`) — SSH protects it in flight, the
+passphrase protects it if it is ever saved. Drop the `ssh` half and redirect to
+a file for an air-gapped move.
+
+The short typeable code is the real answer to "the link is too long", and it is
+the one thing here that cannot be improvised: a 45-bit code is safe only as the
+password to a PAKE, never as a key, and §16 holds it until that PAKE has had an
+outside review. Anything shorter than the full secret without one would be a
+credential leak dressed up as a convenience.
 
 ### The terminal interface
 

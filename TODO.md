@@ -72,6 +72,16 @@ it. What is not:
   the revocation-is-permanent rule are in the fold; the command, the key
   rotation, and the printed list of credential rotations §8.3 asks for are not.
 
+## Known coarseness in pairing
+
+- **There is no short form of the pairing link.** The secret in it is the
+  authentication (§8.1), so it is 256 bits and 64 hex characters, and the whole
+  link is around a hundred. A camera reads that happily and a person does not,
+  which leaves desktop-to-desktop pairing on either a paste or the `-` pipe
+  over SSH. Base32 or base64 would save twenty characters and still not make it
+  typeable, so it is not worth a wire-format change on its own — the fix is the
+  §8.1 short code, and that is blocked on the PAKE review, not on effort.
+
 ## Verification gaps
 
 - **L2 against Cyrus and Stalwart.** M2 requires it (§15) and it is the one
