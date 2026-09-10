@@ -136,9 +136,7 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
             .imap_security
             .clone()
             .or_else(|| hints.as_ref().map(|h| h.imap_security.to_string())),
-        imap_user: spec
-            .imap_user
-            .clone()
+        imap_user: given(&spec.imap_user)
             .or_else(|| hints.as_ref().and_then(|h| h.imap_user.clone())),
         smtp_host: spec
             .smtp_host
@@ -151,9 +149,7 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
             .smtp_security
             .clone()
             .or_else(|| hints.as_ref().map(|h| h.smtp_security.to_string())),
-        smtp_user: spec
-            .smtp_user
-            .clone()
+        smtp_user: given(&spec.smtp_user)
             .or_else(|| hints.as_ref().and_then(|h| h.smtp_user.clone())),
         credential_command: spec.credential_command.clone(),
         oauth_provider: spec.oauth_provider.clone(),
@@ -328,10 +324,28 @@ pub fn is_loopback(host: &str) -> bool {
         || host.ends_with(".localhost")
 }
 
+/// Applies one edited field.
+///
+/// `None` leaves it alone — that is what "edit a field or two" means, and a
+/// form that did not know about a setting must not erase it. `Some("")` is the
+/// other thing a caller needs and had no way to say: put it back to the
+/// default. Without it a login name typed by mistake, or filled in by
+/// discovery from an autoconfig document, could be changed but never removed.
 fn set(field: &mut Option<String>, value: &Option<String>) {
-    if let Some(v) = value {
-        *field = Some(v.clone());
+    match value {
+        None => {}
+        Some(v) if v.trim().is_empty() => *field = None,
+        Some(v) => *field = Some(v.trim().to_string()),
     }
+}
+
+/// What the caller actually supplied. An empty string is not a value.
+fn given(value: &Option<String>) -> Option<String> {
+    value
+        .as_ref()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 fn load_or_empty(path: &Path) -> Result<Config> {

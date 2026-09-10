@@ -585,6 +585,13 @@ pub struct AccountSettings {
     #[arg(long, value_name = "MODE")]
     pub imap_security: Option<String>,
     /// The login name, when it is not the address.
+    ///
+    /// Sets both halves; `--imap-user` and `--smtp-user` override one. Pass an
+    /// empty string to go back to using the address.
+    #[arg(long, short = 'u', value_name = "USER")]
+    pub user: Option<String>,
+
+    /// The IMAP login name, when it differs from `--user`.
     #[arg(long, value_name = "USER")]
     pub imap_user: Option<String>,
 
@@ -595,6 +602,7 @@ pub struct AccountSettings {
     /// `starttls` (587) | `implicit` (465) | `none`.
     #[arg(long, value_name = "MODE")]
     pub smtp_security: Option<String>,
+    /// The submission login name, when it differs from `--user`.
     #[arg(long, value_name = "USER")]
     pub smtp_user: Option<String>,
 

@@ -463,6 +463,20 @@ the address, and `accounts test` prints `logged in as:` — because "wrong
 username" and "wrong password" fail identically from the outside, and this is
 the half you can check.
 
+It is rarely the address, and it is not always derivable from one, so it is a
+flag rather than a config-file edit:
+
+```sh
+mailbox accounts add peter@example.org --user pstrand
+mailbox accounts edit work --user 'ACCT-40119'   # change it
+mailbox accounts edit work --user ''             # back to the address
+```
+
+`--user` sets both halves; `--imap-user` and `--smtp-user` override one for the
+providers that want two different names. An empty value removes the setting
+rather than blanking it — which is how you undo a name typed by mistake, or one
+an autoconfig document supplied.
+
 The password never goes in this file (§9). It is resolved, in order, from:
 
 1. `MAILBOX_PASSWORD_<ID>` — the *account id* uppercased, with `-` and `.` as

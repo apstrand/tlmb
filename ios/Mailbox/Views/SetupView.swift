@@ -7,6 +7,9 @@ struct SetupView: View {
     @State private var password = ""
     @State private var imapHost = ""
     @State private var imapPort = ""
+    /// The name the server is told, when it is not the address (§9). Blank
+    /// means the address, which is the common case and so the placeholder.
+    @State private var loginUser = ""
     @State private var smtpHost = ""
     @State private var smtpPort = ""
     @State private var knownProvider = false
@@ -45,6 +48,15 @@ struct SetupView: View {
                 }
 
                 if showAdvanced || !knownProvider {
+                    Section {
+                        TextField(address.isEmpty ? "The address" : address, text: $loginUser)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } header: {
+                        Text("Login name")
+                    } footer: {
+                        Text("Only if the server wants a different name than the address.")
+                    }
                     Section("IMAP") {
                         TextField("Host", text: $imapHost)
                             .textInputAutocapitalization(.never)
@@ -130,6 +142,10 @@ struct SetupView: View {
         imapPort = String(found.imapPort)
         smtpHost = found.smtpHost
         smtpPort = String(found.smtpPort)
+        // Some autoconfig documents say the login is not the address. It goes
+        // in the field rather than straight into the account, so it is a
+        // suggestion the person can see and overrule.
+        if let user = found.imapUser, loginUser.isEmpty { loginUser = user }
         discoveryNote = found.verified
             ? "Found \(found.imapHost), and it answered."
             : "Found \(found.imapHost)."
@@ -149,6 +165,7 @@ struct SetupView: View {
                 password: password,
                 imapHost: imapHost.isEmpty ? nil : imapHost,
                 imapPort: Int(imapPort),
+                imapUser: loginUser.isEmpty ? nil : loginUser.trimmingCharacters(in: .whitespaces),
                 smtpHost: smtpHost.isEmpty ? nil : smtpHost,
                 smtpPort: Int(smtpPort)
             )

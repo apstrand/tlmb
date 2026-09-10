@@ -566,3 +566,78 @@ fn a_password_with_no_keychain_says_it_went_nowhere_durable() {
     );
     assert!(!w.config_text().contains("hunter2"));
 }
+
+// ---- the login name (§9) ----
+//
+// It cannot always be derived from the address: plenty of servers want a bare
+// local part, an account number, or a name that looks nothing like the mail
+// it carries. So it has to be settable at `add`, changeable afterwards, and —
+// the part that was missing — removable again.
+
+#[test]
+fn one_flag_sets_the_login_for_both_halves() {
+    let w = World::new();
+    let run = w.run(&["accounts", "add", "peter@gmail.com", "--user", "pstrand"]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+    assert!(w.config_text().contains(r#"imap_user = "pstrand""#));
+    assert!(w.config_text().contains(r#"smtp_user = "pstrand""#));
+
+    // And it is what `accounts list` shows, instead of the address.
+    let listed = w.run(&["--json", "accounts", "list"]).json();
+    assert_eq!(listed["accounts"][0]["login_user"], "pstrand");
+}
+
+/// The providers that want two different names are why the per-protocol flags
+/// still exist; `--user` is the default they override.
+#[test]
+fn a_protocol_flag_overrides_the_shared_one() {
+    let w = World::new();
+    let run = w.run(&[
+        "accounts",
+        "add",
+        "peter@gmail.com",
+        "--user",
+        "shared",
+        "--smtp-user",
+        "submission-only",
+    ]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+    assert!(w.config_text().contains(r#"imap_user = "shared""#));
+    assert!(w.config_text().contains(r#"smtp_user = "submission-only""#));
+}
+
+#[test]
+fn the_login_can_be_changed_after_the_fact() {
+    let w = World::new();
+    w.run(&["accounts", "add", "peter@gmail.com", "--user", "first"]);
+    let run = w.run(&["--json", "accounts", "edit", "peter", "--user", "second"]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+    assert_eq!(run.json()["login_user"], "second");
+}
+
+/// The half that had no way to be said: put it back to the address. A name
+/// typed by mistake — or filled in by discovery from an autoconfig document —
+/// could be changed but never removed.
+#[test]
+fn an_empty_login_goes_back_to_the_address() {
+    let w = World::new();
+    w.run(&["accounts", "add", "peter@gmail.com", "--user", "wrong"]);
+    let run = w.run(&["--json", "accounts", "edit", "peter", "--user", ""]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+    assert_eq!(run.json()["login_user"], "peter@gmail.com");
+    assert!(
+        !w.config_text().contains("imap_user"),
+        "the setting should be gone, not blank: {}",
+        w.config_text()
+    );
+}
+
+/// An edit that names no login must not erase one. This is the rule the whole
+/// `edit` design rests on, and clearing is the exception to it.
+#[test]
+fn editing_something_else_leaves_the_login_alone() {
+    let w = World::new();
+    w.run(&["accounts", "add", "peter@gmail.com", "--user", "pstrand"]);
+    w.run(&["accounts", "edit", "peter", "--imap-port", "1993"]);
+    assert!(w.config_text().contains(r#"imap_user = "pstrand""#));
+}

@@ -87,12 +87,13 @@ final class MailboxStore {
         }
     }
 
-    func addAccount(address: String, password: String, imapHost: String?, imapPort: Int?, smtpHost: String?, smtpPort: Int?) async throws {
+    func addAccount(address: String, password: String, imapHost: String?, imapPort: Int?, imapUser: String? = nil, smtpHost: String?, smtpPort: Int?) async throws {
         _ = try MailboxClient.shared.addAccount(
             address: address,
             password: password,
             imapHost: imapHost,
             imapPort: imapPort,
+            imapUser: imapUser,
             smtpHost: smtpHost,
             smtpPort: smtpPort
         )

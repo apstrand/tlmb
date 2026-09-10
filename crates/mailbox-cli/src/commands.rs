@@ -749,11 +749,13 @@ fn account_spec(
         imap_host: settings.imap_host.clone(),
         imap_port: settings.imap_port,
         imap_security: settings.imap_security.clone(),
-        imap_user: settings.imap_user.clone(),
+        // `--user` is the common case — one name for both halves — and the
+        // per-protocol flags override it for the providers that differ.
+        imap_user: settings.imap_user.clone().or_else(|| settings.user.clone()),
         smtp_host: settings.smtp_host.clone(),
         smtp_port: settings.smtp_port,
         smtp_security: settings.smtp_security.clone(),
-        smtp_user: settings.smtp_user.clone(),
+        smtp_user: settings.smtp_user.clone().or_else(|| settings.user.clone()),
         password: if settings.password_stdin {
             Some(read_password(ctx)?)
         } else {
@@ -939,6 +941,8 @@ fn accounts_edit(ctx: &Ctx<'_>, args: &crate::cli::EditAccountArgs) -> Result<()
                 "address": updated.address,
                 "imap_host": updated.imap_host,
                 "smtp_host": updated.smtp_host,
+                "login_user": updated.login_user(),
+                "smtp_login_user": updated.smtp_login_user(),
                 "oauth_provider": updated.oauth_provider,
             }),
         )?;
@@ -950,6 +954,14 @@ fn accounts_edit(ctx: &Ctx<'_>, args: &crate::cli::EditAccountArgs) -> Result<()
             updated.address,
             updated.imap_host.clone().unwrap_or_default()
         ));
+        // The login is what a wrong-username failure looks like from the
+        // outside, so an edit that touched it says what it is now.
+        if updated.login_user() != updated.address {
+            ctx.out
+                .print(format!("  logging in as: {}", updated.login_user()));
+        } else {
+            ctx.out.print(ctx.out.dim("  logging in as: the address"));
+        }
     }
     Ok(())
 }
