@@ -12,6 +12,10 @@ struct SetupView: View {
     @State private var knownProvider = false
     @State private var showAdvanced = false
     @State private var working = false
+    @State private var discovering = false
+    /// What discovery said, once it has run: where the servers came from, or
+    /// that nothing answered for this domain.
+    @State private var discoveryNote: String?
 
     var body: some View {
         NavigationStack {
@@ -22,13 +26,22 @@ struct SetupView: View {
                         .keyboardType(.emailAddress)
                         .autocorrectionDisabled()
                         .onChange(of: address) { lookupProvider() }
+                        // The table is consulted as you type; the network is
+                        // asked once, when the address is finished (§9).
+                        .onSubmit { Task { await discoverServers() } }
                     SecureField("Password", text: $password)
                 } header: {
                     Text("Account")
                 } footer: {
-                    Text(knownProvider
-                         ? "Server settings filled in from the address."
-                         : "The password is stored in the iOS Keychain, never in the config file.")
+                    if discovering {
+                        Text("Looking up \(domainOf(address))…")
+                    } else if let note = discoveryNote {
+                        Text(note)
+                    } else {
+                        Text(knownProvider
+                             ? "Server settings filled in from the address."
+                             : "The password is stored in the iOS Keychain, never in the config file.")
+                    }
                 }
 
                 if showAdvanced || !knownProvider {
@@ -74,6 +87,7 @@ struct SetupView: View {
     }
 
     private func lookupProvider() {
+        discoveryNote = nil
         guard address.contains("@") else {
             knownProvider = false
             return
@@ -87,6 +101,42 @@ struct SetupView: View {
         if let p = hints.imapPort { imapPort = String(p) }
         smtpHost = hints.smtpHost ?? smtpHost
         if let p = hints.smtpPort { smtpPort = String(p) }
+    }
+
+    /// §9's full chain, for the domains the built-in table has never heard of.
+    ///
+    /// Failure is silent on purpose: the fields below are already visible and
+    /// typing the servers in is the fallback. What a *failure* must not do is
+    /// wipe what the person has already typed, so nothing is overwritten
+    /// unless discovery actually found something.
+    private func discoverServers() async {
+        guard address.contains("@"), !knownProvider, !discovering else { return }
+        discovering = true
+        defer { discovering = false }
+
+        let typed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let discovery = try? await Task.detached(priority: .userInitiated) {
+            try MailboxClient.shared.discover(address: typed)
+        }.value
+
+        // The address may have moved on while the network was busy.
+        guard typed == address.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+
+        guard let found = discovery?.found else {
+            discoveryNote = "Nothing found for \(domainOf(typed)). Enter the servers below."
+            return
+        }
+        imapHost = found.imapHost
+        imapPort = String(found.imapPort)
+        smtpHost = found.smtpHost
+        smtpPort = String(found.smtpPort)
+        discoveryNote = found.verified
+            ? "Found \(found.imapHost), and it answered."
+            : "Found \(found.imapHost)."
+    }
+
+    private func domainOf(_ address: String) -> String {
+        address.split(separator: "@").last.map(String.init) ?? address
     }
 
     private func add() async {

@@ -294,10 +294,17 @@ fn apply(ctx: &Ctx<'_>, payload: &Payload, mode: ApplyMode) -> Result<()> {
     for account in &payload.accounts {
         match &account.credential {
             Some(mailbox_core::pair::PairedCredential::Password { secret }) => {
-                if store_in_keychain(&account.id, secret) {
-                    stored.push(account.id.clone());
-                } else {
-                    manual.push(account.id.clone());
+                // The core's writer, not a second one here: it knows what
+                // §9's lookup will read back on each platform, and one of the
+                // two copies of that knowledge was already wrong.
+                let cfg = config
+                    .accounts
+                    .get(&account.id)
+                    .cloned()
+                    .unwrap_or_default();
+                match mailbox_core::credentials::store_password(&account.id, &cfg, secret) {
+                    mailbox_core::credentials::Stored::Keychain => stored.push(account.id.clone()),
+                    mailbox_core::credentials::Stored::Process => manual.push(account.id.clone()),
                 }
             }
             Some(mailbox_core::pair::PairedCredential::OAuth2 { refresh_token }) => {
@@ -432,33 +439,4 @@ fn load_config(ctx: &Ctx<'_>) -> Result<Config> {
         Some(path) => Config::load(path),
         None => Config::load_default(),
     }
-}
-
-/// Puts a password in the OS keychain, the way §9 resolves one.
-fn store_in_keychain(account_id: &str, secret: &str) -> bool {
-    use std::process::{Command, Stdio};
-
-    let mut child = match Command::new("secret-tool")
-        .args([
-            "store",
-            "--label=mailbox",
-            "service",
-            "mailbox",
-            "account",
-            account_id,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return false,
-    };
-    if let Some(stdin) = child.stdin.as_mut() {
-        if stdin.write_all(secret.as_bytes()).is_err() {
-            return false;
-        }
-    }
-    child.wait().map(|s| s.success()).unwrap_or(false)
 }

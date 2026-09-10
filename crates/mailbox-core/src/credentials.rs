@@ -24,11 +24,42 @@
 //! a store fails with `auth_failed` and a hint, which is the honest outcome.
 
 use std::collections::HashMap;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 use crate::error::{Error, Result};
 use crate::imap::Credential;
+
+static KEYCHAIN_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns off every keychain read and write for the rest of this process.
+///
+/// For an in-process caller that cannot set an environment variable safely —
+/// a test binary, above all, where `set_var` races every other thread's
+/// `getenv`. There is no way back on purpose: this is a safety catch, not a
+/// setting.
+pub fn disable_keychain() {
+    KEYCHAIN_OFF.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the OS keychain may be touched at all.
+///
+/// `MAILBOX_KEYCHAIN=none` turns every read and write here into a miss, and
+/// [`disable_keychain`] does the same from inside the process. It is the same
+/// kind of switch as `MAILBOX_NOTIFIER=none` and for the same reason: `cargo
+/// test` runs `accounts add --password-stdin`, and a suite that writes fixture
+/// passwords into the keyring of whoever ran it — and reads back the real
+/// entries of an account that happens to share an id — is a suite that has
+/// escaped onto the developer's desktop.
+fn keychain_enabled() -> bool {
+    if KEYCHAIN_OFF.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    !matches!(
+        std::env::var("MAILBOX_KEYCHAIN").as_deref(),
+        Ok("none") | Ok("off")
+    )
+}
 
 fn installed() -> &'static Mutex<HashMap<String, Credential>> {
     static INSTALLED: OnceLock<Mutex<HashMap<String, Credential>>> = OnceLock::new();
@@ -166,13 +197,139 @@ pub fn refresh_token(account_id: &str, cached: Option<&crate::oauth::Tokens>) ->
 /// other.
 const OAUTH_SERVICE: &str = "mailbox-oauth";
 
+/// The keychain service name passwords are filed under, matching what
+/// [`keychain_lookup`] reads back.
+const PASSWORD_SERVICE: &str = "mailbox";
+
+/// Where a password ended up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stored {
+    /// The OS keychain has it, and it survives this process.
+    Keychain,
+    /// No keychain answered, so it is in this process's memory and no further.
+    Process,
+}
+
+impl Stored {
+    /// What to tell the person who just typed the password.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Stored::Keychain => "the OS keychain",
+            Stored::Process => {
+                "this process only — no keychain took it; set `credential_command`, \
+                 or export MAILBOX_PASSWORD_<ACCOUNT>"
+            }
+        }
+    }
+}
+
+/// Puts a password where the next process will find it (§9).
+///
+/// The keychain first, and this process's memory when there is none — which
+/// is honest rather than useless: it is enough to finish a setup and run
+/// `accounts test` against a real server, and [`Stored`] says which happened
+/// so the caller does not imply a durability it did not get.
+///
+/// Note what is *not* here: writing the secret to the config file. §9 is
+/// unambiguous, and a fallback that quietly did it would make every other
+/// promise in this module worthless.
+pub fn store_password(
+    account_id: &str,
+    cfg: &crate::config::AccountConfig,
+    password: &str,
+) -> Stored {
+    install(account_id, Credential::Password(password.to_string()));
+    if store_password_in_keychain(account_id, cfg, password) {
+        Stored::Keychain
+    } else {
+        Stored::Process
+    }
+}
+
+/// The write matching [`keychain_lookup`]'s read, per platform.
+///
+/// macOS files mail passwords as *internet* passwords keyed by host and login
+/// name, which is where its own Mail.app looks and what makes an entry added
+/// here visible in Keychain Access as what it is. Secret Service has no such
+/// convention, so the service/account pair is ours.
+fn store_password_in_keychain(
+    account_id: &str,
+    cfg: &crate::config::AccountConfig,
+    password: &str,
+) -> bool {
+    if !keychain_enabled() {
+        return false;
+    }
+    if cfg!(target_os = "macos") {
+        let Some(host) = cfg.imap_host.clone().filter(|h| !h.is_empty()) else {
+            return false;
+        };
+        return Command::new("security")
+            .args([
+                "add-internet-password",
+                "-U",
+                "-s",
+                &host,
+                "-a",
+                cfg.login_user(),
+                "-r",
+                "imap",
+                "-w",
+                password,
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+    keychain_store(PASSWORD_SERVICE, "password", account_id, password)
+}
+
+/// Removes an account's stored password from the keychain.
+fn keychain_forget_password(account_id: &str, cfg: &crate::config::AccountConfig) {
+    if !keychain_enabled() {
+        return;
+    }
+    if cfg!(target_os = "macos") {
+        let Some(host) = cfg.imap_host.clone().filter(|h| !h.is_empty()) else {
+            return;
+        };
+        let _ = Command::new("security")
+            .args([
+                "delete-internet-password",
+                "-s",
+                &host,
+                "-a",
+                cfg.login_user(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return;
+    }
+    let _ = Command::new("secret-tool")
+        .args(["clear", "service", PASSWORD_SERVICE, "account", account_id])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Forgets everything stored for an account, keychain included.
+///
+/// Separate from [`forget`], which only drops the in-process copy: removing an
+/// account should not leave its password in the keychain, and a caller that
+/// only wants the process copy gone (a test) should not touch the keychain.
+pub fn forget_stored(account_id: &str, cfg: &crate::config::AccountConfig) {
+    forget(account_id);
+    keychain_forget_password(account_id, cfg);
+}
+
 /// Remembers a refresh token for an account that has no access token yet.
 ///
 /// The receiving half of pairing: the keychain if there is one, and otherwise
 /// the account's own token file, whose access token is left empty so the first
 /// command refreshes into it.
 pub fn adopt_refresh_token(account_id: &str, token: &str) -> Result<bool> {
-    let stored = keychain_store(OAUTH_SERVICE, account_id, token);
+    let stored = keychain_store(OAUTH_SERVICE, "OAuth2", account_id, token);
     if !stored {
         crate::oauth::cache(
             account_id,
@@ -193,11 +350,14 @@ pub fn adopt_refresh_token(account_id: &str, token: &str) -> Result<bool> {
 /// mode 0700 — the same protection §9 gives the mail itself. A keychain is
 /// better because it survives the store being copied, so it is tried first.
 pub fn store_refresh_token(account_id: &str, token: &str) -> Result<bool> {
-    Ok(keychain_store(OAUTH_SERVICE, account_id, token))
+    Ok(keychain_store(OAUTH_SERVICE, "OAuth2", account_id, token))
 }
 
 /// Reads a secret from the platform keychain by service and account.
 fn keychain_get(service: &str, account_id: &str) -> Option<String> {
+    if !keychain_enabled() {
+        return None;
+    }
     let (program, args) = if cfg!(target_os = "macos") {
         (
             "security",
@@ -232,10 +392,12 @@ fn keychain_get(service: &str, account_id: &str) -> Option<String> {
 }
 
 /// Writes a secret to the platform keychain. `false` when there is none.
-fn keychain_store(service: &str, account_id: &str, secret: &str) -> bool {
+fn keychain_store(service: &str, label: &str, account_id: &str, secret: &str) -> bool {
     use std::io::Write;
-    use std::process::Stdio;
 
+    if !keychain_enabled() {
+        return false;
+    }
     if cfg!(target_os = "macos") {
         // `-U` updates an existing entry rather than failing on it. The secret
         // goes in as an argument here because `security` has no stdin form —
@@ -261,7 +423,7 @@ fn keychain_store(service: &str, account_id: &str, secret: &str) -> bool {
         .args([
             "store",
             "--label",
-            &format!("mailbox OAuth2 ({account_id})"),
+            &format!("mailbox {label} ({account_id})"),
             "service",
             service,
             "account",
@@ -332,6 +494,9 @@ fn run_credential_command(cmd: &str) -> Result<String> {
 /// missing: this is one step of a chain, and a missing keychain is not a
 /// failure until every step has been tried.
 fn keychain_lookup(account_id: &str, cfg: &crate::config::AccountConfig) -> Option<String> {
+    if !keychain_enabled() {
+        return None;
+    }
     let attempts: Vec<(&str, Vec<String>)> = if cfg!(target_os = "macos") {
         vec![(
             "security",

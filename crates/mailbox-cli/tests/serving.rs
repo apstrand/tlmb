@@ -85,6 +85,12 @@ impl Serving {
             // Nothing here may put a popup on the desktop of
             // whoever ran the suite (§11).
             .env("MAILBOX_NOTIFIER", "none")
+            // Nor may it resolve or connect to whatever domain a
+            // fixture happens to name (§9 discovery).
+            .env("MAILBOX_DISCOVERY", "off")
+            // Nor may it write a fixture password into the keyring of
+            // whoever ran `cargo test`.
+            .env("MAILBOX_KEYCHAIN", "none")
             .env("MAILBOX_CLOCK", "2026-09-01T12:00:00Z")
             .output()
             .expect("seed");
@@ -97,6 +103,12 @@ impl Serving {
             // Nothing here may put a popup on the desktop of
             // whoever ran the suite (§11).
             .env("MAILBOX_NOTIFIER", "none")
+            // Nor may it resolve or connect to whatever domain a
+            // fixture happens to name (§9 discovery).
+            .env("MAILBOX_DISCOVERY", "off")
+            // Nor may it write a fixture password into the keyring of
+            // whoever ran `cargo test`.
+            .env("MAILBOX_KEYCHAIN", "none")
             .env("MAILBOX_CLOCK", "2026-09-01T12:00:00Z")
             .env("MAILBOX_SEED", format!("serve-{port}"))
             .stdout(Stdio::piped())
@@ -282,6 +294,12 @@ fn serving_the_network_without_a_token_is_refused() {
         // Nothing here may put a popup on the desktop of
         // whoever ran the suite (§11).
         .env("MAILBOX_NOTIFIER", "none")
+        // Nor may it resolve or connect to whatever domain a
+        // fixture happens to name (§9 discovery).
+        .env("MAILBOX_DISCOVERY", "off")
+        // Nor may it write a fixture password into the keyring of
+        // whoever ran `cargo test`.
+        .env("MAILBOX_KEYCHAIN", "none")
         .output()
         .expect("run");
 

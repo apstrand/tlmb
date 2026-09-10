@@ -1,9 +1,13 @@
 //! Built-in server settings for the big providers (§9).
 //!
-//! Full autoconfig / DNS SRV / ISPDB discovery lands with `accounts add`.
-//! Until then a small table covers the hosts almost everyone uses, so adding
-//! an account on a phone is "address and password" rather than also typing
-//! `imap.gmail.com`. Unknown domains return `None` and the UI asks for hosts.
+//! The first and cheapest step of [`crate::discover`], and the only one that
+//! touches no network: a small table covering the hosts almost everyone uses,
+//! so adding an account on a phone is "address and password" rather than also
+//! a round trip. It is consulted first not just for speed — these six answers
+//! are more reliable than what the same domains publish, Gmail's autoconfig
+//! having pointed at a POP server for years.
+//!
+//! An unknown domain returns `None`, and discovery goes to the network.
 
 /// IMAP and SMTP settings the table knows for one domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,11 +15,14 @@ pub struct ServerHints {
     pub imap_host: String,
     pub imap_port: u16,
     /// `implicit` | `starttls` | `none`.
-    pub imap_security: &'static str,
+    pub imap_security: String,
     pub smtp_host: String,
     pub smtp_port: u16,
     /// `implicit` | `starttls` | `none`.
-    pub smtp_security: &'static str,
+    pub smtp_security: String,
+    /// The login name, when the source said it is not the address.
+    pub imap_user: Option<String>,
+    pub smtp_user: Option<String>,
 }
 
 /// Looks up the domain of `address` in the built-in table.
@@ -32,52 +39,64 @@ fn hints_for_domain(domain: &str) -> Option<ServerHints> {
         "gmail.com" | "googlemail.com" => Some(ServerHints {
             imap_host: "imap.gmail.com".into(),
             imap_port: 993,
-            imap_security: "implicit",
+            imap_security: "implicit".into(),
             smtp_host: "smtp.gmail.com".into(),
             smtp_port: 587,
-            smtp_security: "starttls",
+            smtp_security: "starttls".into(),
+            imap_user: None,
+            smtp_user: None,
         }),
         "fastmail.com" | "fastmail.fm" => Some(ServerHints {
             imap_host: "imap.fastmail.com".into(),
             imap_port: 993,
-            imap_security: "implicit",
+            imap_security: "implicit".into(),
             smtp_host: "smtp.fastmail.com".into(),
             smtp_port: 587,
-            smtp_security: "starttls",
+            smtp_security: "starttls".into(),
+            imap_user: None,
+            smtp_user: None,
         }),
         "outlook.com" | "hotmail.com" | "live.com" | "msn.com" | "office365.com" => {
             Some(ServerHints {
                 imap_host: "outlook.office365.com".into(),
                 imap_port: 993,
-                imap_security: "implicit",
+                imap_security: "implicit".into(),
                 smtp_host: "smtp.office365.com".into(),
                 smtp_port: 587,
-                smtp_security: "starttls",
+                smtp_security: "starttls".into(),
+                imap_user: None,
+                smtp_user: None,
             })
         }
         "yahoo.com" | "yahoo.co.uk" | "ymail.com" => Some(ServerHints {
             imap_host: "imap.mail.yahoo.com".into(),
             imap_port: 993,
-            imap_security: "implicit",
+            imap_security: "implicit".into(),
             smtp_host: "smtp.mail.yahoo.com".into(),
             smtp_port: 587,
-            smtp_security: "starttls",
+            smtp_security: "starttls".into(),
+            imap_user: None,
+            smtp_user: None,
         }),
         "icloud.com" | "me.com" | "mac.com" => Some(ServerHints {
             imap_host: "imap.mail.icloud.com".into(),
             imap_port: 993,
-            imap_security: "implicit",
+            imap_security: "implicit".into(),
             smtp_host: "smtp.mail.icloud.com".into(),
             smtp_port: 587,
-            smtp_security: "starttls",
+            smtp_security: "starttls".into(),
+            imap_user: None,
+            smtp_user: None,
         }),
         "proton.me" | "protonmail.com" | "pm.me" => Some(ServerHints {
             imap_host: "imap.protonmail.ch".into(),
             imap_port: 993,
-            imap_security: "implicit",
+            imap_security: "implicit".into(),
             smtp_host: "smtp.protonmail.ch".into(),
             smtp_port: 587,
-            smtp_security: "starttls",
+            smtp_security: "starttls".into(),
+            imap_user: None,
+            smtp_user: None,
         }),
         _ => None,
     }

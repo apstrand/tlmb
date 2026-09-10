@@ -352,6 +352,12 @@ impl Mailbox {
         Ok(json!({ "removed": id, "store": store.display().to_string() }))
     }
 
+    /// The built-in table, and nothing else.
+    ///
+    /// Deliberately offline: a setup screen calls this as the address is
+    /// typed, and a network round trip per keystroke is both slow and a way
+    /// to leak half-typed domains. [`Self::discover`] is the full chain, for
+    /// when the shell has a whole address and the person has asked.
     pub fn providers(&self, address: &str) -> Result<Value> {
         match providers::hints_for(address) {
             Some(h) => Ok(json!({
@@ -365,6 +371,19 @@ impl Mailbox {
             })),
             None => Ok(json!({ "known": false })),
         }
+    }
+
+    /// §9's whole discovery chain, network included.
+    ///
+    /// For a setup screen that has an address and is about to add an account.
+    /// The reply carries the trail as well as the answer, so a domain that
+    /// yields nothing can say what it was asked.
+    pub fn discover(&self, address: &str) -> Result<Value> {
+        let discovery = mailbox_core::discover::discover(
+            address,
+            &mailbox_core::discover::Options::from_env(),
+        )?;
+        Ok(serde_json::to_value(discovery)?)
     }
 
     /// Dispatches a named command with a JSON argument object. This is the
@@ -477,6 +496,10 @@ impl Mailbox {
             "providers" => {
                 let a: AddressArgs = serde_from_value(args)?;
                 Ok(("accounts", self.providers(&a.address)?))
+            }
+            "discover" => {
+                let a: AddressArgs = serde_from_value(args)?;
+                Ok(("accounts", self.discover(&a.address)?))
             }
             other => Err(Error::usage(format!("unknown method `{other}`"))),
         }
@@ -616,6 +639,10 @@ pub struct AddAccount {
     pub oauth_provider: Option<String>,
     #[serde(default)]
     pub oauth_client_id: Option<String>,
+    /// Look the servers up on the network when none are given (§9). Off by
+    /// default; `discover` is the method that does it visibly.
+    #[serde(default)]
+    pub discover: bool,
 }
 
 /// The shell's wire shape is the core's, field for field; keeping the two
@@ -624,6 +651,11 @@ pub struct AddAccount {
 impl From<AddAccount> for accounts::NewAccount {
     fn from(a: AddAccount) -> accounts::NewAccount {
         accounts::NewAccount {
+            // The shell decides: a setup screen calls `discover` while the
+            // person is still looking at the form, and fills the fields in
+            // where they can see them, rather than having `add` reach the
+            // network behind a spinner.
+            discover: a.discover,
             id: a.id,
             address: a.address,
             imap_host: a.imap_host,

@@ -724,6 +724,7 @@ pub fn accounts(ctx: &Ctx<'_>, args: &AccountsArgs) -> Result<()> {
         Some(AccountsAction::Edit(args)) => accounts_edit(ctx, args),
         Some(AccountsAction::Remove { id }) => accounts_remove(ctx, id),
         Some(AccountsAction::Login(args)) => accounts_login(ctx, args),
+        Some(AccountsAction::Discover(args)) => accounts_discover(ctx, args),
         _ => accounts_list(ctx),
     }
 }
@@ -762,6 +763,7 @@ fn account_spec(
         require_tls: if settings.insecure { Some(false) } else { None },
         oauth_provider: settings.oauth.clone(),
         oauth_client_id: settings.oauth_client_id.clone(),
+        discover: false,
     })
 }
 
@@ -789,8 +791,11 @@ fn accounts_add(ctx: &Ctx<'_>, args: &crate::cli::AddAccountArgs) -> Result<()> 
     let path = config_path(ctx);
     let mut spec = account_spec(ctx, &args.settings, &args.address)?;
     spec.id = args.id.clone().unwrap_or_default();
+    spec.discover = !args.no_discover;
 
     if ctx.global.dry_run {
+        // The table only: a dry run says what would happen, and reaching the
+        // network is something happening.
         let payload = serde_json::json!({
             "would_add": spec.address,
             "config": path.display().to_string(),
@@ -818,16 +823,22 @@ fn accounts_add(ctx: &Ctx<'_>, args: &crate::cli::AddAccountArgs) -> Result<()> 
     if ctx.out.is_structured() {
         ctx.out.reply("accounts add", &added)?;
     } else {
+        let provenance = match (&added.source, added.verified) {
+            (Some(source), true) => ctx.out.dim(&format!(
+                " (servers from {}, confirmed by connecting)",
+                source.describe()
+            )),
+            (Some(source), false) => ctx
+                .out
+                .dim(&format!(" (servers from {})", source.describe())),
+            (None, _) => String::new(),
+        };
         ctx.out.print(format!(
             "{} {} as `{}`{}",
             ctx.out.paint("added", GREEN),
             added.address,
             added.id,
-            if added.discovered {
-                ctx.out.dim(" (servers from the built-in table)")
-            } else {
-                String::new()
-            }
+            provenance
         ));
         match &added.credential {
             Some(source) => ctx.out.print(format!("  credential: {source}")),
@@ -840,6 +851,75 @@ fn accounts_add(ctx: &Ctx<'_>, args: &crate::cli::AddAccountArgs) -> Result<()> 
             "  test it with `mailbox accounts test {}`",
             added.id
         )));
+    }
+    Ok(())
+}
+
+/// `accounts discover`: run §9's chain and print the trail, writing nothing.
+fn accounts_discover(ctx: &Ctx<'_>, args: &crate::cli::DiscoverArgs) -> Result<()> {
+    use mailbox_core::discover::{discover, Options};
+
+    let opts = if args.offline {
+        Options::offline()
+    } else {
+        let base = Options::from_env();
+        Options {
+            verify: base.verify && !args.no_verify,
+            ..base
+        }
+    };
+    let discovery = discover(&args.address, &opts)?;
+
+    if ctx.out.is_structured() {
+        ctx.out.reply("accounts discover", &discovery)?;
+        return Ok(());
+    }
+
+    for step in &discovery.steps {
+        ctx.out
+            .print(ctx.out.dim(&format!("  {}: {}", step.target, step.outcome)));
+    }
+    match &discovery.found {
+        Some(found) => {
+            ctx.out.print(format!(
+                "{} {} from {}",
+                ctx.out.paint("found", GREEN),
+                discovery.domain,
+                found.source.describe()
+            ));
+            ctx.out.print(format!(
+                "  imap  {}:{} {}",
+                found.hints.imap_host, found.hints.imap_port, found.hints.imap_security
+            ));
+            ctx.out.print(format!(
+                "  smtp  {}:{} {}",
+                found.hints.smtp_host, found.hints.smtp_port, found.hints.smtp_security
+            ));
+            if let Some(user) = &found.hints.imap_user {
+                ctx.out.print(format!("  login as {user}"));
+            }
+            if !found.verified && !found.source.is_authoritative() {
+                ctx.out.print(
+                    ctx.out
+                        .dim("  unverified: nothing connected to that host, so this is a guess"),
+                );
+            }
+            ctx.out.print(ctx.out.dim(&format!(
+                "  add it with `mailbox accounts add {}`",
+                discovery.address
+            )));
+        }
+        None => {
+            ctx.out.print(format!(
+                "{} for {}",
+                ctx.out.paint("no settings found", YELLOW),
+                discovery.domain
+            ));
+            ctx.out.print(ctx.out.dim(
+                "  add the account with --imap-host and --smtp-host, which is what a domain \
+                 that publishes nothing needs",
+            ));
+        }
     }
     Ok(())
 }

@@ -40,7 +40,7 @@ than retrofitted.
 | Desktop notifications | done (§11, M3) |
 | TUI: mutt keys, incremental search, `keys.toml` | done (§7, M3) |
 | Pairing: QR, LAN, encrypted export file | done (§8, M4) |
-| `accounts add`/`edit`/`remove`, built-in provider table | done (§9) |
+| `accounts add`/`edit`/`remove`, autoconfig discovery | done (§9) |
 | OAuth2: PKCE, loopback redirect, refresh, `XOAUTH2` | done (§9) |
 | Snooze, local-only (§7) | done (M5) |
 | Background sync: `IDLE`, poll fallback, one owner | done (§5.3, §4.1) |
@@ -262,9 +262,6 @@ optional push notifier of §11 is not in this cut.
   is an account's sync engine, and a loser is told so truthfully, since its
   local writes are already queued and the owner pushes them. What is missing is
   the socket that would let the loser have its writes performed *now*.
-- **Autoconfig discovery.** `accounts add` uses a built-in table for the big
-  providers; §9 also wants `autoconfig`/`autodiscover`, DNS SRV, and the
-  Mozilla ISPDB, so that an unknown domain does not need `--imap-host`.
 - **`COMPRESS=DEFLATE`** and `raw:` server-side search passthrough.
 - **The cross-device state folder** (§5.4), and with it shared tags, saved
   searches, and snooze that follows you between machines. All three are local
@@ -334,17 +331,45 @@ on its own; otherwise each `mailbox sync` advances it.
 mailbox accounts add peter@gmail.com
 ```
 
-For the providers in the built-in table — Gmail, Fastmail, Outlook, Yahoo,
-iCloud, Proton — that is the whole of it; anywhere else needs at least
-`--imap-host`. Full autoconfig discovery is still to come, so an unknown domain
-asks rather than guesses. `accounts edit <id>` changes a setting, `accounts
-remove <id>` takes the account out of the config and leaves the mail cached on
+That is usually the whole of it, for any domain and not only the well-known
+ones. `add` works down §9's chain until something answers:
+
+1. the **built-in table** — Gmail, Fastmail, Outlook, Yahoo, iCloud, Proton —
+   which costs no network and is more accurate than what several of those
+   domains publish about themselves;
+2. the domain's own **autoconfig**, at `autoconfig.<domain>` and
+   `<domain>/.well-known/autoconfig/`;
+3. the **Mozilla ISPDB**;
+4. **autodiscover**, for Exchange;
+5. DNS **`SRV`** records, then the **`MX` host** and the conventional names
+   (`imap.<domain>`, `mail.<domain>`, the domain itself).
+
+The last step is a guess, so it is the one that checks: it connects, completes
+the TLS handshake against the system roots, and reads the IMAP greeting before
+offering a host — no credential is sent, and a host that fails any of that is
+not written to your config. Everything above it is an assertion by someone
+entitled to make it, and is taken at its word.
+
+```sh
+mailbox accounts discover peter@example.org   # ask, change nothing
+```
+
+prints every source it tried and what each said, which is how you find out
+whether a domain publishes nothing (type `--imap-host`) or your network is in
+the way (try again). `--no-discover` on `add` restricts it to the table;
+`MAILBOX_DISCOVERY=off` does the same for a whole run, and is what the test
+suite sets.
+
+`accounts edit <id>` changes a setting, `accounts remove <id>` takes the
+account out of the config, forgets its password, and leaves the mail cached on
 disk (it names the directory so you can delete it deliberately), and `accounts
 test <id>` connects and reports what the server offers.
 
-The password never reaches the config file (§9). `--credential-command 'pass
-show mail/work'` is the durable way to supply one; `--password-stdin` reads it
-from a pipe for a one-off.
+The password never reaches the config file (§9). `--password-stdin` reads one
+from a pipe and puts it in the OS keychain (Secret Service, macOS Keychain);
+where there is no keychain it is held for that process only, and the reply says
+so rather than implying it was saved. `--credential-command 'pass show
+mail/work'` is the alternative, and the one that needs no keychain at all.
 
 ```sh
 mailbox accounts add peter@example.org \
@@ -641,7 +666,10 @@ cargo test -p mailbox-cli --test l2_dovecot   # L2: a real Dovecot in Docker
 `MAILBOX_NOTIFIER=none` silences desktop notifications, and any other value is
 a command to run instead of the platform's (`{summary}` and `{body}` as
 arguments) — which is how the suite tests §11 without putting popups on the
-desktop of whoever ran it. Every harness sets it.
+desktop of whoever ran it. `MAILBOX_DISCOVERY=off` stops `accounts add` from
+resolving and connecting to whatever domain a fixture happens to name, and
+`MAILBOX_KEYCHAIN=none` stops it writing fixture passwords into the keyring of
+whoever ran `cargo test`. Every harness sets all three.
 
 L1 replays a recorded IMAP conversation against the sync engine with no server
 at all. `MAILBOX_RECORD=<scenario> MAILBOX_RECORD_PATH=<file> mailbox sync`

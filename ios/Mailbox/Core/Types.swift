@@ -216,3 +216,35 @@ struct ProviderHints: Decodable {
     var smtpPort: UInt16?
     var smtpSecurity: String?
 }
+
+/// The result of §9's full discovery chain, as `discover` returns it.
+struct Discovery: Decodable {
+    var address: String
+    var domain: String
+    /// `nil` when every source came up empty, which is a domain that needs
+    /// its servers typed in rather than an error.
+    var found: DiscoveredServers?
+    var steps: [DiscoveryStep]
+}
+
+struct DiscoveredServers: Decodable {
+    var imapHost: String
+    var imapPort: UInt16
+    var imapSecurity: String
+    var smtpHost: String
+    var smtpPort: UInt16
+    var smtpSecurity: String
+    var imapUser: String?
+    var smtpUser: String?
+    /// Which of §9's sources answered: `built_in`, `autoconfig`, `ispdb`,
+    /// `autodiscover`, `srv`, `probe`.
+    var source: String
+    /// Whether anything actually connected to `imapHost`.
+    var verified: Bool
+}
+
+struct DiscoveryStep: Decodable {
+    var source: String
+    var target: String
+    var outcome: String
+}

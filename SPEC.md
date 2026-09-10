@@ -518,7 +518,12 @@ new device:   → confirm words: amber-tiger-04-mint  [y/N]
 - **Setup is one line**: `mailbox accounts add peter@example.com`. Server
   settings are discovered via `autoconfig`/`autodiscover`, DNS SRV, the Mozilla
   ISPDB, and a small built-in table for the big providers. Manual overrides
-  exist but are never required for a compliant host.
+  exist but are never required for a compliant host. Where discovery *infers*
+  rather than being told — an unsigned `SRV` record, the `MX` host, a guessed
+  `imap.<domain>` — it connects and completes the TLS handshake before offering
+  the host, and sends no credential while doing it: a guess that has not been
+  checked is not written to a config. `accounts discover` runs the chain and
+  reports every source it asked, changing nothing.
 - **OAuth2** (XOAUTH2/`OAUTHBEARER`) for Google/Microsoft/Yahoo, via the system
   browser with PKCE and a loopback redirect. Refresh tokens are stored like any
   other credential.

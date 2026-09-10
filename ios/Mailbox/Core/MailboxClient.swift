@@ -151,8 +151,18 @@ final class MailboxClient: @unchecked Sendable {
         Keychain.deletePassword(account: id)
     }
 
+    /// The built-in table only. Cheap enough to call as the address is typed.
     func providers(address: String) throws -> ProviderHints {
         try decode("providers", ["address": address])
+    }
+
+    /// §9's whole chain, network included: autoconfig, the ISPDB,
+    /// autodiscover, DNS, and a verified probe of the usual hosts.
+    ///
+    /// Not for a keystroke — it resolves and connects. Call it once the
+    /// address is complete.
+    func discover(address: String) throws -> Discovery {
+        try decode("discover", ["address": address])
     }
 
     private struct Envelope: Decodable {}

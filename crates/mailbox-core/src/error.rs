@@ -103,6 +103,16 @@ impl Error {
             Error::Ambiguous { .. } => {
                 Some("give more of the id, or pass the full id from `--json`".into())
             }
+            // Two different failures wear the same code, and they want
+            // opposite advice: a credential that was never supplied is a setup
+            // step, and one that stopped working is a retry. Suggesting
+            // "it may have expired" to someone who has not typed a password
+            // yet sends them looking for a problem that is not there.
+            Error::Auth(message) if message.starts_with("no credential for account") => Some(
+                "supply one: `mailbox accounts edit <account> --password-stdin`, \
+                 or set `credential_command`, or export MAILBOX_PASSWORD_<ACCOUNT>"
+                    .into(),
+            ),
             Error::Auth(_) => Some(
                 "re-run `mailbox accounts test <account>`; the credential may have expired".into(),
             ),

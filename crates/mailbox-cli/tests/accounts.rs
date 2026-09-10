@@ -56,6 +56,12 @@ impl World {
             // Nothing here may put a popup on the desktop of
             // whoever ran the suite (§11).
             .env("MAILBOX_NOTIFIER", "none")
+            // Nor may it resolve or connect to whatever domain a
+            // fixture happens to name (§9 discovery).
+            .env("MAILBOX_DISCOVERY", "off")
+            // Nor may it write a fixture password into the keyring of
+            // whoever ran `cargo test`.
+            .env("MAILBOX_KEYCHAIN", "none")
             // Nothing here may put a consent screen on the desktop of whoever
             // is running `cargo test`.
             .env("MAILBOX_OPENER", "/bin/true")
@@ -450,4 +456,113 @@ fn an_existing_world_readable_config_is_tightened_on_the_next_write() {
     w.run(&["accounts", "add", "other@gmail.com", "--id", "other"]);
     let mode = std::fs::metadata(&w.config).unwrap().permissions().mode();
     assert_eq!(mode & 0o077, 0, "{mode:o}");
+}
+
+// ---- discovery (§9) ----
+//
+// Every test here runs with `MAILBOX_DISCOVERY=off` from `World::command`, so
+// what is asserted is the offline half of the chain and the shape of what it
+// reports. The network sources are covered by unit tests over recorded
+// documents in `mailbox_core::discover`; exercising them for real needs an
+// HTTPS server the suite does not have (see TODO.md).
+
+#[test]
+fn discover_reports_the_table_without_writing_anything() {
+    let w = World::new();
+    let run = w.run(&["--json", "accounts", "discover", "peter@gmail.com"]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+
+    let doc = run.json();
+    assert_eq!(doc["domain"], "gmail.com");
+    assert_eq!(doc["found"]["source"], "built_in");
+    assert_eq!(doc["found"]["imap_host"], "imap.gmail.com");
+    assert_eq!(doc["found"]["imap_security"], "implicit");
+    assert!(
+        w.config_text().is_empty(),
+        "discover must not write a config: {}",
+        w.config_text()
+    );
+}
+
+#[test]
+fn discover_says_what_it_tried_when_it_finds_nothing() {
+    let w = World::new();
+    let run = w.run(&["--json", "accounts", "discover", "peter@example.org"]);
+    assert_eq!(run.status, 0, "finding nothing is an answer, not an error");
+
+    let doc = run.json();
+    assert!(doc["found"].is_null());
+    let steps = doc["steps"].as_array().expect("steps");
+    assert!(
+        steps.iter().any(|s| s["source"] == "built_in"),
+        "the trail should name the source that was asked: {steps:?}"
+    );
+}
+
+/// The failure §9's one-line setup has to explain: what was asked, so the
+/// reader knows whether to fix the network or type `--imap-host`.
+#[test]
+fn adding_an_undiscoverable_domain_lists_the_sources_it_asked() {
+    let w = World::new();
+    let run = w.run(&["accounts", "add", "peter@example.org"]);
+    assert_ne!(run.status, 0);
+    assert!(
+        run.stderr.contains("example.org") && run.stderr.contains("not in the table"),
+        "the error should carry the trail: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn no_discover_still_takes_the_built_in_table() {
+    let w = World::new();
+    let run = w.run(&[
+        "--json",
+        "accounts",
+        "add",
+        "peter@gmail.com",
+        "--no-discover",
+    ]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+    assert_eq!(run.json()["discovered"], true);
+    assert!(w.config_text().contains("imap.gmail.com"));
+}
+
+/// A discovered account says where its servers came from, because "it works"
+/// and "something answered on port 993" are different claims.
+#[test]
+fn adding_reports_the_source_of_its_servers() {
+    let w = World::new();
+    let doc = w
+        .run(&["--json", "accounts", "add", "peter@gmail.com"])
+        .json();
+    assert_eq!(doc["source"], "built_in");
+    // The table is an assertion, not a connection: nothing was verified.
+    assert!(!doc["verified"].as_bool().unwrap_or(false));
+}
+
+/// §9: a password goes to the keychain. Without one — which is every CI run
+/// and this suite — it is held for the process and the reply says so rather
+/// than implying it was saved.
+#[test]
+fn a_password_with_no_keychain_says_it_went_nowhere_durable() {
+    let w = World::new();
+    let run = w.run_with_stdin(
+        &[
+            "--json",
+            "accounts",
+            "add",
+            "peter@gmail.com",
+            "--password-stdin",
+        ],
+        "hunter2\n",
+    );
+    assert_eq!(run.status, 0, "{}", run.stderr);
+
+    let credential = run.json()["credential"].as_str().unwrap_or("").to_string();
+    assert!(
+        credential.contains("this process only"),
+        "expected an honest answer about durability, got `{credential}`"
+    );
+    assert!(!w.config_text().contains("hunter2"));
 }

@@ -6,9 +6,12 @@
 //! one request, one response, `Content-Length` or `chunked`, no redirects, no
 //! keep-alive, no compression.
 //!
-//! No redirects on purpose. A token endpoint does not redirect, and a client
-//! that followed one would happily carry a client id and an authorization code
-//! to wherever it was pointed.
+//! `post_form` follows no redirects on purpose. A token endpoint does not
+//! redirect, and a client that followed one would happily carry a client id and
+//! an authorization code to wherever it was pointed. `get` does follow them,
+//! bounded and never down to plaintext: autoconfig discovery (§9) reads a
+//! public document from a host that has every reason to redirect — `www.`,
+//! a moved path, a hosting provider — and it carries no secret to lose.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -25,9 +28,14 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// bytes; anything at this size is a mistake or an attack.
 const MAX_BODY: usize = 1 << 20;
 
+/// How many redirects `get` will follow before calling it a loop.
+const MAX_REDIRECTS: usize = 5;
+
 pub struct Response {
     pub status: u16,
     pub body: Vec<u8>,
+    /// The `Location` header, when there was one.
+    pub location: Option<String>,
 }
 
 impl Response {
@@ -50,30 +58,91 @@ impl Response {
 /// every other connection this program makes. That exception is what lets the
 /// L3 authorization server exist without a certificate.
 pub fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<Response> {
-    let target = Target::parse(url)?;
     let body = encode_form(fields);
-    let request = format!(
-        "POST {} HTTP/1.1\r\n\
+    send(
+        url,
+        "POST",
+        Some(("application/x-www-form-urlencoded", body.as_bytes())),
+        "application/json",
+    )
+}
+
+/// `POST` an XML body — what Microsoft's Autodiscover asks for (§9).
+pub fn post_xml(url: &str, body: &str) -> Result<Response> {
+    send(url, "POST", Some(("text/xml", body.as_bytes())), "text/xml")
+}
+
+/// `GET` a document, following up to [`MAX_REDIRECTS`] redirects.
+pub fn get(url: &str) -> Result<Response> {
+    let mut url = url.to_string();
+    for _ in 0..MAX_REDIRECTS {
+        let response = send(&url, "GET", None, "application/xml, text/xml, */*")?;
+        match response.location.clone() {
+            Some(next) if (300..400).contains(&response.status) => {
+                url = resolve(&url, &next)?;
+            }
+            _ => return Ok(response),
+        }
+    }
+    Err(Error::Network(format!("{url} redirects in a loop")))
+}
+
+fn send(url: &str, method: &str, body: Option<(&str, &[u8])>, accept: &str) -> Result<Response> {
+    let target = Target::parse(url)?;
+    let mut request = format!(
+        "{} {} HTTP/1.1\r\n\
          Host: {}\r\n\
          User-Agent: mailbox/{}\r\n\
-         Content-Type: application/x-www-form-urlencoded\r\n\
-         Content-Length: {}\r\n\
-         Accept: application/json\r\n\
-         Connection: close\r\n\r\n",
+         Accept: {}\r\n\
+         Connection: close\r\n",
+        method,
         target.path,
         target.host_header(),
         env!("CARGO_PKG_VERSION"),
-        body.len(),
+        accept,
     );
+    let body = match body {
+        Some((content_type, body)) => {
+            request.push_str(&format!(
+                "Content-Type: {content_type}\r\nContent-Length: {}\r\n",
+                body.len()
+            ));
+            body
+        }
+        None => b"",
+    };
+    request.push_str("\r\n");
 
     let tcp = connect(&target)?;
     if target.tls {
         let mut stream = crate::tls::stream(&target.host, tcp)?;
-        exchange(&mut stream, request.as_bytes(), body.as_bytes())
+        exchange(&mut stream, request.as_bytes(), body)
     } else {
         let mut stream = tcp;
-        exchange(&mut stream, request.as_bytes(), body.as_bytes())
+        exchange(&mut stream, request.as_bytes(), body)
     }
+}
+
+/// Turns a `Location` into an absolute URL against the request that produced it.
+///
+/// Absolute, host-relative, and path-relative forms all appear in the wild.
+/// A redirect that leaves HTTPS is refused by `Target::parse` on the next hop,
+/// which is where §9's rule lives rather than being restated here.
+fn resolve(base: &str, location: &str) -> Result<String> {
+    if location.contains("://") {
+        return Ok(location.to_string());
+    }
+    let target = Target::parse(base)?;
+    let scheme = if target.tls { "https" } else { "http" };
+    let authority = target.host_header();
+    if let Some(rest) = location.strip_prefix('/') {
+        return Ok(format!("{scheme}://{authority}/{rest}"));
+    }
+    let dir = match target.path.rfind('/') {
+        Some(i) => &target.path[..=i],
+        None => "/",
+    };
+    Ok(format!("{scheme}://{authority}{dir}{location}"))
 }
 
 fn connect(target: &Target) -> Result<TcpStream> {
@@ -101,18 +170,21 @@ fn exchange<S: Read + Write>(stream: &mut S, head: &[u8], body: &[u8]) -> Result
                 if raw.len() > MAX_BODY {
                     return Err(Error::Network("the response was implausibly large".into()));
                 }
-                if let Some(response) = complete(&raw)? {
+                if let Some(response) = complete(&raw, false)? {
                     return Ok(response);
                 }
             }
             Err(e) => return Err(Error::Network(format!("reading the response: {e}"))),
         }
     }
-    complete(&raw)?.ok_or_else(|| Error::Network("the connection closed mid-response".into()))
+    complete(&raw, true)?.ok_or_else(|| Error::Network("the connection closed mid-response".into()))
 }
 
 /// Parses `raw` if a whole response is there yet, else `None`.
-fn complete(raw: &[u8]) -> Result<Option<Response>> {
+///
+/// `eof` says the connection has closed, which is itself a framing: a response
+/// with neither `Content-Length` nor chunking ends when the socket does.
+fn complete(raw: &[u8], eof: bool) -> Result<Option<Response>> {
     let Some(split) = find(raw, b"\r\n\r\n") else {
         return Ok(None);
     };
@@ -126,6 +198,7 @@ fn complete(raw: &[u8]) -> Result<Option<Response>> {
 
     let mut length: Option<usize> = None;
     let mut chunked = false;
+    let mut location = None;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
             continue;
@@ -133,22 +206,32 @@ fn complete(raw: &[u8]) -> Result<Option<Response>> {
         match name.trim().to_ascii_lowercase().as_str() {
             "content-length" => length = value.trim().parse().ok(),
             "transfer-encoding" if value.trim().eq_ignore_ascii_case("chunked") => chunked = true,
+            "location" => location = Some(value.trim().to_string()),
             _ => {}
         }
     }
 
     let rest = &raw[split + 4..];
     if chunked {
-        return Ok(dechunk(rest).map(|body| Response { status, body }));
+        return Ok(dechunk(rest).map(|body| Response {
+            status,
+            body,
+            location,
+        }));
     }
     match length {
         Some(n) if rest.len() >= n => Ok(Some(Response {
             status,
             body: rest[..n].to_vec(),
+            location,
         })),
         Some(_) => Ok(None),
-        // No length and no chunking: the body ends when the connection does,
-        // which `exchange` detects by reading to EOF.
+        // No length and no chunking: the body ends when the connection does.
+        None if eof => Ok(Some(Response {
+            status,
+            body: rest.to_vec(),
+            location,
+        })),
         None => Ok(None),
     }
 }

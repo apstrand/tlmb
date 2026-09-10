@@ -603,6 +603,12 @@ fn run_with_password(w: &World, args: &[&str], password: &str) -> (String, i32) 
         // Nothing here may put a popup on the desktop of
         // whoever ran the suite (§11).
         .env("MAILBOX_NOTIFIER", "none")
+        // Nor may it resolve or connect to whatever domain a
+        // fixture happens to name (§9 discovery).
+        .env("MAILBOX_DISCOVERY", "off")
+        // Nor may it write a fixture password into the keyring of
+        // whoever ran `cargo test`.
+        .env("MAILBOX_KEYCHAIN", "none")
         .env("MAILBOX_PASSWORD_TEST", password)
         .env("XDG_RUNTIME_DIR", &w.dir)
         .output()

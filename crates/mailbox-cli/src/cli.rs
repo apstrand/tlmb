@@ -548,6 +548,30 @@ pub enum AccountsAction {
     },
     /// Sign in with OAuth2 through the system browser (§9).
     Login(LoginArgs),
+    /// Look up a domain's mail servers, and change nothing (§9).
+    ///
+    /// What `add` does before it writes a config, printed instead: every
+    /// source that was asked and what it said. For finding out why a domain
+    /// needs `--imap-host`.
+    Discover(DiscoverArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DiscoverArgs {
+    /// The email address to look up.
+    pub address: String,
+
+    /// Do not connect to a host to confirm it speaks IMAP.
+    ///
+    /// Faster, and the only thing that runs on a machine with no route to the
+    /// mail server — but a guessed host is then reported as a guess and would
+    /// not be written to a config.
+    #[arg(long)]
+    pub no_verify: bool,
+
+    /// The built-in table only. No packet leaves the machine.
+    #[arg(long)]
+    pub offline: bool,
 }
 
 /// The settings `accounts add` and `accounts edit` share.
@@ -579,11 +603,11 @@ pub struct AccountSettings {
     #[arg(long, value_name = "COMMAND")]
     pub credential_command: Option<String>,
 
-    /// Read a password from stdin and hand it to the keychain (§9).
+    /// Read a password from stdin and store it in the OS keychain (§9).
     ///
     /// Never written to the config. Without a keychain to put it in, this
-    /// installs it for the running process only, which is enough to finish a
-    /// setup and test it.
+    /// installs it for the running process only — enough to finish a setup and
+    /// test it — and says so.
     #[arg(long)]
     pub password_stdin: bool,
 
@@ -620,6 +644,14 @@ pub struct AddAccountArgs {
     /// Run the OAuth2 login straight after adding the account.
     #[arg(long, requires = "oauth")]
     pub login: bool,
+
+    /// Do not look the servers up on the network (§9).
+    ///
+    /// Leaves the built-in table as the only source, which is what an air-gapped
+    /// setup and a scripted one want. Implied by `--imap-host`, which has
+    /// already answered the question discovery would ask.
+    #[arg(long)]
+    pub no_discover: bool,
 }
 
 #[derive(Debug, Args)]

@@ -27,12 +27,15 @@ off, and the gaps found along the way.
   one, which is the honest workaround. A thread per account fixes this and the
   two idling items above together.
 
-- **Autoconfig discovery.** §9 wants `autoconfig`/`autodiscover`, DNS SRV, and
-  the Mozilla ISPDB behind `accounts add`; there is a built-in table for the
-  big providers and nothing else, so an unknown domain needs `--imap-host`.
-  The HTTPS client that OAuth2 needed (`https.rs`) is most of what the first
-  two want; DNS SRV needs a resolver, which is the part worth thinking about
-  before starting.
+- **Discovery has no end-to-end test.** The chain in `discover.rs` is covered
+  per source — the two XML formats, the DNS wire format, the ordering — over
+  recorded documents, and its network half has been run by hand against a real
+  domain. What is missing is a test of the whole thing, which needs an HTTPS
+  server the suite does not have: `Target::parse` allows plaintext only to
+  loopback, so an L3 autoconfig server would need a certificate and a trust
+  root the client accepts. Worth doing when the first discovery bug arrives
+  from a real domain; the shape of it would be an L3 HTTPS server with a
+  generated root, which the OAuth2 L3 server would want too.
 - **No OAuth2 screen in the iOS shell.** The flow is in the core and the FFI
   can add an account with `oauth_provider`, but nothing there drives
   `oauth::login` — and a loopback redirect is not how a phone does this: iOS
@@ -55,6 +58,14 @@ off, and the gaps found along the way.
   `MAILBOX_PERF_MESSAGES=1000000 MAILBOX_PERF_BUDGETS=1`.
 
 ## Known coarseness
+
+- **Discovery's SMTP host is a guess even when its IMAP host was verified.**
+  The probe step connects to confirm IMAP and then picks `smtp.<domain>` or the
+  same host without connecting — a submission server greets anyone, so the
+  probe would prove only that something listens, and the first send reports
+  honestly (§6.6). A real check would be `EHLO` plus an `AUTH` mechanism the
+  account can actually use, which is worth doing once there is a second server
+  to try it against.
 
 - **Attachment fetching is per message, not per part.** §5.1 wants attachments
   fetched on demand unless small (< 256 KB); today a message is fetched whole or

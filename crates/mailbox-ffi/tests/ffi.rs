@@ -46,7 +46,13 @@ body = "Paid, thanks."
 struct TempDir(std::path::PathBuf);
 
 impl TempDir {
+    /// Also the suite's one safety catch. These tests run in-process, so there
+    /// is no `Command` to hang an environment variable on, and `set_var` races
+    /// every other test thread. `disable_keychain` is the in-process form:
+    /// without it, `add_account` with a password writes a fixture secret into
+    /// the keyring of whoever ran `cargo test`.
     fn new() -> TempDir {
+        mailbox_core::credentials::disable_keychain();
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("mailbox-ffi-{}-{n}", std::process::id()));
@@ -224,4 +230,37 @@ fn unknown_method_is_a_structured_error() {
     let mb = Mailbox::open(tmp.path().join("c.toml"), tmp.path().join("s")).expect("open");
     let err = mb.exec("nope", "{}").unwrap_err();
     assert_eq!(err.error.code, mailbox_api::ErrorCode::Usage);
+}
+
+/// §9's discovery through the FFI, offline: the shell asks, and the reply
+/// carries both the answer and the trail that led to it.
+#[test]
+fn discover_reports_the_table_and_its_trail() {
+    let tmp = TempDir::new();
+    let mb = Mailbox::open(tmp.path().join("c.toml"), tmp.path().join("s")).expect("open");
+    let v = payload(
+        &mb.exec("discover", r#"{"address":"a@gmail.com"}"#)
+            .expect("discover"),
+    );
+    assert_eq!(v["domain"], "gmail.com");
+    assert_eq!(v["found"]["source"], "built_in");
+    assert_eq!(v["found"]["imap_host"], "imap.gmail.com");
+    assert!(v["steps"].as_array().is_some_and(|s| !s.is_empty()));
+}
+
+/// `add_account` does not reach the network on its own: the shell runs
+/// `discover` where the person can watch it, and passes the hosts in.
+#[test]
+fn add_account_does_not_discover_unless_asked() {
+    let tmp = TempDir::new();
+    let mb = Mailbox::open(tmp.path().join("c.toml"), tmp.path().join("s")).expect("open");
+    // A domain no table knows, and no `discover` flag: this must fail on the
+    // spot rather than resolve anything.
+    let err = mb
+        .exec("add_account", r#"{"address":"peter@example.org"}"#)
+        .expect_err("an unknown domain with no hosts cannot be added");
+    assert!(
+        format!("{err:?}").contains("example.org"),
+        "the error should name the domain: {err:?}"
+    );
 }

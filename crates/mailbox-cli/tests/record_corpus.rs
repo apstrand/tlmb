@@ -41,6 +41,12 @@ fn record_the_l1_corpus() {
         // Nothing here may put a popup on the desktop of
         // whoever ran the suite (§11).
         .env("MAILBOX_NOTIFIER", "none")
+        // Nor may it resolve or connect to whatever domain a
+        // fixture happens to name (§9 discovery).
+        .env("MAILBOX_DISCOVERY", "off")
+        // Nor may it write a fixture password into the keyring of
+        // whoever ran `cargo test`.
+        .env("MAILBOX_KEYCHAIN", "none")
         .env("MAILBOX_PASSWORD_TEST", "testpass")
         .env("MAILBOX_CLOCK", "2026-09-02T12:00:00Z")
         .env("MAILBOX_SEED", "l1")

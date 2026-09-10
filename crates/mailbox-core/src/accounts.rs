@@ -47,6 +47,15 @@ pub struct NewAccount {
     /// The client id registered for this installation. Public by design for a
     /// native app — PKCE is what protects the flow — so it belongs in config.
     pub oauth_client_id: Option<String>,
+    /// Look the servers up on the network ([`crate::discover`]) when the
+    /// caller did not supply them.
+    ///
+    /// Off by default, and opt-in rather than opt-out, because this struct is
+    /// also how a test and a paired device add an account: neither wants a
+    /// setup that reaches the network without having been asked to. The CLI
+    /// and the setup screens turn it on, which is where a person did ask.
+    #[serde(default)]
+    pub discover: bool,
 }
 
 /// What `add` did, for the caller to report.
@@ -54,8 +63,14 @@ pub struct NewAccount {
 pub struct Added {
     pub id: String,
     pub address: String,
-    /// True when the provider table supplied hosts the caller did not.
+    /// True when discovery supplied hosts the caller did not.
     pub discovered: bool,
+    /// Which of §9's sources those hosts came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::discover::Source>,
+    /// Whether an IMAP connection to the discovered host actually succeeded.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub verified: bool,
     /// Where the credential will come from, or `null` when nothing was given
     /// and the account cannot yet connect.
     pub credential: Option<String>,
@@ -84,8 +99,29 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
         )));
     }
 
-    let hints = crate::providers::hints_for(&address);
+    // Discovery runs only for what the caller left open: someone who typed
+    // `--imap-host` has answered the question, and asking the network anyway
+    // would be slower and no more correct.
+    let discovery = if spec.discover && spec.imap_host.is_none() {
+        Some(crate::discover::discover(
+            &address,
+            &crate::discover::Options::from_env(),
+        )?)
+    } else {
+        None
+    };
+    let found = discovery.as_ref().and_then(|d| d.found.clone());
+    let hints = match &found {
+        Some(f) => Some(crate::providers::ServerHints::from(f.hints.clone())),
+        None => crate::providers::hints_for(&address),
+    };
     let discovered = hints.is_some() && spec.imap_host.is_none();
+    let source = found.as_ref().map(|f| f.source).or(if discovered {
+        Some(crate::discover::Source::BuiltIn)
+    } else {
+        None
+    });
+    let verified = found.as_ref().is_some_and(|f| f.verified);
 
     let mut cfg = AccountConfig {
         address: address.clone(),
@@ -100,7 +136,10 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
             .imap_security
             .clone()
             .or_else(|| hints.as_ref().map(|h| h.imap_security.to_string())),
-        imap_user: spec.imap_user.clone(),
+        imap_user: spec
+            .imap_user
+            .clone()
+            .or_else(|| hints.as_ref().and_then(|h| h.imap_user.clone())),
         smtp_host: spec
             .smtp_host
             .clone()
@@ -112,7 +151,10 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
             .smtp_security
             .clone()
             .or_else(|| hints.as_ref().map(|h| h.smtp_security.to_string())),
-        smtp_user: spec.smtp_user.clone(),
+        smtp_user: spec
+            .smtp_user
+            .clone()
+            .or_else(|| hints.as_ref().and_then(|h| h.smtp_user.clone())),
         credential_command: spec.credential_command.clone(),
         oauth_provider: spec.oauth_provider.clone(),
         oauth_client_id: spec.oauth_client_id.clone(),
@@ -125,21 +167,22 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
     // An account with no IMAP host is not an account, and writing one would
     // trade an error here for a confusing one on the next command.
     if cfg.imap_host.as_deref().unwrap_or("").is_empty() {
-        return Err(Error::usage(format!(
-            "no built-in settings for `{}` — give at least --imap-host",
-            address.rsplit('@').next().unwrap_or(&address)
-        )));
+        return Err(no_servers(&address, discovery.as_ref()));
     }
     validate(&cfg)?;
 
+    let stored_cfg = cfg.clone();
     config.accounts.insert(id.clone(), cfg);
     config.save(path)?;
 
     // Only after the config is written: a credential installed for an account
     // that failed to save would be a secret held for nothing.
     let credential = if let Some(password) = spec.password.clone().filter(|p| !p.is_empty()) {
-        crate::credentials::install(&id, crate::imap::Credential::Password(password));
-        Some("installed for this process".to_string())
+        Some(
+            crate::credentials::store_password(&id, &stored_cfg, &password)
+                .describe()
+                .to_string(),
+        )
     } else if spec.credential_command.is_some() {
         Some("credential_command".to_string())
     } else if spec.oauth_provider.is_some() {
@@ -152,8 +195,28 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
         id,
         address,
         discovered,
+        source,
+        verified,
         credential,
     })
+}
+
+/// The failure §9's one-line setup has to explain well: nothing was found.
+///
+/// It lists what was asked, because the useful next step differs by which step
+/// failed — a refused connection to `autoconfig.<domain>` means the domain
+/// publishes nothing and `--imap-host` is the answer, while a resolver that
+/// timed out means try again on a working network.
+fn no_servers(address: &str, discovery: Option<&crate::discover::Discovery>) -> Error {
+    let domain = address.rsplit('@').next().unwrap_or(address);
+    let mut message =
+        format!("no server settings found for `{domain}` — give at least --imap-host");
+    if let Some(discovery) = discovery {
+        for step in &discovery.steps {
+            message.push_str(&format!("\n  {}: {}", step.target, step.outcome));
+        }
+    }
+    Error::usage(message)
 }
 
 /// Changes fields on an existing account. `None` leaves a field alone.
@@ -195,7 +258,7 @@ pub fn edit(path: &Path, id: &str, spec: &NewAccount) -> Result<AccountConfig> {
     config.save(path)?;
 
     if let Some(password) = spec.password.clone().filter(|p| !p.is_empty()) {
-        crate::credentials::install(id, crate::imap::Credential::Password(password));
+        crate::credentials::store_password(id, &updated, &password);
     }
     Ok(updated)
 }
@@ -207,11 +270,13 @@ pub fn edit(path: &Path, id: &str, spec: &NewAccount) -> Result<AccountConfig> {
 /// is named in the result so it can be removed deliberately.
 pub fn remove(path: &Path, id: &str) -> Result<std::path::PathBuf> {
     let mut config = Config::load(path)?;
-    if config.accounts.remove(id).is_none() {
+    let Some(cfg) = config.accounts.remove(id) else {
         return Err(Error::not_found("account", id));
-    }
+    };
     config.save(path)?;
-    crate::credentials::forget(id);
+    // The keychain too: an account removed from the config that left its
+    // password behind is a secret nothing will ever ask for again.
+    crate::credentials::forget_stored(id, &cfg);
     crate::oauth::forget_tokens(id);
     Ok(crate::paths::account_dir(id))
 }
