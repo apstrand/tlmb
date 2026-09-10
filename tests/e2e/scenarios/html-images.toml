@@ -1,0 +1,36 @@
+# HTML mail with remote images and mixed link text — the case §9 is about.
+
+[[folder]]
+path = "INBOX"
+special_use = "inbox"
+
+[[message]]
+name = "shipped"
+folder = "INBOX"
+from = "Example Shop <ship@shop.example>"
+to = ["peter@example.com"]
+subject = "Your order has shipped"
+date = "2026-08-30T09:00:00Z"
+message_id = "<ship4471@shop.example>"
+html = """
+<html><head><title>Order shipped</title></head><body>
+<a href="https://shop.example/?utm=news"><img src="https://cdn.shop.example/logo.png" alt="Example Shop"></a>
+<h2>Your order has shipped</h2>
+<p>You can <a href="https://track.example/p/9f3a?ref=email">track it here</a>,
+or view the <a href="https://shop.example/orders/4471">order details</a>.</p>
+<ul><li>1 &times; Kettle &mdash; &euro;39.00</li></ul>
+<p>Write to <a href="mailto:support@shop.example">support@shop.example</a>.</p>
+<p><img src="https://tracker.example/open.gif?id=42" alt=""></p>
+</body></html>
+"""
+
+[[message]]
+name = "plain"
+folder = "INBOX"
+from = "Carol <carol@example.com>"
+to = ["peter@example.com"]
+subject = "See previous"
+date = "2026-08-30T10:00:00Z"
+message_id = "<plain@example.com>"
+flags = ["\\Seen"]
+body = "Did you get the shipping mail?\n"

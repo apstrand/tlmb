@@ -660,6 +660,10 @@ seeded generator and cached as a CI artifact rather than committed.
 - **L4 detects provider drift, not regressions.** It is non-gating on purpose:
   a suite that goes red for reasons the author cannot fix trains everyone to
   ignore red suites.
+- **UI evidence** is a KVM guest (`tests/e2e/`): TUI, web, and GUI driven on
+  an isolated libvirt network, with screenshots and video. Mail never leaves
+  that guest. Non-gating — a VM is not a PR-sized machine — and it does not
+  replace the CLI/JSON assertions of M5.
 
 Every end-to-end test drives the CLI and asserts on `--json` output, so the test
 suite is the largest consumer of the agent contract (§6.4) and any breakage of

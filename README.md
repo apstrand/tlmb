@@ -725,6 +725,20 @@ Without Docker the suite skips itself and says so. `MAILBOX_L2_REQUIRED=1` turns
 that skip into a failure — a suite that silently skips is a suite nobody
 notices has stopped running — and CI sets it.
 
+### UI evidence, in a VM
+
+TUI, web, and GUI end-to-end live in `tests/e2e/`: a libvirt guest, mail only
+on loopback, screenshots and video as evidence. Not a PR gate.
+
+```sh
+cargo build -p mailbox-cli
+tests/e2e/mailbox-e2e create && tests/e2e/mailbox-e2e provision
+tests/e2e/mailbox-e2e stop && tests/e2e/mailbox-e2e isolate
+tests/e2e/mailbox-e2e start && tests/e2e/mailbox-e2e run all
+```
+
+See [tests/e2e/README.md](tests/e2e/README.md).
+
 Nothing in the suite depends on wall-clock time or on a server-assigned value:
 `MAILBOX_CLOCK` and `MAILBOX_SEED` pin the clock and the RNG (§6.7), and
 fixtures name messages symbolically (§14.1).
@@ -741,6 +755,7 @@ crates/mailbox-web    the local web UI, and the page the GUI shows
 crates/mailbox-ffi    C ABI for the native mobile shells
 ios/                  SwiftUI app over mailbox-ffi
 tests/dovecot         the L2 server, configured in-tree
+tests/e2e             KVM UI evidence: TUI, web, GUI, isolated mail
 ```
 
 If a frontend needs logic that isn't in `mailbox-core`, that logic belongs in

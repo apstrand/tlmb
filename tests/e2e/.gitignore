@@ -1,0 +1,9 @@
+/iso/
+/disk/
+/out/
+/ssh/id_ed25519
+/ssh/id_ed25519.pub
+/ssh/cm-*
+/cloud-init/user-data
+/config
+__pycache__/

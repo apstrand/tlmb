@@ -1,0 +1,698 @@
+#!/bin/bash
+# Isolated KVM/libvirt end-to-end for the TUI, web, and GUI.
+#
+#   mailbox-e2e create       fetch an Arch cloud image, define the VM, boot it
+#   mailbox-e2e provision    wait for SSH, install Dovecot and the mail filter
+#   mailbox-e2e isolate      move the nic onto a network with no WAN
+#   mailbox-e2e sync         rsync this checkout and the mailbox binary in
+#   mailbox-e2e seed NAME    fill the guest store (inbox, html-images, large, …)
+#   mailbox-e2e run UI [NAME]
+#                            tui | web | gui | compose | isolation | all
+#   mailbox-e2e shot NAME    guest grim (or virsh screenshot) into out/shots/
+#   mailbox-e2e record       start/stop a video of the compositor
+#   mailbox-e2e key KEYS     virtual keyboard (KEY_ENTER, KEY_LEFTMETA, …)
+#   mailbox-e2e view         SPICE window (VGA login — not the test run)
+#   mailbox-e2e console      serial console (kernel / sshd / cloud-init)
+#   mailbox-e2e rescue       serial + console password, for a VM you cannot SSH
+#   mailbox-e2e ssh [cmd]    a shell in the guest
+#   mailbox-e2e snap NAME    disk snapshot (VM must be off)
+#   mailbox-e2e revert NAME  go back to it
+#
+# Mail never leaves the guest: IMAP and SMTP bind loopback, nftables rejects
+# those ports off-loopback, and `isolate` unplugs the WAN. Evidence lands in
+# tests/e2e/out/. Everything the hypervisor needs lives beside this script.
+
+set -euo pipefail
+
+HERE=$(cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
+ROOT=$(cd -- "$HERE/../.." && pwd)
+
+[[ -f $HERE/config ]] && source "$HERE/config"
+
+VM=${MAILBOX_E2E_NAME:-mailbox-e2e}
+GUEST_USER=${MAILBOX_E2E_USER:-mailbox}
+MEMORY=${MAILBOX_E2E_MEMORY:-4096}
+CPUS=${MAILBOX_E2E_CPUS:-2}
+DISK_SIZE=${MAILBOX_E2E_DISK_SIZE:-20}
+CONNECT=${MAILBOX_E2E_CONNECT:-qemu:///system}
+CLOUD_IMAGE_URL=${MAILBOX_E2E_IMAGE:-https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2}
+
+ISO_DIR="$HERE/iso"
+DISK_DIR="$HERE/disk"
+KEY_DIR="$HERE/ssh"
+OUT_DIR="$HERE/out"
+DISK="$DISK_DIR/$VM.qcow2"
+KEY="$KEY_DIR/id_ed25519"
+IMAGE="$ISO_DIR/Arch-Linux-x86_64-cloudimg.qcow2"
+ISOLATED_NET=mailbox-e2e
+QEMU_USER=libvirt-qemu
+
+die() { echo "mailbox-e2e: $1" >&2; exit 1; }
+# stderr: callers capture `vm_ssh` stdout (checksums, versions).
+say() { printf '\033[32m●\033[0m %s\n' "$1" >&2; }
+
+vsh() { virsh --connect "$CONNECT" "$@"; }
+
+PYTHON=()
+python3 -c "import gi" >/dev/null 2>&1 || PYTHON=(/usr/bin/python3)
+
+domain_exists() { vsh dominfo "$VM" >/dev/null 2>&1; }
+domain_running() { [[ $(vsh domstate "$VM" 2>/dev/null) == "running" ]]; }
+
+require_domain() { domain_exists || die "no VM named $VM — run: mailbox-e2e create"; }
+require_off() { domain_running && die "$VM is running; stop it first"; }
+
+preflight() {
+  local missing=() command
+  for command in virsh virt-install qemu-img curl rsync ssh scp; do
+    command -v "$command" >/dev/null || missing+=("$command")
+  done
+  ((${#missing[@]} == 0)) || die "missing commands: ${missing[*]}"
+  id -nG | tr ' ' '\n' | grep -qx libvirt ||
+    die "your user is not in the libvirt group; add it and log back in"
+  getfacl -p "$HOME" 2>/dev/null | grep -q "^user:$QEMU_USER:" ||
+    setfacl -m "u:$QEMU_USER:--x" "$HOME" ||
+    die "could not grant $QEMU_USER traversal on $HOME"
+  mkdir -p "$ISO_DIR" "$DISK_DIR" "$KEY_DIR" "$OUT_DIR/shots" "$OUT_DIR/videos" "$OUT_DIR/logs"
+}
+
+ensure_key() {
+  [[ -f $KEY ]] && return
+  say "Generating an SSH key for this VM only: $KEY"
+  ssh-keygen -t ed25519 -N "" -C "mailbox-e2e" -f "$KEY" >/dev/null
+}
+
+ensure_wan() {
+  [[ $(vsh net-info default 2>/dev/null | awk '/^Active:/ {print $2}') == "yes" ]] ||
+    vsh net-start default >/dev/null ||
+    die "libvirt's default network is not running"
+}
+
+ensure_isolated_net() {
+  if ! vsh net-info "$ISOLATED_NET" >/dev/null 2>&1; then
+    say "Defining isolated network $ISOLATED_NET (no WAN)"
+    vsh net-define "$HERE/libvirt/network.xml" >/dev/null
+  fi
+  [[ $(vsh net-info "$ISOLATED_NET" | awk '/^Active:/ {print $2}') == "yes" ]] ||
+    vsh net-start "$ISOLATED_NET" >/dev/null
+  vsh net-autostart "$ISOLATED_NET" >/dev/null || true
+}
+
+guest_mac() {
+  vsh dumpxml "$VM" 2>/dev/null | python3 -c "
+import sys, xml.etree.ElementTree as ET
+tree = ET.parse(sys.stdin)
+mac = tree.find('./devices/interface/mac')
+print(mac.get('address', '') if mac is not None else '')
+"
+}
+
+guest_network() {
+  vsh dumpxml "$VM" 2>/dev/null | python3 -c "
+import sys, xml.etree.ElementTree as ET
+tree = ET.parse(sys.stdin)
+src = tree.find('./devices/interface/source')
+print((src.get('network') or '') if src is not None else '')
+"
+}
+
+# Lease on the nic's *current* network. After isolate, dnsmasq on `default`
+# still holds the NAT address for this MAC for hours; using it is why SSH
+# looked like "connection refused" on a ghost 192.168.122.x.
+lease_for_mac() {
+  local net=$1 mac=$2
+  [[ -n $net && -n $mac ]] || return 0
+  vsh net-dhcp-leases "$net" 2>/dev/null |
+    awk -v want="${mac,,}" '
+      $4 == "ipv4" && tolower($3) == want { split($5, a, "/"); print a[1]; exit }
+    '
+}
+
+guest_ip() {
+  local mac net ip
+  mac=$(guest_mac)
+  net=$(guest_network)
+  ip=$(lease_for_mac "$net" "$mac")
+  if [[ -n $ip ]]; then
+    echo "$ip"
+    return
+  fi
+  vsh domifaddr "$VM" --source lease 2>/dev/null |
+    awk '/ipv4/ {split($4, a, "/"); print a[1]; exit}'
+}
+
+require_ip() {
+  IP=$(guest_ip)
+  [[ -n $IP ]] || die "no DHCP lease for $VM yet — is it booted?"
+}
+
+SSH_OPTS=(
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
+  -o IdentitiesOnly=yes -o PasswordAuthentication=no
+  -o ControlMaster=auto -o "ControlPath=$KEY_DIR/cm-%r@%h-%p" -o ControlPersist=120
+)
+
+# A probe must not reuse a ControlMaster socket: a mux left over from the NAT
+# address, or from a refused connect during boot, looks like "connection
+# refused" forever. IdentitiesOnly + a hard `timeout` so an ssh-agent or a
+# missing ConnectTimeout cannot stall `start`/`run` indefinitely.
+SSH_PROBE_OPTS=(
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
+  -o IdentitiesOnly=yes -o PasswordAuthentication=no
+  -o KbdInteractiveAuthentication=no -o GSSAPIAuthentication=no
+  -o ControlMaster=no -o ControlPath=none -o BatchMode=yes -o ConnectTimeout=2
+)
+
+ssh_probe() {
+  local ip=$1
+  if command -v timeout >/dev/null; then
+    timeout 4 ssh -i "$KEY" "${SSH_PROBE_OPTS[@]}" "$GUEST_USER@$ip" true
+  else
+    ssh -i "$KEY" "${SSH_PROBE_OPTS[@]}" "$GUEST_USER@$ip" true
+  fi
+}
+
+vm_ssh() {
+  wait_for_ssh
+  ssh -i "$KEY" "${SSH_OPTS[@]}" "$GUEST_USER@$IP" "$@"
+}
+
+vm_ssh_tty() {
+  wait_for_ssh
+  ssh -t -i "$KEY" "${SSH_OPTS[@]}" "$GUEST_USER@$IP" "$@"
+}
+
+# qemu-guest-agent, when the channel is up. Used to unstick sshd if NTP wait
+# blocked multi-user (isolate has no WAN).
+ga_exec() {
+  vsh qemu-agent-command "$VM" "$@" >/dev/null 2>&1
+}
+
+ga_start_sshd() {
+  ga_exec '{"execute":"guest-ping"}' || return 1
+  say "guest agent is up; starting sshd (NTP wait can block it off-WAN)"
+  vsh qemu-agent-command "$VM" '{"execute":"guest-exec","arguments":{"path":"/bin/systemctl","arg":["start","sshd"]}}' >/dev/null 2>&1 || true
+}
+
+wait_for_ssh() {
+  local waited=0 ip
+  ensure_key
+  domain_running || die "$VM is not running — mailbox-e2e start"
+  if [[ -n ${IP:-} ]] && ssh_probe "$IP" >/dev/null 2>&1; then
+    return 0
+  fi
+  rm -f "$KEY_DIR"/cm-*
+  for waited in $(seq 45); do
+    ip=$(guest_ip)
+    if [[ -n $ip ]]; then
+      IP=$ip
+      if ssh_probe "$IP" >/dev/null 2>&1; then
+        say "SSH is up at $GUEST_USER@$IP"
+        return 0
+      fi
+    fi
+    if (( waited == 8 || waited == 20 )); then
+      ga_start_sshd || true
+    fi
+    if (( waited == 1 || waited % 5 == 0 )); then
+      say "waiting for sshd (${ip:-no lease yet}, try $waited/45)"
+    fi
+    sleep 2
+  done
+  IP=$(guest_ip)
+  die "gave up waiting for SSH (user $GUEST_USER, ip ${IP:-none}, $(vsh domstate "$VM")). A DHCP lease is not a listener. Debug: mailbox-e2e console    or    mailbox-e2e view (login mailbox / mailbox after rescue)"
+}
+
+render_user_data() {
+  ensure_key
+  local pub tmpl out
+  pub=$(cat "$KEY.pub")
+  tmpl="$HERE/cloud-init/user-data.yaml.tmpl"
+  out="$HERE/cloud-init/user-data"
+  python3 - "$tmpl" "$out" "$GUEST_USER" "$pub" <<'PY'
+import sys
+tmpl, out, user, pub = sys.argv[1:]
+text = open(tmpl).read().replace("{{GUEST_USER}}", user).replace("{{SSH_PUBKEY}}", pub)
+open(out, "w").write(text)
+PY
+}
+
+cmd_create() {
+  preflight
+  domain_exists && die "$VM already exists — mailbox-e2e destroy first"
+  ensure_wan
+  ensure_key
+  render_user_data
+
+  if [[ ! -f $IMAGE ]]; then
+    say "Downloading Arch cloud image (resumable)"
+    curl -fL -C - --progress-bar -o "$IMAGE" "$CLOUD_IMAGE_URL"
+  else
+    say "Cloud image already here: $IMAGE"
+  fi
+
+  say "Creating a ${DISK_SIZE}G overlay at $DISK"
+  rm -f "$DISK"
+  qemu-img create -f qcow2 -F qcow2 -b "$IMAGE" "$DISK" "${DISK_SIZE}G" >/dev/null
+  chmod 644 "$DISK" "$IMAGE" || true
+
+  local firmware="firmware=efi"
+  firmware+=",firmware.feature0.name=secure-boot,firmware.feature0.enabled=no"
+  firmware+=",firmware.feature1.name=enrolled-keys,firmware.feature1.enabled=no"
+
+  say "Defining $VM (first boot uses NAT so pacman can run)"
+  "${PYTHON[@]}" "$(command -v virt-install)" \
+    --connect "$CONNECT" \
+    --name "$VM" \
+    --memory "$MEMORY" \
+    --vcpus "$CPUS" \
+    --cpu host-passthrough \
+    --machine q35 \
+    --osinfo archlinux \
+    --import \
+    --disk "path=$DISK,format=qcow2,bus=virtio,discard=unmap" \
+    --network network=default,model=virtio \
+    --cloud-init "user-data=$HERE/cloud-init/user-data,meta-data=$HERE/cloud-init/meta-data" \
+    --boot "$firmware" \
+    --video model.type=virtio \
+    --graphics spice,listen=none \
+    --serial pty \
+    --console pty,target_type=serial \
+    --input tablet \
+    --rng /dev/urandom \
+    --noautoconsole \
+    >/dev/null || die "virt-install failed"
+
+  cat <<MSG
+
+$VM is booting and cloud-init is installing packages (several minutes).
+
+  mailbox-e2e provision     wait for SSH and finish Dovecot / nftables
+  mailbox-e2e isolate       unplug the WAN, snapshot 'ready'
+  mailbox-e2e sync          copy this checkout and the binary in
+  mailbox-e2e run all       TUI + web + GUI + compose + isolation
+
+MSG
+}
+
+cmd_provision() {
+  require_domain
+  domain_running || vsh start "$VM" >/dev/null
+  wait_for_ssh
+  say "Waiting for cloud-init packages (this is the slow part, once)"
+  for _ in $(seq 80); do
+    if vm_ssh test -f /var/lib/mailbox-e2e-cloud-init-done 2>/dev/null; then
+      break
+    fi
+    sleep 6
+  done
+  vm_ssh test -f /var/lib/mailbox-e2e-cloud-init-done \
+    || die "cloud-init did not finish; try: mailbox-e2e ssh journalctl -u cloud-final"
+  cmd_sync
+  say "Running guest bootstrap"
+  vm_ssh "MAILBOX_E2E_ROOT=\$HOME/mailbox bash \$HOME/mailbox/tests/e2e/guest/bootstrap.sh"
+  say "Provisioned. Next: mailbox-e2e isolate"
+}
+
+cmd_stop() {
+  require_domain
+  if ! domain_running; then
+    say "$VM is already off"
+    return
+  fi
+  say "Shutting down $VM"
+  vsh shutdown "$VM" >/dev/null || true
+  local i
+  for i in $(seq 40); do
+    domain_running || { say "Stopped $VM"; return; }
+    sleep 1
+  done
+  say "ACPI shutdown stalled; pulling the plug"
+  vsh destroy "$VM" >/dev/null
+  say "Stopped $VM"
+}
+
+cmd_start() {
+  require_domain
+  if domain_running; then
+    say "$VM is already running"
+  else
+    vsh start "$VM" >/dev/null
+    say "Started $VM"
+  fi
+  unset IP
+  rm -f "$KEY_DIR"/cm-*
+  local ip net
+  ip=$(guest_ip)
+  net=$(guest_network)
+  if [[ -n $ip ]]; then
+    echo "$VM: $ip on $net (sshd may still be coming up — run/ssh wait for it)"
+  else
+    echo "$VM: no lease yet on ${net:-unknown} (run/ssh wait for sshd)"
+  fi
+}
+
+cmd_isolate() {
+  require_domain
+  ensure_isolated_net
+  if domain_running; then
+    say "Stopping $VM so the nic can move off NAT"
+    cmd_stop
+  fi
+
+  say "Pointing $VM at isolated network $ISOLATED_NET (no <forward>, no WAN)"
+  local xml
+  xml=$(mktemp)
+  vsh dumpxml "$VM" --inactive >"$xml"
+  python3 - "$xml" "$ISOLATED_NET" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+path, net = sys.argv[1], sys.argv[2]
+tree = ET.parse(path)
+src = tree.find("./devices/interface/source")
+if src is None:
+    sys.exit("mailbox-e2e: no network interface on this domain")
+src.set("network", net)
+tree.write(path)
+PY
+  vsh define "$xml" >/dev/null
+  rm -f "$xml" "$KEY_DIR"/cm-*
+  unset IP
+  say "Isolated. mailbox-e2e start, then snap ready. run/ssh wait for sshd."
+}
+
+# The Arch cloud image has no rsync. cloud-init installs it on a fresh
+# create; provision of an already-booted guest still has to add it, and
+# that has to happen *before* the first sync, while the nic still has NAT.
+ensure_guest_rsync() {
+  if vm_ssh "command -v rsync >/dev/null"; then
+    return
+  fi
+  say "Installing rsync in the guest"
+  vm_ssh "sudo pacman -Sy --noconfirm rsync" \
+    || die "could not install rsync in the guest (needs network; run this before isolate)"
+}
+
+# Prefer MAILBOX_E2E_BIN, else the newer of release/debug. A stale
+# `target/release/mailbox` must not shadow a just-built debug with the GUI.
+pick_mailbox_bin() {
+  local rel=$ROOT/target/release/mailbox
+  local dbg=$ROOT/target/debug/mailbox
+  if [[ -n ${MAILBOX_E2E_BIN:-} ]]; then
+    [[ -x $MAILBOX_E2E_BIN ]] || die "MAILBOX_E2E_BIN is not executable: $MAILBOX_E2E_BIN"
+    echo "$MAILBOX_E2E_BIN"
+    return
+  fi
+  if [[ -x $rel && -x $dbg ]]; then
+    if [[ $dbg -nt $rel ]]; then
+      echo "$dbg"
+    else
+      echo "$rel"
+    fi
+  elif [[ -x $rel ]]; then
+    echo "$rel"
+  elif [[ -x $dbg ]]; then
+    echo "$dbg"
+  else
+    die "no mailbox binary — cargo build -p mailbox-cli first"
+  fi
+}
+
+cmd_sync() {
+  local bin
+  require_domain
+  require_ip
+  ensure_key
+  bin=$(pick_mailbox_bin)
+
+  ensure_guest_rsync
+
+  say "Syncing $ROOT to $GUEST_USER@$IP:~/mailbox"
+  rsync -a --delete \
+    --exclude target --exclude .git --exclude tests/e2e/iso \
+    --exclude tests/e2e/disk --exclude tests/e2e/out --exclude tests/e2e/ssh \
+    -e "ssh -i $KEY ${SSH_OPTS[*]}" \
+    "$ROOT/" "$GUEST_USER@$IP:mailbox/"
+  # The overlay has no target/; the binary is copied from this host.
+  vm_ssh "mkdir -p \$HOME/bin"
+  local host_sum guest_sum
+  host_sum=$(sha256sum "$bin" | awk '{print $1}')
+  guest_sum=$(vm_ssh "sha256sum \$HOME/bin/mailbox 2>/dev/null | awk '{print \$1}'" || true)
+  if [[ $host_sum == "$guest_sum" ]]; then
+    say "Guest binary already matches $(basename "$(dirname "$bin")")/mailbox"
+  else
+    say "Copying $(basename "$(dirname "$bin")")/mailbox ($(du -h "$bin" | awk '{print $1}'))"
+    scp -q -i "$KEY" "${SSH_OPTS[@]}" "$bin" "$GUEST_USER@$IP:bin/mailbox"
+  fi
+  vm_ssh "chmod +x \$HOME/bin/mailbox && \$HOME/bin/mailbox --version"
+  say "Synced $(git -C "$ROOT" log -1 --format='%h %s' 2>/dev/null || echo "$ROOT")"
+}
+
+cmd_seed() {
+  local name=${1:-inbox}
+  require_domain
+  vm_ssh "MAILBOX_E2E_ROOT=\$HOME/mailbox PATH=\$HOME/bin:\$PATH \
+    bash \$HOME/mailbox/tests/e2e/guest/seed.sh $(printf '%q' "$name") ${2:-}"
+}
+
+cmd_run() {
+  local ui=${1:-all}
+  local scenario=${2:-inbox}
+  local stamp dest
+  require_domain
+  wait_for_ssh
+  # Guest scripts and the binary are what `run` executes; skip a stale copy.
+  cmd_sync
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  dest="$OUT_DIR/$stamp"
+  mkdir -p "$dest"
+  vm_ssh "rm -rf \$HOME/mailbox-e2e-out && mkdir -p \$HOME/mailbox-e2e-out"
+
+  run_one() {
+    local u=$1 s=$2
+    say "Running $u / $s"
+    vm_ssh "mkdir -p \$HOME/mailbox-e2e-out && \
+      EVIDENCE=\$HOME/mailbox-e2e-out MAILBOX_E2E_ROOT=\$HOME/mailbox PATH=\$HOME/bin:\$PATH \
+      bash \$HOME/mailbox/tests/e2e/guest/run.sh $(printf '%q' "$u") $(printf '%q' "$s")"
+    scp -q -i "$KEY" "${SSH_OPTS[@]}" -r "$GUEST_USER@$IP:mailbox-e2e-out/." "$dest/" || true
+  }
+
+  case "$ui" in
+  all)
+    run_one tui inbox
+    run_one tui html-images
+    run_one web inbox
+    run_one web html-images
+    run_one gui inbox
+    run_one gui html-images
+    run_one compose inbox
+    run_one isolation html-images
+    run_one tui large
+    ;;
+  tui | web | gui | compose | isolation)
+    run_one "$ui" "$scenario"
+    ;;
+  *)
+    die "usage: mailbox-e2e run tui|web|gui|compose|isolation|all [scenario]"
+    ;;
+  esac
+
+  say "Evidence in $dest"
+  ls -la "$dest" || true
+}
+
+cmd_shot() {
+  local name=${1:-guest}
+  require_domain
+  mkdir -p "$OUT_DIR/shots"
+  if vm_ssh "bash \$HOME/mailbox/tests/e2e/guest/capture.sh /tmp/mailbox-e2e-shot.png"; then
+    scp -q -i "$KEY" "${SSH_OPTS[@]}" "$GUEST_USER@$IP:/tmp/mailbox-e2e-shot.png" \
+      "$OUT_DIR/shots/$name.png"
+  else
+    vsh screenshot "$VM" --file "$OUT_DIR/shots/$name.png" >/dev/null
+  fi
+  say "Saved $OUT_DIR/shots/$name.png"
+}
+
+cmd_record() {
+  case "${1:-start}" in
+  start)
+    require_domain
+    vm_ssh "PATH=\$HOME/bin:\$PATH bash \$HOME/mailbox/tests/e2e/guest/record.sh start \$HOME/mailbox-e2e.mp4"
+    ;;
+  stop)
+    require_domain
+    mkdir -p "$OUT_DIR/videos"
+    vm_ssh "PATH=\$HOME/bin:\$PATH bash \$HOME/mailbox/tests/e2e/guest/record.sh stop \$HOME/mailbox-e2e.mp4"
+    scp -q -i "$KEY" "${SSH_OPTS[@]}" "$GUEST_USER@$IP:mailbox-e2e.mp4" \
+      "$OUT_DIR/videos/$(date -u +%Y%m%dT%H%M%SZ).mp4" || true
+    say "Saved under $OUT_DIR/videos/"
+    ;;
+  *)
+    die "usage: mailbox-e2e record [start|stop]"
+    ;;
+  esac
+}
+
+cmd_key() {
+  (($# > 0)) || die "usage: mailbox-e2e key KEY_LEFTMETA KEY_S"
+  require_domain
+  vsh send-key "$VM" --holdtime 100 "$@" >/dev/null
+  say "Sent $*"
+}
+
+cmd_snap() {
+  local name=${1:-}
+  [[ -n $name ]] || die "usage: mailbox-e2e snap <name>"
+  require_domain
+  require_off
+  qemu-img snapshot -c "$name" "$DISK"
+  say "Saved snapshot: $name"
+}
+
+cmd_snaps() {
+  require_domain
+  qemu-img snapshot -l "$DISK"
+}
+
+cmd_revert() {
+  local name=${1:-}
+  [[ -n $name ]] || die "usage: mailbox-e2e revert <name>"
+  require_domain
+  require_off
+  qemu-img snapshot -a "$name" "$DISK"
+  say "Reverted to $name — start it with: mailbox-e2e start"
+}
+
+ensure_serial() {
+  require_domain
+  local xml
+  xml=$(mktemp)
+  vsh dumpxml "$VM" --inactive >"$xml"
+  python3 - "$xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+path = sys.argv[1]
+tree = ET.parse(path)
+devs = tree.find("./devices")
+if devs is None:
+    sys.exit("mailbox-e2e: domain has no <devices>")
+if devs.find("serial") is not None:
+    sys.exit(0)
+serial = ET.SubElement(devs, "serial", {"type": "pty"})
+target = ET.SubElement(serial, "target", {"type": "isa-serial", "port": "0"})
+ET.SubElement(target, "model", {"name": "isa-serial"})
+console = ET.SubElement(devs, "console", {"type": "pty"})
+ET.SubElement(console, "target", {"type": "serial", "port": "0"})
+tree.write(path)
+PY
+  vsh define "$xml" >/dev/null
+  rm -f "$xml"
+  say "Serial console attached (virsh console $VM)"
+}
+
+cmd_view() {
+  require_domain
+  domain_running || vsh start "$VM" >/dev/null
+  cat <<HINT
+The SPICE window is the VGA login, not the test run.
+TUI/GUI run over SSH (tmux / headless Sway); evidence is tests/e2e/out/.
+Kernel and sshd logs:  mailbox-e2e console
+Stuck at a locked prompt: mailbox-e2e stop && mailbox-e2e rescue && mailbox-e2e start
+  then login mailbox / mailbox
+HINT
+  if command -v virt-viewer >/dev/null; then
+    say "Opening virt-viewer (release the pointer with Ctrl+Alt)"
+    setsid virt-viewer --connect "$CONNECT" --attach "$VM" >/dev/null 2>&1 &
+  elif command -v virt-manager >/dev/null; then
+    setsid "${PYTHON[@]}" "$(command -v virt-manager)" --connect "$CONNECT" \
+      --show-domain-console "$VM" >/dev/null 2>&1 &
+  else
+    die "no viewer — install virt-viewer, or: mailbox-e2e console"
+  fi
+}
+
+cmd_console() {
+  require_domain
+  domain_running || vsh start "$VM" >/dev/null
+  say "Serial console — Ctrl+] to detach"
+  vsh console "$VM"
+}
+
+# For a guest that boots to a locked getty and refuses SSH: set the console
+# password and enable sshd on the disk. VM must be off.
+cmd_rescue() {
+  require_domain
+  require_off
+  ensure_serial
+  if command -v virt-customize >/dev/null; then
+    say "Setting console password '$GUEST_USER / mailbox' and enabling sshd"
+    virt-customize -a "$DISK" --smp 2 --network \
+      --password "$GUEST_USER:password:mailbox" \
+      --run-command "passwd -u $GUEST_USER || true" \
+      --run-command "systemctl enable sshd" \
+      --run-command "systemctl enable serial-getty@ttyS0" \
+      || die "virt-customize failed"
+  else
+    say "No virt-customize; serial is attached but the password is unchanged."
+    say "Install libguestfs and re-run rescue, or type at the getty if a password exists."
+  fi
+  say "Start it: mailbox-e2e start"
+  say "VGA login: $GUEST_USER / mailbox    serial: mailbox-e2e console"
+}
+
+cmd_destroy() {
+  require_domain
+  read -rp "Delete $VM and its disk? [y/N] " answer
+  [[ ${answer,,} == "y" ]] || die "left alone"
+  domain_running && vsh destroy "$VM" >/dev/null
+  vsh undefine "$VM" --nvram >/dev/null 2>/dev/null \
+    || vsh undefine "$VM" >/dev/null
+  rm -f "$DISK"
+  say "Removed $VM"
+}
+
+cmd_status() {
+  if domain_exists; then
+    vsh domstate "$VM" | grep . | sed "s/^/$VM: /"
+    echo "$VM nic: $(guest_network) $(guest_mac)"
+    [[ -n $(guest_ip) ]] && echo "$VM: $(guest_ip)"
+    vsh net-info "$ISOLATED_NET" >/dev/null 2>&1 &&
+      echo "network $ISOLATED_NET: $(vsh net-info "$ISOLATED_NET" | awk '/^Active:/ {print $2}')"
+    [[ -f $DISK ]] && qemu-img snapshot -l "$DISK" 2>/dev/null | tail -n +2 || true
+  else
+    echo "$VM: not created"
+  fi
+}
+
+cmd_preflight() { preflight; say "preflight ok"; }
+
+case "${1:-help}" in
+create) shift; cmd_create "$@" ;;
+provision) shift; cmd_provision "$@" ;;
+isolate) shift; cmd_isolate "$@" ;;
+sync) shift; cmd_sync "$@" ;;
+seed) shift; cmd_seed "$@" ;;
+run) shift; cmd_run "$@" ;;
+shot) shift; cmd_shot "$@" ;;
+record) shift; cmd_record "$@" ;;
+key) shift; cmd_key "$@" ;;
+view) shift; cmd_view "$@" ;;
+console) shift; cmd_console "$@" ;;
+rescue) shift; cmd_rescue "$@" ;;
+ssh) shift; vm_ssh_tty "$@" ;;
+snap) shift; cmd_snap "$@" ;;
+snaps) shift; cmd_snaps "$@" ;;
+revert) shift; cmd_revert "$@" ;;
+start) cmd_start ;;
+stop) cmd_stop ;;
+kill) require_domain; vsh destroy "$VM" >/dev/null; say "Pulled the plug on $VM" ;;
+ip) require_ip; echo "$IP" ;;
+status) cmd_status ;;
+destroy) shift; cmd_destroy "$@" ;;
+preflight) cmd_preflight ;;
+help | --help | -h)
+  awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$(readlink -f "$0")"
+  ;;
+*) die "unknown command: $1 (try: mailbox-e2e help)" ;;
+esac

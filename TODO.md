@@ -78,13 +78,13 @@ off, and the gaps found along the way.
   run L0 in. The clause needs rewriting or dropping: what it was buying — proof
   that the parsers behave the same off the host — is worth keeping, and M6's
   mobile targets are where it lands.
-- **The web interface has no automated browser test.** Its API is covered by
-  `serving.rs`; the DOM client on top was verified by hand in a browser, which
-  is where its three real bugs came from. A headless run would be the next
-  step if the client grows past a few hundred lines.
+- **The web interface has no automated browser test on the host.** Its API is
+  covered by `serving.rs`; the DOM client is driven in the KVM guest of
+  `tests/e2e/` (`mailbox-e2e run web`). A headless run *on this machine* is
+  still missing if you want that without a VM.
 - **The narrow layout is unverified visually.** The rules and the pane
-  switching are exercised, but the window manager here ignored every resize, so
-  nobody has actually looked at it on a phone-shaped screen.
+  switching are exercised. `mailbox-e2e` shots are 1280×720; a phone-shaped
+  resize in the guest is still to do.
 - **Attachments in compose.** §7 asks for "attachment drag/paste/`--attach`";
   the CLI has `--attach` and neither window does. It wants a multipart upload
   route and a size the browser will not choke on.

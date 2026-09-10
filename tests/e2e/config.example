@@ -1,0 +1,6 @@
+# Copied to tests/e2e/config and sourced by mailbox-e2e. All optional.
+# MAILBOX_E2E_NAME=mailbox-e2e
+# MAILBOX_E2E_USER=mailbox
+# MAILBOX_E2E_MEMORY=4096
+# MAILBOX_E2E_CPUS=2
+# MAILBOX_E2E_DISK_SIZE=20

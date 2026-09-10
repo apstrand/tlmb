@@ -1,0 +1,58 @@
+#cloud-config
+hostname: mailbox-e2e
+manage_etc_hosts: true
+ssh_pwauth: true
+disable_root: true
+
+users:
+  - name: {{GUEST_USER}}
+    gecos: mailbox e2e
+    groups: [wheel]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    ssh_authorized_keys:
+      - {{SSH_PUBKEY}}
+
+# Console login when SSH is down. Isolated test VM; not a secret.
+chpasswd:
+  expire: false
+  list: |
+    {{GUEST_USER}}:mailbox
+
+package_update: true
+packages:
+  - dovecot
+  - tmux
+  - jq
+  - python
+  - curl
+  - rsync
+  - nftables
+  - tcpdump
+  - chromium
+  - sway
+  - grim
+  - slurp
+  - wf-recorder
+  - wtype
+  - foot
+  - webkit2gtk-4.1
+  - gtk3
+  - ffmpeg
+  - noto-fonts
+  - ttf-liberation
+  - qemu-guest-agent
+
+# Isolate has no WAN. Do not wait forever for NTP (that blocks sshd).
+ntp:
+  enabled: false
+
+runcmd:
+  - timedatectl set-ntp false
+  - systemctl disable --now systemd-timesyncd.service
+  - systemctl disable pacman-init.service
+  - systemctl mask systemd-time-wait-sync.service
+  - systemctl enable --now sshd qemu-guest-agent
+  - loginctl enable-linger {{GUEST_USER}}
+  - echo "mailbox-e2e cloud-init done" >/var/lib/mailbox-e2e-cloud-init-done

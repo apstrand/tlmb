@@ -1,0 +1,53 @@
+# A longer conversation, so the reading pane and TUI thread view have work.
+
+[[folder]]
+path = "INBOX"
+special_use = "inbox"
+
+[[message]]
+name = "root"
+folder = "INBOX"
+from = "Alice <alice@example.com>"
+to = ["peter@example.com"]
+subject = "The parser rewrite"
+date = "2026-08-01T09:00:00Z"
+message_id = "<thread-root@example.com>"
+body = "Shall we rewrite the parser this week?\n"
+
+[[message]]
+name = "r1"
+folder = "INBOX"
+from = "Peter <peter@example.com>"
+to = ["alice@example.com"]
+subject = "Re: The parser rewrite"
+date = "2026-08-01T10:00:00Z"
+message_id = "<thread-r1@example.com>"
+in_reply_to = "<thread-root@example.com>"
+references = ["<thread-root@example.com>"]
+flags = ["\\Seen"]
+body = "Yes. I'll sketch the grammar tonight.\n"
+
+[[message]]
+name = "r2"
+folder = "INBOX"
+from = "Alice <alice@example.com>"
+to = ["peter@example.com"]
+subject = "Re: The parser rewrite"
+date = "2026-08-01T16:00:00Z"
+message_id = "<thread-r2@example.com>"
+in_reply_to = "<thread-r1@example.com>"
+references = ["<thread-root@example.com>", "<thread-r1@example.com>"]
+body = "Draft looks good. One comment on the unknown-key error.\n"
+
+[[message]]
+name = "r3"
+folder = "INBOX"
+from = "Peter <peter@example.com>"
+to = ["alice@example.com"]
+subject = "Re: The parser rewrite"
+date = "2026-08-02T09:30:00Z"
+message_id = "<thread-r3@example.com>"
+in_reply_to = "<thread-r2@example.com>"
+references = ["<thread-root@example.com>", "<thread-r1@example.com>", "<thread-r2@example.com>"]
+flags = ["\\Seen"]
+body = "Fixed. Unknown keys are errors, not ignored.\n"

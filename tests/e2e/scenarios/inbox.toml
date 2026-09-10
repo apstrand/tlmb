@@ -1,0 +1,54 @@
+# A small, readable inbox: unread, read, flagged, a thread.
+
+[[folder]]
+path = "INBOX"
+special_use = "inbox"
+
+[[folder]]
+path = "Archive"
+special_use = "archive"
+
+[[message]]
+name = "invoice"
+folder = "INBOX"
+from = "Alice <alice@example.com>"
+to = ["peter@example.com"]
+subject = "Invoice 42"
+date = "2026-08-28T10:00:00Z"
+message_id = "<inv42@example.com>"
+body = "Please pay the invoice by Friday.\n\nThanks,\nAlice\n"
+
+[[message]]
+name = "reply"
+folder = "INBOX"
+from = "Peter <peter@example.com>"
+to = ["alice@example.com"]
+subject = "Re: Invoice 42"
+date = "2026-08-28T12:00:00Z"
+message_id = "<reply-inv42@example.com>"
+in_reply_to = "<inv42@example.com>"
+references = ["<inv42@example.com>"]
+flags = ["\\Seen"]
+body = "Paid, thanks.\n"
+
+[[message]]
+name = "hello"
+folder = "INBOX"
+from = "Bob <bob@example.com>"
+to = ["peter@example.com"]
+subject = "Lunch tomorrow?"
+date = "2026-08-31T15:30:00Z"
+message_id = "<lunch@example.com>"
+flags = ["\\Flagged"]
+body = "The usual place at 12:30?\n"
+
+[[message]]
+name = "digest"
+folder = "INBOX"
+from = "News <news@example.org>"
+to = ["peter@example.com"]
+subject = "Weekly digest"
+date = "2026-09-01T08:00:00Z"
+message_id = "<digest@example.org>"
+flags = ["\\Seen"]
+body = "Nothing urgent this week.\n"

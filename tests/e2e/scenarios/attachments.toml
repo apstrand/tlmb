@@ -1,0 +1,33 @@
+# A message with a named attachment, plus a small PDF-shaped part.
+
+[[folder]]
+path = "INBOX"
+special_use = "inbox"
+
+[[message]]
+name = "with-pdf"
+folder = "INBOX"
+from = "Billing <billing@example.com>"
+to = ["peter@example.com"]
+subject = "Invoice attached"
+date = "2026-08-20T11:00:00Z"
+message_id = "<pdf@example.com>"
+body = "Invoice is attached.\n"
+[[message.attachment]]
+filename = "invoice.pdf"
+mime_type = "application/pdf"
+text = "%PDF-1.4 not really a pdf"
+
+[[message]]
+name = "photo"
+folder = "INBOX"
+from = "Dana <dana@example.com>"
+to = ["peter@example.com"]
+subject = "From the weekend"
+date = "2026-08-21T18:00:00Z"
+message_id = "<photo@example.com>"
+body = "Look at this.\n"
+[[message.attachment]]
+filename = "sunset.jpg"
+mime_type = "image/jpeg"
+text = "not a real jpeg"
