@@ -42,6 +42,36 @@ off, and the gaps found along the way.
   wants `ASWebAuthenticationSession` and a custom URL scheme. The core's
   `Redirect` would need a sibling that takes the callback URL from the shell.
 
+## M8, in progress
+
+The §5.4 state folder is the entry point: `mailbox devices` and revocation
+(§8.3) ride on it, and the short code and relay cannot ship at all until the
+PAKE has had the outside review §16 requires.
+
+What is built is the substrate — the record model, the fold, and the wire
+format (`state/`), plus the key it is sealed with and the pairing that carries
+it. What is not:
+
+- **The IMAP transport.** Nothing reads or writes `Mailbox/.state` yet. It
+  wants an `APPEND` per new record, a fetch of what the folder gained since the
+  last pass, and a place in the sync loop — the folder is a folder, so the
+  existing per-folder UID bookkeeping mostly applies, but it must be excluded
+  from `ls`, from search, and from the unified inbox.
+- **Announcing the folder on first sync.** §5.4 is emphatic that creating a
+  folder in someone's account is an imposition, so it is announced, the name is
+  configurable, and `state_sync = false` is honoured permanently. The config
+  field exists and nothing reads it yet.
+- **Nothing is wired to the store.** The fold produces a `View`; the tags,
+  snooze, and saved-search tables are still the local-only ones, and reconciling
+  them in both directions (a local tag becomes a record; a record becomes a
+  row) is the next piece after the transport.
+- **Compaction.** The log only grows. §5.4 wants devices to compact the folder
+  periodically, which means writing a snapshot record and expunging what it
+  subsumes — and doing that safely while another device is appending.
+- **`mailbox devices` and revocation.** The `Device`/`RevokeDevice` entries and
+  the revocation-is-permanent rule are in the fold; the command, the key
+  rotation, and the printed list of credential rotations §8.3 asks for are not.
+
 ## Verification gaps
 
 - **L2 against Cyrus and Stalwart.** M2 requires it (§15) and it is the one

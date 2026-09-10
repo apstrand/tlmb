@@ -418,3 +418,63 @@ fn an_oauth_account_pairs_its_refresh_token_and_not_an_access_token() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- the §5.4 state key (M8) ----
+
+/// §8 promises a paired device can read the state a moment later, and the key
+/// is the whole of what makes that true. It has to survive the seal, and it
+/// has to be unreadable without the pairing secret like everything else in
+/// the payload.
+#[test]
+fn the_state_key_travels_with_the_payload() {
+    let clock = Clock::fixed(1_788_264_000);
+    let rng = Rng::seeded(b"state-key");
+    let state_secret = mailbox_core::state::wire::generate_secret(&rng);
+    let hex = mailbox_core::hex::encode(&state_secret);
+
+    let mut payload = sample_payload(&clock, &rng);
+    payload.state_key = Some(hex.clone());
+
+    let sealed = payload.seal(&secret(), &rng).expect("seal");
+    assert!(
+        !String::from_utf8_lossy(&sealed).contains(&hex),
+        "the state key must not be readable in the sealed payload"
+    );
+
+    let opened = Payload::open(&secret(), &sealed, clock.now()).expect("open");
+    assert_eq!(opened.state_key.as_deref(), Some(hex.as_str()));
+
+    // And the key that comes out the far side opens records written with the
+    // one that went in — which is the property that actually matters.
+    let recovered: [u8; 32] = mailbox_core::hex::decode(opened.state_key.as_deref().unwrap())
+        .expect("hex")
+        .try_into()
+        .expect("32 bytes");
+    let record = mailbox_core::state::Record {
+        id: "abc".into(),
+        device: "laptop".into(),
+        seq: 0,
+        at: clock.now(),
+        entry: mailbox_core::state::Entry::Tag {
+            message: "m1".into(),
+            tag: "work".into(),
+            present: true,
+        },
+    };
+    let message =
+        mailbox_core::state::wire::seal(&record, &state_secret, &clock, &rng).expect("seal");
+    assert_eq!(
+        mailbox_core::state::wire::open(&message, &recovered).expect("open"),
+        record
+    );
+}
+
+/// A device that has never synced state carries no key, rather than minting
+/// one: the receiver would get a key to a log that does not exist.
+#[test]
+fn a_payload_without_state_carries_no_key() {
+    let clock = Clock::fixed(1_788_264_000);
+    let rng = Rng::seeded(b"no-state");
+    let payload = sample_payload(&clock, &rng);
+    assert!(payload.state_key.is_none());
+}

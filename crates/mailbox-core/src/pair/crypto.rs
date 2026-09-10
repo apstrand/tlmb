@@ -75,8 +75,17 @@ pub fn payload_key(secret: &[u8]) -> [u8; 32] {
 /// replayed against a build that would interpret its fields differently — the
 /// version is authenticated even though it travels in the clear.
 pub fn seal(secret: &[u8], aad: &[u8], plaintext: &[u8], rng: &crate::Rng) -> Vec<u8> {
-    let key = payload_key(secret);
-    let cipher = XChaCha20Poly1305::new((&key).into());
+    seal_with_key(&payload_key(secret), aad, plaintext, rng)
+}
+
+/// [`seal`], for a caller that derived its own key.
+///
+/// §5.4's state records are sealed with the same AEAD under a key derived from
+/// a different secret with a different label ([`crate::state::wire`]). Sharing
+/// the construction rather than writing a second one is the point: there is
+/// one place where nonces are chosen and AAD is bound, and it is this one.
+pub fn seal_with_key(key: &[u8; 32], aad: &[u8], plaintext: &[u8], rng: &crate::Rng) -> Vec<u8> {
+    let cipher = XChaCha20Poly1305::new(key.into());
     let nonce_bytes = rng.bytes::<NONCE_BYTES>();
     let nonce = XNonce::from(nonce_bytes);
 
@@ -104,12 +113,16 @@ pub fn seal(secret: &[u8], aad: &[u8], plaintext: &[u8], rng: &crate::Rng) -> Ve
 /// authenticate", and distinguishing them for the caller would hand an attacker
 /// an oracle.
 pub fn open(secret: &[u8], aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>> {
+    open_with_key(&payload_key(secret), aad, sealed)
+}
+
+/// [`open`], for a caller that derived its own key. Fails the same single way.
+pub fn open_with_key(key: &[u8; 32], aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>> {
     if sealed.len() <= NONCE_BYTES {
         return Err(Error::usage("the pairing payload did not authenticate"));
     }
     let (nonce_bytes, ciphertext) = sealed.split_at(NONCE_BYTES);
-    let key = payload_key(secret);
-    let cipher = XChaCha20Poly1305::new((&key).into());
+    let cipher = XChaCha20Poly1305::new(key.into());
 
     cipher
         .decrypt(

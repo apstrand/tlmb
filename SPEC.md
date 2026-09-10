@@ -208,6 +208,18 @@ pairing carries a point-in-time snapshot instead of a live feed. Everything that
 depends on the folder inherits that schedule: shared snooze times, and the
 device list and revocation of §8.3.
 
+**The records are assertions, and the state is a fold over them.** Nothing in
+the folder is ever rewritten: a device appends "this message has this tag",
+"this search is gone", and the current state is a pure function of the *set* of
+records anyone has written. There is no compare-and-swap on an `APPEND` and two
+offline devices will both append, so a state *document* would need an agreement
+IMAP cannot express — where a set needs none. Two devices holding the same
+records compute the same state whatever order they received them in, which is
+what §14.3's convergence oracle tests. Conflicts on one key resolve to the
+latest assertion by wall clock, with a deterministic tiebreak past it; a
+revocation is monotone rather than last-writer, so a revoked device cannot
+re-announce itself back into the device list.
+
 ### 5.5 Sending
 
 Outgoing mail goes to a durable local **outbox** first, then to SMTP submission.

@@ -320,6 +320,24 @@ fn apply(ctx: &Ctx<'_>, payload: &Payload, mode: ApplyMode) -> Result<()> {
         }
     }
 
+    // §5.4's key, alongside the credentials and for the same reason: it is a
+    // secret, so it goes where secrets go and not into the config. Without it
+    // this device would sync the state folder, fail to open every record in
+    // it, and quietly show none of the tags §8 promised would follow.
+    let mut state_key = "not carried";
+    if let Some(hex) = &payload.state_key {
+        match mailbox_core::hex::decode(hex) {
+            Some(secret) => {
+                state_key = match mailbox_core::credentials::adopt_state_secret(&secret) {
+                    Ok(mailbox_core::credentials::Stored::Keychain) => "the OS keychain",
+                    Ok(_) => "a private file",
+                    Err(_) => "could not be stored",
+                };
+            }
+            None => state_key = "could not be read",
+        }
+    }
+
     if ctx.out.is_structured() {
         ctx.out.reply(
             "pair",
@@ -330,6 +348,7 @@ fn apply(ctx: &Ctx<'_>, payload: &Payload, mode: ApplyMode) -> Result<()> {
                 "removed": applied.removed,
                 "credentials_stored": stored,
                 "credentials_needing_attention": manual,
+                "state_key": state_key,
             }),
         )?;
         return Ok(());

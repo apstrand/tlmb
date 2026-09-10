@@ -265,7 +265,15 @@ optional push notifier of §11 is not in this cut.
 - **`COMPRESS=DEFLATE`** and `raw:` server-side search passthrough.
 - **The cross-device state folder** (§5.4), and with it shared tags, saved
   searches, and snooze that follows you between machines. All three are local
-  today. M8.
+  today. M8, and started: the record model, the fold that makes two devices
+  converge, and the sealed wire format are in `mailbox-core/src/state/`, along
+  with the key pairing carries. What is missing is the IMAP half — nothing
+  reads or writes `Mailbox/.state` yet — and the reconciliation with the local
+  tables. TODO.md has the list.
+- **`mailbox devices` and revocation** (§8.3), which ride on that folder.
+- **The short code and the rendezvous relay** (§8), which do not ship until the
+  PAKE has had an outside review (§16). QR and LAN cover the common cases in
+  the meantime.
 
 ## Building
 

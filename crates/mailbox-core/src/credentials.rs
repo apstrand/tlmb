@@ -444,6 +444,90 @@ fn keychain_store(service: &str, label: &str, account_id: &str, secret: &str) ->
     child.wait().map(|s| s.success()).unwrap_or(false)
 }
 
+/// The keychain service the §5.4 state secret is filed under.
+const STATE_SERVICE: &str = "mailbox-state";
+
+/// The name the state secret is filed under.
+///
+/// One secret for the whole workspace, not one per account — which is what the
+/// pairing payload's single `state_key` field has always implied, and what
+/// §8.3's revocation requires: revoking a device rotates *the* key, because a
+/// device is revoked from the user's mail, not from one account of it.
+const STATE_ENTRY: &str = "workspace";
+
+/// The §5.4 state secret, from wherever it is kept.
+///
+/// Same chain as every other credential, for the same reason: the environment
+/// first so a test can supply one, then the keychain, then a private file in
+/// the state directory. The file exists because §5.4 is on by default and a
+/// desktop with no Secret Service would otherwise silently have no
+/// cross-device state at all — it is mode 0600 beside the mail it describes,
+/// which is the protection §9 gives the store itself.
+pub fn state_secret() -> Option<[u8; crate::state::wire::SECRET_BYTES]> {
+    let hex = env_secret("MAILBOX_STATE_SECRET")
+        .or_else(|| keychain_get(STATE_SERVICE, STATE_ENTRY))
+        .or_else(|| std::fs::read_to_string(state_secret_path()).ok())?;
+    let bytes = crate::hex::decode(hex.trim())?;
+    bytes.try_into().ok()
+}
+
+/// Stores the state secret, and reports where it went.
+pub fn store_state_secret(secret: &[u8]) -> Result<Stored> {
+    let hex = crate::hex::encode(secret);
+    if keychain_store(STATE_SERVICE, "state key", STATE_ENTRY, &hex) {
+        // Belt and braces would be a second copy to delete on rotation, so the
+        // file is removed rather than left holding a superseded key.
+        let _ = std::fs::remove_file(state_secret_path());
+        return Ok(Stored::Keychain);
+    }
+    let path = state_secret_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::paths::write_private(&path, hex.as_bytes())?;
+    Ok(Stored::Process)
+}
+
+/// The state secret, generating and storing one if this is the first time.
+///
+/// A device that pairs receives the secret instead ([`adopt_state_secret`]);
+/// generating one here is what the *first* device does, and doing it lazily is
+/// what keeps an account that never syncs state from having a key at all.
+pub fn ensure_state_secret(rng: &crate::Rng) -> Result<[u8; crate::state::wire::SECRET_BYTES]> {
+    if let Some(secret) = state_secret() {
+        return Ok(secret);
+    }
+    let secret = crate::state::wire::generate_secret(rng);
+    store_state_secret(&secret)?;
+    Ok(secret)
+}
+
+/// Takes the state secret from a pairing payload (§8).
+///
+/// The promise §8 makes is that a paired device can read the state a moment
+/// later, so this overwrites whatever this device had: a device that generated
+/// its own secret before pairing was talking to nobody.
+pub fn adopt_state_secret(secret: &[u8]) -> Result<Stored> {
+    store_state_secret(secret)
+}
+
+/// Forgets the state secret. Used by rotation (§8.3), which stores the new one
+/// immediately afterwards.
+pub fn forget_state_secret() {
+    if keychain_enabled() {
+        let _ = Command::new("secret-tool")
+            .args(["clear", "service", STATE_SERVICE, "account", STATE_ENTRY])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = std::fs::remove_file(state_secret_path());
+}
+
+fn state_secret_path() -> std::path::PathBuf {
+    crate::paths::state_dir().join("state.key")
+}
+
 /// The configured client secret, from the environment first so it need not be
 /// in the config file at all.
 ///

@@ -48,8 +48,11 @@ pub struct Payload {
     /// §12's general preferences, which are worth carrying and cost nothing.
     #[serde(default)]
     pub preferences: Option<General>,
-    /// The §5.4 state key, hex. Absent until M8 makes the state folder real;
-    /// carried now so a device paired today can read that state later.
+    /// The §5.4 state key, hex.
+    ///
+    /// Absent only when the sending device has never had one — a device that
+    /// has synced state has a secret, and §8 promises the receiver can read
+    /// that state a moment later, which is exactly what this field buys.
     #[serde(default)]
     pub state_key: Option<String>,
 }
@@ -149,7 +152,16 @@ impl Payload {
             device: device.to_string(),
             accounts,
             preferences: Some(config.general.clone()),
-            state_key: None,
+            // Read, never minted: pairing carries the state key this device
+            // already uses. A device with none has no state folder to share,
+            // and generating one here would hand the receiver a key to a log
+            // that does not exist.
+            state_key: config
+                .general
+                .state_sync
+                .then(crate::credentials::state_secret)
+                .flatten()
+                .map(|s| crate::hex::encode(&s)),
         }
     }
 
