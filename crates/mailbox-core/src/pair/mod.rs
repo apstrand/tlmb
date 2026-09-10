@@ -17,6 +17,7 @@
 
 pub mod crypto;
 pub mod file;
+pub mod pake;
 pub mod transport;
 
 use serde::{Deserialize, Serialize};

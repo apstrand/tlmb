@@ -32,6 +32,10 @@ chacha20poly1305 = "0.11.0"
 hkdf = "0.13.0"
 sha2 = "0.11.0"
 argon2 = "0.6.0"
+# §8.1's balanced PAKE. A port of jedisct1's libsodium CPace, over Ristretto255
+# — the same rule as the rest of `pair::crypto`: a named primitive from someone
+# who writes cryptography for a living, never a construction of our own.
+pake-cpace = "0.1.7"
 
 [dev-dependencies]
 getrandom = "0.3"

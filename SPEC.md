@@ -467,10 +467,27 @@ sender                          relay (stateless)                receiver
   opaque bytes.
 - **Short code path** (M8, with the relay): a 9-character human-typable code (Crockford base32, no
   ambiguous glyphs, ~45 bits) is too weak to be a key, so it is used as the
-  password in a balanced PAKE (CPace, X25519 group). The relay carries the two
-  PAKE messages and then the sealed payload; an attacker gets one online guess
-  per channel and learns nothing offline. The relay rate-limits and burns the
-  channel after a single failed handshake.
+  password in a balanced PAKE (CPace, over Ristretto255 — a prime-order group
+  on the same curve, which removes the cofactor handling small-subgroup
+  mistakes live in). The relay carries the two PAKE messages and then the
+  sealed payload; an attacker gets one online guess per channel and learns
+  nothing offline. The relay rate-limits and burns the channel after a single
+  failed handshake.
+
+  **The channel id is not derived from the code.** `cid = HKDF(S, "channel")`
+  holds only where `S` is the 256-bit secret of the QR and LAN transports.
+  Deriving it from a 45-bit code would let anyone who saw the channel — the
+  relay included — recover the code by trying all 2^45 offline, which is
+  precisely the attack the PAKE is there to prevent. On the short-code path the
+  rendezvous identifier is therefore an independent public value, and the typed
+  code is the secret half only.
+
+  A mismatched code does not fail the handshake: CPace completes and leaves the
+  two sides holding unrelated secrets, because an implementation that could
+  report "wrong password" could be asked offline. The mismatch is caught by the
+  short authentication string differing and by the payload failing to
+  authenticate — so a caller may not reach the payload without checking the
+  words first.
 - **Confirmation**: both devices display a short authentication string derived
   from the transcript. The user confirms they match before the payload is
   accepted. This is what defends the LAN and relay paths against an active MITM.

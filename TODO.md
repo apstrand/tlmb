@@ -72,6 +72,39 @@ it. What is not:
   the revocation-is-permanent rule are in the fold; the command, the key
   rotation, and the printed list of credential rotations §8.3 asks for are not.
 
+## The PAKE, and what is still open
+
+The §8.1 handshake is built (`pair/pake.rs`): CPace over Ristretto255, the
+nine-character Crockford code, and the fold into the 256-bit secret the rest of
+§8 already uses. **The §16 review gate was lifted deliberately, not met.** Three
+things follow from that, and the first is a design problem rather than a task.
+
+- **§8.2's channel id cannot be derived from the code.** §8.1 defines
+  `cid = HKDF(S, "channel")`, which is sound when `S` is the 256-bit QR secret
+  and a break when it is a 45-bit code: anyone who saw the channel id — the
+  relay included — could try all 2^45 codes offline and recover it in minutes.
+  That would hand back exactly the offline dictionary attack the PAKE exists to
+  prevent. The rendezvous identifier has to be an independent public value, the
+  way magic-wormhole's channel number is, with the typed code being the secret
+  half only. §8.1 and §8.2 both need amending before a relay is built against
+  them.
+- **There are no known-answer vectors, and this crate cannot produce them.**
+  §15 requires them. `pake-cpace` draws its scalars from `getrandom` inside
+  `step1`/`step2` with no way to inject a deterministic RNG, so a handshake
+  cannot be replayed to a fixed answer. What is pinned instead is everything
+  deterministic around it: the alphabet, the identity strings, the AD, and the
+  HKDF label. Real vectors want either an upstream change taking an RNG, or a
+  cross-check against the libsodium C implementation's own vectors.
+- **Nothing uses it yet.** No transport carries a PAKE handshake: `pair send`
+  still takes a full link. The LAN case needs a rendezvous — either a broadcast
+  beacon, or the relay — and that choice is the one blocked on the channel-id
+  question above.
+
+What a review would still need to cover, beyond the protocol itself: that the
+identities and AD bind what they should, that folding two directional keys into
+one secret loses nothing, and that a caller cannot reach the payload without
+checking the short authentication string first.
+
 ## Known coarseness in pairing
 
 - **There is no short form of the pairing link.** The secret in it is the

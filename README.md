@@ -156,11 +156,28 @@ disk at either end. The payload is still sealed under a passphrase
 passphrase protects it if it is ever saved. Drop the `ssh` half and redirect to
 a file for an air-gapped move.
 
-The short typeable code is the real answer to "the link is too long", and it is
-the one thing here that cannot be improvised: a 45-bit code is safe only as the
-password to a PAKE, never as a key, and §16 holds it until that PAKE has had an
-outside review. Anything shorter than the full secret without one would be a
-credential leak dressed up as a convenience.
+#### The short code
+
+The handshake behind §8.1's nine-character code is built —
+`mailbox-core/src/pair/pake.rs`: CPace over Ristretto255, using
+[`pake-cpace`](https://crates.io/crates/pake-cpace), a port of jedisct1's
+libsodium implementation. The code never becomes a key; it picks a group
+generator, and two devices that used the same code agree on a 256-bit secret
+while an eavesdropper learns nothing they can attack offline.
+
+**It has not had the outside review §16 asks for — that gate was lifted
+deliberately, not met.** Nothing is wired to a transport yet, so no command
+takes a code today, and two things must be settled first:
+
+- §8.2's channel id cannot be derived from the code. `HKDF(S, "channel")` is
+  sound for the 256-bit QR secret and a break for a 45-bit one — anyone who saw
+  the channel could recover the code offline, which is the exact attack the
+  PAKE exists to stop. The rendezvous identifier has to be an independent
+  public value.
+- §15 wants known-answer vectors, and `pake-cpace` cannot produce them: it
+  draws its scalars internally with no way to inject a deterministic RNG.
+
+TODO.md carries both, and what a review would still need to cover.
 
 ### The terminal interface
 
