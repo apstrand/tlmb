@@ -56,6 +56,7 @@ html = """
 
 struct Serving {
     dir: PathBuf,
+    config: PathBuf,
     child: Child,
     port: u16,
     token: String,
@@ -85,18 +86,82 @@ impl Serving {
             // Nothing here may put a popup on the desktop of
             // whoever ran the suite (§11).
             .env("MAILBOX_NOTIFIER", "none")
+            // And out of the developer's keyring: adding an account files its
+            // password where the platform can find it again (§9, §14).
+            .env("MAILBOX_KEYCHAIN", "none")
             .env("MAILBOX_CLOCK", "2026-09-01T12:00:00Z")
             .output()
             .expect("seed");
         assert!(seeded.status.success(), "seeding failed");
 
+        Serving::spawn(dir, config, state, port)
+    }
+
+    /// A server on a machine where `accounts add` has never been run.
+    ///
+    /// Not a corner case: it is what the first launch looks like, and the one
+    /// state in which the interface has to explain itself rather than show
+    /// mail.
+    fn start_unconfigured() -> Serving {
+        let port = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("mailbox-serve-{}-{port}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let config = dir.join("config.toml");
+        std::fs::write(&config, "").expect("write config");
+        let state = dir.join("state");
+
+        Serving::spawn(dir, config, state, port)
+    }
+
+    /// The same, bound to every interface — which is what `--bind 0.0.0.0`
+    /// does for reading mail from a phone, and where the setup form is not on
+    /// offer.
+    fn start_unconfigured_on_the_network() -> Serving {
+        let port = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("mailbox-serve-{}-{port}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let config = dir.join("config.toml");
+        std::fs::write(&config, "").expect("write config");
+        let state = dir.join("state");
+
+        Serving::spawn_bound(dir, config, state, port, Some("0.0.0.0"))
+    }
+
+    fn spawn(dir: PathBuf, config: PathBuf, state: PathBuf, port: u16) -> Serving {
+        Serving::spawn_bound(dir, config, state, port, None)
+    }
+
+    fn spawn_bound(
+        dir: PathBuf,
+        config: PathBuf,
+        state: PathBuf,
+        port: u16,
+        bind: Option<&str>,
+    ) -> Serving {
+        let mut args = vec![
+            "--json".to_string(),
+            "serve".to_string(),
+            "--port".to_string(),
+            port.to_string(),
+        ];
+        if let Some(address) = bind {
+            args.push("--bind".to_string());
+            args.push(address.to_string());
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_mailbox"))
-            .args(["--json", "serve", "--port", &port.to_string()])
+            .args(&args)
             .env("MAILBOX_CONFIG", &config)
             .env("MAILBOX_STATE_DIR", &state)
             // Nothing here may put a popup on the desktop of
             // whoever ran the suite (§11).
             .env("MAILBOX_NOTIFIER", "none")
+            // And out of the developer's keyring: adding an account files its
+            // password where the platform can find it again (§9, §14).
+            .env("MAILBOX_KEYCHAIN", "none")
             .env("MAILBOX_CLOCK", "2026-09-01T12:00:00Z")
             .env("MAILBOX_SEED", format!("serve-{port}"))
             .stdout(Stdio::piped())
@@ -116,6 +181,7 @@ impl Serving {
 
         Serving {
             dir,
+            config,
             child,
             port,
             token,
@@ -282,6 +348,9 @@ fn serving_the_network_without_a_token_is_refused() {
         // Nothing here may put a popup on the desktop of
         // whoever ran the suite (§11).
         .env("MAILBOX_NOTIFIER", "none")
+        // And out of the developer's keyring: adding an account files its
+        // password where the platform can find it again (§9, §14).
+        .env("MAILBOX_KEYCHAIN", "none")
         .output()
         .expect("run");
 
@@ -743,5 +812,225 @@ fn a_message_with_no_recipient_is_refused() {
     );
 
     let (status, body) = s.post("/api/send", r#"{"to":["not an address"],"subject":"x"}"#);
+    assert_eq!(status, 400, "{body:#}");
+}
+
+// ---- the first launch (§9) ----
+
+/// `serve` on a machine with no account starts, and says what to do about it.
+///
+/// It used to exit with "no such account: none configured", which is the one
+/// answer that cannot work: the interface being refused is where the person
+/// who has not added an account would have read how to.
+#[test]
+fn a_server_with_no_accounts_starts_and_explains_itself() {
+    let s = Serving::start_unconfigured();
+
+    // Nothing configured is an answer, not a 404: this is what the page reads
+    // to decide which of its two states it is in.
+    let accounts = s.api("/api/accounts");
+    assert_eq!(
+        accounts["accounts"].as_array().map(Vec::len),
+        Some(0),
+        "{accounts:#}"
+    );
+
+    // And a listing over no accounts is empty rather than an error, so every
+    // route the page loads with still answers.
+    let listing = s.api("/api/ls");
+    assert_eq!(listing["messages"].as_array().map(Vec::len), Some(0));
+
+    let (status, _, page) = s.get(&format!("/?mailbox_token={}", s.token), "");
+    assert_eq!(status, 200);
+    assert!(
+        page.contains(r#"data-setup="1""#),
+        "the page was not told it may add an account"
+    );
+    assert!(
+        page.contains(r#"id="setup-form""#),
+        "the page carries no way to add one"
+    );
+}
+
+/// The account is added in a terminal beside the browser, and the page is
+/// still open. Finding the mail there without restarting the server is the
+/// difference between a guide and a dead end.
+#[test]
+fn an_account_added_while_serving_is_picked_up() {
+    let s = Serving::start_unconfigured();
+    assert_eq!(
+        s.api("/api/accounts")["accounts"].as_array().map(Vec::len),
+        Some(0)
+    );
+
+    std::fs::write(
+        &s.config,
+        "[accounts.test]\naddress = \"peter@example.com\"\nimap_host = \"127.0.0.1\"\n",
+    )
+    .expect("write config");
+
+    let accounts = s.api("/api/accounts");
+    assert_eq!(
+        accounts["accounts"][0]["address"], "peter@example.com",
+        "the server did not notice the account: {accounts:#}"
+    );
+}
+
+// ---- setting the mailbox up from the page (§9) ----
+
+/// The built-in table, over HTTP, so the setup form can fill itself in.
+///
+/// Offline by construction — the table is compiled in — which is why it can
+/// run on every keystroke while `discover` waits behind a button.
+#[test]
+fn the_provider_table_answers_for_the_setup_form() {
+    let s = Serving::start_unconfigured();
+
+    let known = s.api("/api/providers?address=peter%40gmail.com");
+    assert_eq!(known["known"], true, "{known:#}");
+    assert_eq!(known["imap_host"], "imap.gmail.com");
+    assert_eq!(known["imap_port"], 993);
+    // Where it came from, in the shape `discover` says it, so the form has one
+    // way of explaining itself.
+    assert_eq!(known["imap_source"], "table");
+
+    // Not an error: an address the table does not know is an ordinary account
+    // whose servers have to be typed in.
+    let unknown = s.api("/api/providers?address=peter%40nothing.invalid");
+    assert_eq!(unknown["known"], false, "{unknown:#}");
+}
+
+/// The account is tried before it is written, and a server that does not
+/// answer leaves nothing behind.
+///
+/// This is the whole reason the web route does more than `accounts add`: the
+/// person filling the form in has no `accounts edit` to correct it with, so an
+/// account that cannot work must never reach the config.
+#[test]
+fn an_account_that_cannot_connect_is_never_written() {
+    let s = Serving::start_unconfigured();
+
+    // A port on this machine with nothing behind it: the shape of a mistyped
+    // host, and no network is touched to find out.
+    let dead = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.local_addr().expect("addr").port()
+    };
+
+    let (status, body) = s.post(
+        "/api/accounts",
+        &format!(
+            r#"{{"address":"peter@example.com","password":"hunter2",
+                 "imap_host":"127.0.0.1","imap_port":{dead}}}"#
+        ),
+    );
+    assert!(status >= 400, "the add was accepted: {body:#}");
+
+    assert_eq!(
+        s.api("/api/accounts")["accounts"].as_array().map(Vec::len),
+        Some(0),
+        "an account that could not be reached was written anyway"
+    );
+    let config = std::fs::read_to_string(&s.config).expect("read the config");
+    assert!(
+        !config.contains("peter@example.com"),
+        "the config was written despite the refusal:\n{config}"
+    );
+}
+
+/// An account added from the page needs a password, because the two ways of
+/// supplying one later — `credential_command` and `MAILBOX_PASSWORD_*` — both
+/// need a terminal.
+#[test]
+fn an_account_added_from_the_page_needs_a_password() {
+    let s = Serving::start_unconfigured();
+
+    let (status, body) = s.post("/api/accounts", r#"{"address":"peter@gmail.com"}"#);
+    assert_eq!(status, 400, "{body:#}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("password"),
+        "{body:#}"
+    );
+}
+
+/// A server on the network will not take a password, and does not pretend it
+/// might: the page it serves carries the guide instead of the form.
+///
+/// `serve` speaks plain HTTP. Reading mail over it is the user's call to make
+/// with `--bind`; a mail provider's password crossing the same link in the
+/// clear is not one they have made.
+#[test]
+fn a_server_on_the_network_will_not_take_a_password() {
+    let s = Serving::start_unconfigured_on_the_network();
+
+    let (status, body) = s.post(
+        "/api/accounts",
+        r#"{"address":"peter@gmail.com","password":"hunter2"}"#,
+    );
+    assert_eq!(status, 400, "{body:#}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("loopback"),
+        "the refusal does not say why: {body:#}"
+    );
+
+    // Testing carries the same password, so it is refused on the same terms.
+    let (status, body) = s.post(
+        "/api/accounts/test",
+        r#"{"address":"peter@gmail.com","password":"hunter2"}"#,
+    );
+    assert_eq!(status, 400, "{body:#}");
+
+    let (status, _, page) = s.get(&format!("/?mailbox_token={}", s.token), "");
+    assert_eq!(status, 200);
+    assert!(
+        page.contains(r#"data-setup=""#) && !page.contains(r#"data-setup="1""#),
+        "the page offers a form this server would refuse"
+    );
+}
+
+/// The Test button: the same connection Add makes, and no config written
+/// whether it succeeds or fails.
+#[test]
+fn settings_can_be_tried_without_adding_the_account() {
+    let s = Serving::start_unconfigured();
+
+    let dead = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.local_addr().expect("addr").port()
+    };
+
+    let (status, body) = s.post(
+        "/api/accounts/test",
+        &format!(
+            r#"{{"address":"peter@example.com","password":"hunter2",
+                 "imap_host":"127.0.0.1","imap_port":{dead}}}"#
+        ),
+    );
+    assert!(
+        status >= 400,
+        "a dead port was reported as working: {body:#}"
+    );
+
+    // The point of the button: it answers the question without committing to
+    // anything, so a failed test leaves the mailbox exactly as it was.
+    assert_eq!(
+        s.api("/api/accounts")["accounts"].as_array().map(Vec::len),
+        Some(0),
+        "testing wrote an account"
+    );
+    let config = std::fs::read_to_string(&s.config).expect("read the config");
+    assert!(
+        config.trim().is_empty(),
+        "testing wrote a config:\n{config}"
+    );
+
+    // And it needs a password, for the same reason adding does.
+    let (status, body) = s.post("/api/accounts/test", r#"{"address":"peter@gmail.com"}"#);
     assert_eq!(status, 400, "{body:#}");
 }

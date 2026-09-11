@@ -10,6 +10,14 @@
 //! browser an `argv` endpoint would have been a dozen lines and would have made
 //! every future subcommand — `pair send`, `|` to a shell — reachable from a
 //! page. The routes are named one at a time, and adding one is a decision.
+//!
+//! Two of them are about setting the mailbox up rather than reading it —
+//! `providers` and `POST accounts` — because §9's "setup is one line" is a
+//! line typed in a terminal, and the two interfaces served from here do not
+//! have one. Without them a browser or a desktop window is a mail client that
+//! can only be started by someone who did not need it. They are the only
+//! routes that write the config, and the only ones a non-loopback server
+//! refuses: see `setup_allowed` in `server`.
 
 use std::sync::Mutex;
 
@@ -22,6 +30,7 @@ use mailbox_core::{Clock, Tracer, Workspace};
 
 use crate::http::{Request, Response};
 
+#[allow(clippy::too_many_arguments)]
 pub fn handle(
     path: &str,
     request: &Request,
@@ -29,6 +38,7 @@ pub fn handle(
     session: &SessionOptions,
     tracer: &Tracer,
     clock: &Clock,
+    setup_allowed: bool,
 ) -> Response {
     let result = match (request.method.as_str(), path) {
         ("GET", "ls") => list(request, workspace),
@@ -52,6 +62,12 @@ pub fn handle(
         ("POST", "move") => move_to(request, session, tracer, clock),
         ("POST", "snooze") => snooze(request, session, tracer, clock),
         ("POST", "sync") => sync(request, workspace, session, tracer, clock),
+        ("GET", "providers") => providers(request),
+        ("GET", "discover") => discover(request),
+        ("POST", "accounts") => {
+            add_account(request, workspace, session, tracer, clock, setup_allowed)
+        }
+        ("POST", "accounts/test") => test_account(request, tracer, setup_allowed),
         ("GET", _) | ("POST", _) => Err(Error::not_found("route", path)),
         _ => Err(Error::usage(format!(
             "{} is not a method this serves",
@@ -75,6 +91,14 @@ fn status_for(e: &Error) -> u16 {
         Error::NotFound { .. } => 404,
         Error::Usage(_) | Error::Ambiguous { .. } => 400,
         Error::PolicyDenied { .. } | Error::NeedsConfirmation { .. } => 403,
+        // A mail server refusing a password is not this server failing, and
+        // the setup form needs the difference: "your password is wrong" and
+        // "the machine running this is broken" are different things to show
+        // someone. The 401 here is about the *mail* account, and carries
+        // `auth_failed` in the body to say so — the missing-token 401 is
+        // written in `server` and never reaches this function.
+        Error::Auth(_) => 401,
+        Error::Network(_) | Error::Timeout(_) => 504,
         _ => 500,
     }
 }
@@ -372,6 +396,260 @@ fn sync(
     // leaving the next `ls` to show what was there before.
     *workspace.lock().unwrap() = Workspace::open(session, tracer.clone(), clock.clone())?;
     Ok(Response::json(200, &serde_json::to_value(result)?))
+}
+
+/// What the built-in provider table knows about an address (§9).
+///
+/// The setup form asks as the address is typed, so that the common case —
+/// gmail, outlook, fastmail — needs a password and nothing else, and the host
+/// and port fields stay out of the way until they are actually needed. Same
+/// call the iOS setup screen makes, and the same answer.
+///
+/// It reads nothing and writes nothing: the table is compiled in, and an
+/// address is not a secret this server did not already have.
+fn providers(request: &Request) -> Result<Response> {
+    let address = request
+        .query
+        .get("address")
+        .ok_or_else(|| Error::usage("providers needs an `address`"))?;
+
+    let payload = match mailbox_core::providers::hints_for(address) {
+        Some(h) => serde_json::json!({
+            "known": true,
+            "imap_host": h.imap_host,
+            "imap_port": h.imap_port,
+            "imap_security": h.imap_security,
+            "smtp_host": h.smtp_host,
+            "smtp_port": h.smtp_port,
+            "smtp_security": h.smtp_security,
+            // Said in the same shape `discover` says it, so the form has one
+            // way of explaining where a setting came from. A hit here is the
+            // built-in table by definition, and the most reassuring of the
+            // four answers.
+            "imap_source": mailbox_core::providers::Source::Table.as_str(),
+            "smtp_source": mailbox_core::providers::Source::Table.as_str(),
+            "authoritative": true,
+        }),
+        // Not an error: an address nobody has a table entry for is an ordinary
+        // account that needs its servers typed in, which is what the form does
+        // with this answer.
+        None => serde_json::json!({ "known": false }),
+    };
+    Ok(Response::json(200, &payload))
+}
+
+/// How long the setup form's login attempt may take.
+///
+/// Long enough for a slow provider and a TLS handshake, short enough that a
+/// host that is not answering is reported as such rather than leaving someone
+/// watching a spinner. One connection thread is held for this, and only
+/// during setup.
+const VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The fields the setup form may set.
+///
+/// Deliberately not [`mailbox_core::accounts::NewAccount`] itself, even though
+/// that would deserialize straight from this body. `NewAccount` carries
+/// `credential_command` — a shell command run by
+/// [`mailbox_core::credentials::resolve`] — and accepting it here would put a
+/// "run this command" field on an HTTP route, which is the one thing the top
+/// of this file says is not on offer. What a page may set is what a page needs
+/// to set: an address, a password, and the servers to reach.
+#[derive(serde::Deserialize)]
+struct SetupForm {
+    address: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    imap_host: Option<String>,
+    #[serde(default)]
+    imap_port: Option<u16>,
+    #[serde(default)]
+    imap_user: Option<String>,
+    /// Carried from whatever filled the form in rather than typed: the two
+    /// lookup routes report a security for each host, and dropping it would
+    /// silently downgrade a STARTTLS server to the implicit-TLS default.
+    /// `validate` in the core is what stops it being abused — the values are a
+    /// closed set, and turning TLS off is refused for anything but loopback.
+    #[serde(default)]
+    imap_security: Option<String>,
+    #[serde(default)]
+    smtp_host: Option<String>,
+    #[serde(default)]
+    smtp_port: Option<u16>,
+    #[serde(default)]
+    smtp_user: Option<String>,
+    #[serde(default)]
+    smtp_security: Option<String>,
+}
+
+impl SetupForm {
+    fn into_spec(self) -> mailbox_core::accounts::NewAccount {
+        // An empty string from an untouched form field is "not given", not a
+        // hostname of "". Left as `None` so the provider table still fills it.
+        let some = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
+        mailbox_core::accounts::NewAccount {
+            id: self.id,
+            address: self.address,
+            imap_host: some(self.imap_host),
+            imap_port: self.imap_port,
+            imap_user: some(self.imap_user),
+            imap_security: some(self.imap_security),
+            smtp_host: some(self.smtp_host),
+            smtp_port: self.smtp_port,
+            smtp_user: some(self.smtp_user),
+            smtp_security: some(self.smtp_security),
+            password: some(self.password),
+            ..Default::default()
+        }
+    }
+}
+
+/// The same question, asked of the network (§9's autoconfig).
+///
+/// Behind a button rather than run as the address is typed, because it blocks
+/// on DNS and because it tells a domain's nameserver that someone here is
+/// setting up mail for it. The answer says where each setting came from, so
+/// the form can present a `SRV` record as found and a conventional name as a
+/// guess — which is the difference between "this is your server" and "this is
+/// what your server is usually called".
+fn discover(request: &Request) -> Result<Response> {
+    let address = request
+        .query
+        .get("address")
+        .ok_or_else(|| Error::usage("discover needs an `address`"))?;
+
+    let d = mailbox_core::providers::discover(address)?;
+    Ok(Response::json(
+        200,
+        &serde_json::json!({
+            "known": true,
+            "imap_host": d.hints.imap_host,
+            "imap_port": d.hints.imap_port,
+            "imap_security": d.hints.imap_security,
+            "smtp_host": d.hints.smtp_host,
+            "smtp_port": d.hints.smtp_port,
+            "smtp_security": d.hints.smtp_security,
+            "imap_source": d.imap_source.as_str(),
+            "smtp_source": d.smtp_source.as_str(),
+            // One flag, because the question a setup screen asks is "may I
+            // present this as found, or must I say it is a guess?".
+            "authoritative": d.imap_source.is_authoritative() && d.smtp_source.is_authoritative(),
+        }),
+    ))
+}
+
+/// Tries an account's settings without adding it — the Test button (§9).
+///
+/// `mailbox accounts test`, made available before there is an account to name.
+/// The CLI's version tests one that already exists, because on a terminal the
+/// order does not matter: a wrong setting is an `accounts edit` away. On a
+/// page it does matter, so this comes first and answers with the same things
+/// the CLI prints — what the server offers, how many folders are there, and
+/// which of §5.3's fast paths a sync will take.
+///
+/// Writes nothing, anywhere. Refused off loopback for the same reason `add`
+/// is: it carries a password.
+fn test_account(request: &Request, tracer: &Tracer, setup_allowed: bool) -> Result<Response> {
+    if !setup_allowed {
+        return Err(off_loopback());
+    }
+
+    let form: SetupForm = serde_json::from_slice(&request.body)
+        .map_err(|e| Error::usage(format!("the request body is not an account: {e}")))?;
+    let verified = try_settings(&form.into_spec(), tracer)?;
+    Ok(Response::json(200, &serde_json::to_value(verified)?))
+}
+
+/// Connects and logs in with what the form holds, and says what it found.
+///
+/// Shared by Test and Add so the two cannot disagree: an Add that succeeded
+/// where a Test had just failed — or the reverse — would make the button a
+/// lie.
+fn try_settings(
+    spec: &mailbox_core::accounts::NewAccount,
+    tracer: &Tracer,
+) -> Result<mailbox_core::accounts::Verified> {
+    let (id, cfg, _) = mailbox_core::accounts::prepare(spec)?;
+    let password = spec
+        .password
+        .clone()
+        .filter(|p| !p.is_empty())
+        // The CLI will happily add an account and leave the credential for
+        // later, because `credential_command` and `MAILBOX_PASSWORD_*` are
+        // there for exactly that. Neither is reachable from a page, so an
+        // account added here without a password is one that can never work.
+        .ok_or_else(|| Error::usage("an account added from here needs a password"))?;
+
+    mailbox_core::accounts::verify(
+        &id,
+        &cfg,
+        &mailbox_core::imap::Credential::Password(password),
+        tracer.clone(),
+        VERIFY_TIMEOUT,
+    )
+}
+
+/// Why this server will not take a password.
+fn off_loopback() -> Error {
+    Error::usage(
+        "this server is not on loopback, and a password typed into it would cross the \
+         network in the clear. Add the account from `mailbox serve` on the machine \
+         itself, or from `mailbox accounts add` (§9).",
+    )
+}
+
+/// Adds an account (§9), from the page rather than from a terminal.
+///
+/// The one route here that writes the config. It answers with what
+/// `mailbox accounts add --json` answers with, because §4 allows exactly one
+/// contract and this is a second frontend for the same operation, not a
+/// second operation.
+///
+/// The password does not come back, is not written to the config, and is not
+/// traced: it goes to [`mailbox_core::accounts::add`], which hands it to the
+/// keychain and to this process's memory (§9).
+fn add_account(
+    request: &Request,
+    workspace: &Mutex<Workspace>,
+    session: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+    setup_allowed: bool,
+) -> Result<Response> {
+    if !setup_allowed {
+        return Err(off_loopback());
+    }
+
+    let form: SetupForm = serde_json::from_slice(&request.body)
+        .map_err(|e| Error::usage(format!("the request body is not an account: {e}")))?;
+    let spec = form.into_spec();
+
+    // Tried before it is written, which is the whole difference between this
+    // and the CLI's `accounts add`. There, a password that turns out to be
+    // wrong is fixed with `accounts edit`; here the person who filled the form
+    // in may have no terminal to run that from, so an account that does not
+    // work must never come into existence in the first place. The cost is one
+    // IMAP login, on the request — the same one the Test button spends.
+    try_settings(&spec, tracer)?;
+
+    let path = session
+        .config_path
+        .clone()
+        .unwrap_or_else(mailbox_core::paths::config_file);
+    let added = mailbox_core::accounts::add(&path, &spec)?;
+
+    // The reading handle was opened against a config without this account in
+    // it. Reopened here rather than left to the next request, so the listing
+    // the page loads immediately afterwards is the new account's and not an
+    // empty one.
+    if let Ok(reopened) = Workspace::open_or_empty(session, tracer.clone(), clock.clone()) {
+        *workspace.lock().unwrap() = reopened;
+    }
+
+    Ok(Response::json(200, &serde_json::to_value(added)?))
 }
 
 /// A message body, as a document of its own, for the interface to frame.

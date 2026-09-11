@@ -294,7 +294,7 @@ fn apply(ctx: &Ctx<'_>, payload: &Payload, mode: ApplyMode) -> Result<()> {
     for account in &payload.accounts {
         match &account.credential {
             Some(mailbox_core::pair::PairedCredential::Password { secret }) => {
-                if store_in_keychain(&account.id, secret) {
+                if mailbox_core::credentials::store_password(&account.id, &account.config, secret) {
                     stored.push(account.id.clone());
                 } else {
                     manual.push(account.id.clone());
@@ -432,33 +432,4 @@ fn load_config(ctx: &Ctx<'_>) -> Result<Config> {
         Some(path) => Config::load(path),
         None => Config::load_default(),
     }
-}
-
-/// Puts a password in the OS keychain, the way §9 resolves one.
-fn store_in_keychain(account_id: &str, secret: &str) -> bool {
-    use std::process::{Command, Stdio};
-
-    let mut child = match Command::new("secret-tool")
-        .args([
-            "store",
-            "--label=mailbox",
-            "service",
-            "mailbox",
-            "account",
-            account_id,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return false,
-    };
-    if let Some(stdin) = child.stdin.as_mut() {
-        if stdin.write_all(secret.as_bytes()).is_err() {
-            return false;
-        }
-    }
-    child.wait().map(|s| s.success()).unwrap_or(false)
 }

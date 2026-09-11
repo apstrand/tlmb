@@ -297,6 +297,175 @@ iframe.body {
     #back { display: none !important; }
 }
 
+/* ---- the first launch (§9) ---- */
+
+/* The guide takes the middle row the panes usually have. `main` is not merely
+ * covered but removed from the grid, so nothing behind it can be tabbed into
+ * while there is nothing there to read. */
+body[data-state="setup"] > main { display: none; }
+
+/* Every control in the top bar acts on mail: a search that can only return
+ * nothing, a Write that cannot send. The bar goes with them rather than
+ * staying as an empty strip above the guide. The status bar stays — it is
+ * where the address to open on a phone is. */
+body[data-state="setup"] > header { display: none; }
+
+/* With the top bar and the panes both gone, the guide is the row that has to
+ * grow. Restated rather than inherited: the default `auto 1fr auto` counts
+ * rows off the children that are left, which would hand the spare height to
+ * the status bar. */
+body[data-state="setup"] { grid-template-rows: 1fr auto; }
+
+/* `hidden` has to beat the `display` below it. The attribute's rule comes from
+ * the browser's own stylesheet and is less specific than an id, so without
+ * this the guide stays on screen underneath the mailbox once an account
+ * appears. */
+#setup[hidden] { display: none; }
+
+#setup {
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+}
+
+.setup-card {
+    max-width: 34rem;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1.4rem 1.6rem;
+}
+
+.setup-card h1 {
+    margin: 0 0 .6rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.setup-card p { margin: 0 0 .8rem; }
+
+.setup-card h1 + p { margin-top: 0; }
+
+/* The form. Labels above their fields rather than beside them, unlike the
+ * compose window's `.field`: this is filled in once, by someone who has not
+ * seen the interface before, and a boxed input that says what it is beats a
+ * dense row that saves a line. */
+.setup-field {
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+    margin-bottom: .8rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.setup-field label {
+    color: var(--text-dim);
+    font-size: 13px;
+}
+
+.setup-field input {
+    width: 100%;
+    padding: .45rem .6rem;
+    font: inherit;
+    color: inherit;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+}
+
+.setup-field input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    border-color: transparent;
+}
+
+.setup-field.narrow { flex: 0 0 6rem; }
+
+.setup-row { display: flex; gap: .6rem; }
+
+/* Same reason as `.field[hidden]`: `display: flex` beats the user agent's
+ * rule for the attribute, so hiding these needs saying twice. */
+#setup-servers[hidden],
+#setup-form[hidden],
+#setup-guide[hidden],
+#setup-error[hidden] { display: none; }
+
+#setup-servers {
+    padding-top: .2rem;
+    margin-top: .4rem;
+    border-top: 1px solid var(--line);
+}
+
+#setup-servers h2 {
+    margin: .9rem 0 .5rem;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.setup-check {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    margin-bottom: .8rem;
+    color: var(--text-dim);
+    font-size: 13px;
+}
+
+.setup-check input { margin: 0; }
+
+/* Same reason as `.field[hidden]` below: the flex `display` on `.setup-field`
+   beats the user agent's rule for the attribute. */
+#setup-smtp-user-field[hidden] { display: none; }
+
+.setup-actions {
+    display: flex;
+    gap: .6rem;
+    align-items: center;
+    margin-top: 1rem;
+}
+
+/* No empty line where a result has not been asked for yet. */
+#setup-status:empty { display: none; }
+
+.setup-error {
+    margin: .8rem 0 0;
+    color: var(--danger);
+    font-size: 13px;
+}
+
+.setup-command {
+    margin: 0 0 .6rem;
+    padding: .6rem .8rem;
+    background: var(--bg-sunken);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    /* The command is the point of the page, so it wraps rather than scrolls
+     * out of sight on a phone. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+.setup-command code,
+.setup-note code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+}
+
+.setup-note {
+    color: var(--text-dim);
+    font-size: 13px;
+}
+
+.setup-card p:last-child { margin-bottom: 0; }
+
 /* ---- the compose window (§7) ---- */
 
 dialog#compose-window {

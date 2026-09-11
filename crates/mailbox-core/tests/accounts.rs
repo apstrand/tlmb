@@ -37,6 +37,7 @@ struct Fx {
 
 impl Fx {
     fn new() -> Fx {
+        no_keychain();
         let dir = tempdir::TempDir::new();
         let path = dir.path().join("config.toml");
         Fx { _dir: dir, path }
@@ -45,6 +46,16 @@ impl Fx {
     fn config(&self) -> Config {
         Config::load(&self.path).expect("load the config back")
     }
+}
+
+/// Keeps the suite out of the developer's own keyring (§14).
+///
+/// `accounts::add` files a password where the platform can find it again, and
+/// this file adds accounts with passwords. Without this, running the tests
+/// leaves `hunter2` in a real keychain under a real-looking account name.
+fn no_keychain() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| std::env::set_var("MAILBOX_KEYCHAIN", "none"));
 }
 
 fn spec(address: &str) -> NewAccount {
@@ -464,4 +475,114 @@ mod oauth_client {
         assert_eq!(client.id, "public-client");
         assert_eq!(client.secret, None);
     }
+}
+
+// ---- trying an account before committing to it (§9) ----
+
+/// What the web interface's setup form does before it writes anything.
+///
+/// The point of the split is that this can fail without leaving an account
+/// behind: someone adding mail from a browser has no `accounts edit` to
+/// correct a typo with.
+#[test]
+fn verify_logs_in_to_a_server_that_answers() {
+    no_keychain();
+    let server = mailbox_l3::ImapServer::start(vec![mailbox_l3::Message::simple(
+        1,
+        "First",
+        "one@example.com",
+    )])
+    .expect("start the L3 IMAP server");
+
+    let cfg = plaintext_loopback(server.port());
+    let found = accounts::verify(
+        "test",
+        &cfg,
+        &mailbox_core::imap::Credential::Password("hunter2".into()),
+        mailbox_core::Tracer::disabled(),
+        std::time::Duration::from_secs(5),
+    )
+    .expect("the server answered and took the login");
+
+    // What the Test button reports. "It worked" is the least useful true
+    // thing to say: the folder count is how someone knows the login reached a
+    // mailbox and not merely a server, and the sync path answers "why is my
+    // mail slow" before it is asked (§5.3).
+    assert_eq!(found.server, format!("127.0.0.1:{}", server.port()));
+    assert_eq!(found.login_user, "peter@example.com");
+    assert!(found.folders > 0, "no folders came back: {found:?}");
+    assert!(
+        !found.capabilities.is_empty(),
+        "no capabilities came back: {found:?}"
+    );
+    assert!(
+        ["qresync", "condstore", "full-listing"].contains(&found.sync_path.as_str()),
+        "`{}` is not one of §5.3's paths",
+        found.sync_path
+    );
+}
+
+/// A port with nothing behind it is the common shape of a mistyped host, and
+/// it has to come back as an error rather than as a written account.
+#[test]
+fn verify_fails_when_nothing_is_listening() {
+    no_keychain();
+    // Bound and dropped, so the port is one nothing can have taken since.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.local_addr().expect("addr").port()
+    };
+
+    let error = accounts::verify(
+        "test",
+        &plaintext_loopback(port),
+        &mailbox_core::imap::Credential::Password("hunter2".into()),
+        mailbox_core::Tracer::disabled(),
+        std::time::Duration::from_secs(5),
+    )
+    .expect_err("nothing is listening there");
+    assert!(
+        matches!(
+            error,
+            mailbox_core::error::Error::Network(_) | mailbox_core::error::Error::Timeout(_)
+        ),
+        "a closed port is a network error, not {error:?}"
+    );
+}
+
+/// Loopback and plaintext, which §9 allows for exactly this host.
+fn plaintext_loopback(port: u16) -> mailbox_core::config::AccountConfig {
+    mailbox_core::config::AccountConfig {
+        address: "peter@example.com".into(),
+        imap_host: Some("127.0.0.1".into()),
+        imap_port: Some(port),
+        imap_security: Some("none".into()),
+        require_tls: false,
+        ..Default::default()
+    }
+}
+
+/// With no keychain to file it in, `add` says so rather than implying the
+/// password is safe for next time.
+#[test]
+fn a_password_with_nowhere_durable_to_go_is_reported_as_such() {
+    let fx = Fx::new();
+    let added = accounts::add(
+        &fx.path,
+        &NewAccount {
+            password: Some("hunter2".into()),
+            ..spec("peter@gmail.com")
+        },
+    )
+    .expect("add");
+
+    let said = added.credential.as_deref().unwrap_or_default();
+    assert!(
+        said.contains("this session only"),
+        "the caller cannot tell the user the password will not survive a restart: {said:?}"
+    );
+    assert!(
+        said.contains(mailbox_core::credentials::keychain_name()),
+        "the message does not name the place it failed to reach: {said:?}"
+    );
 }

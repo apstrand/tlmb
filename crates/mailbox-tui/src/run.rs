@@ -43,8 +43,11 @@ const EXTERNAL_CHECK: Duration = Duration::from_secs(1);
 
 /// Runs the interface until the user quits.
 pub fn run(opts: SessionOptions, tracer: Tracer, clock: Clock) -> Result<()> {
-    let mut workspace = Workspace::open(&opts, tracer.clone(), clock.clone())?;
-    let config = workspace.primary()?.config.clone();
+    // Empty is a valid mailbox: §9's setup is one line, and an interface that
+    // refused to start until it had been run is an interface the line cannot
+    // be read from. The index draws the guide instead (see `ui::draw_setup`).
+    let mut workspace = Workspace::open_or_empty(&opts, tracer.clone(), clock.clone())?;
+    let config = workspace.config().clone();
     let (keymap, unknown) = Keymap::from_config(&config);
 
     let mut app = App::new();
@@ -146,6 +149,18 @@ fn event_loop(
         // and only when a second has passed since the last look.
         if last_checked.elapsed() >= EXTERNAL_CHECK {
             last_checked = Instant::now();
+
+            // With nothing configured, what this is waiting for is the account
+            // itself — added by `mailbox accounts add` in another terminal.
+            // The change feed cannot report that, because there is no store
+            // for it to be reported in; the config is what has to be re-read.
+            if workspace.is_empty() && reopen_if_configured(workspace, opts, tracer, clock) {
+                seen = latest_change(workspace);
+                app.status = "account added".to_string();
+                app.dirty = true;
+                needs_redraw = true;
+            }
+
             let now = latest_change(workspace);
             if now != seen {
                 seen = now;
@@ -350,6 +365,29 @@ fn as_prefix_search(text: &str) -> String {
     }
 }
 
+/// Reopens the workspace once an account exists, and says whether one did.
+///
+/// Only ever called from the empty state, so this costs a config read a second
+/// on the first-launch screen and nothing at all afterwards.
+fn reopen_if_configured(
+    workspace: &mut Workspace,
+    opts: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+) -> bool {
+    match Workspace::open_or_empty(opts, tracer.clone(), clock.clone()) {
+        Ok(reopened) if !reopened.is_empty() => {
+            *workspace = reopened;
+            true
+        }
+        // Still nothing, or a config half-written by whatever is editing it.
+        // Either way the guide stays up and this looks again in a second,
+        // which is a better answer than tearing the interface down over a
+        // file that is about to be valid.
+        _ => false,
+    }
+}
+
 /// Where every account's change feed stands, as one comparable value.
 ///
 /// Errors collapse to zero rather than propagating: this is a "has anything
@@ -401,6 +439,13 @@ fn apply_effect(
         Effect::None => Ok(false),
         Effect::Quit => Ok(true),
         Effect::StartSync => {
+            // There is nothing to sync with, and the worker would come back a
+            // second later with the same news in less useful words.
+            if app.no_accounts {
+                app.status =
+                    "no account yet — run `mailbox accounts add you@example.com`".to_string();
+                return Ok(false);
+            }
             if app.syncing {
                 return Ok(false);
             }

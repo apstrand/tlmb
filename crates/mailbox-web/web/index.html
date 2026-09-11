@@ -17,7 +17,7 @@
 -->
 <!-- Read by the module below. A `data-` attribute rather than an inline
      script, so the page's policy needs no `unsafe-inline` for scripts. -->
-<div id="config" data-token="{{TOKEN}}" hidden></div>
+<div id="config" data-token="{{TOKEN}}" data-setup="{{SETUP}}" hidden></div>
 
 <header class="bar">
   <button id="back" class="icon" aria-label="Back to the list" hidden>&#8592;</button>
@@ -30,6 +30,126 @@
   <button id="sync" class="text">Sync</button>
   <span id="spinner" class="spinner" hidden aria-hidden="true"></span>
 </header>
+
+<!-- The first-launch state (§9). Not an error page: `serve` starts fine with
+     no account, and this is the one thing the window has to say until one
+     exists.
+
+     A form rather than a line to type, because the two interfaces served from
+     here — a browser tab and the desktop window — are the ones whose users may
+     have no terminal at all. It is the same flow as the iOS setup screen, for
+     the same reason and against the same core call: an address, a password,
+     and servers that the built-in provider table fills in.
+
+     The guide beside it is the fallback for a server bound off loopback, where
+     a password would cross the network in the clear (see `setup_allowed`). -->
+<section id="setup" hidden aria-label="Add an account">
+  <div class="setup-card">
+
+    <form id="setup-form" hidden autocomplete="on">
+      <h1>Add your mail account</h1>
+
+      <div class="setup-field">
+        <label for="setup-address">Address</label>
+        <input id="setup-address" name="username" type="email" autocomplete="username"
+               spellcheck="false" autocapitalize="none" placeholder="you@example.com"
+               required>
+      </div>
+
+      <div class="setup-field">
+        <label for="setup-password">Password</label>
+        <input id="setup-password" name="password" type="password"
+               autocomplete="current-password" required>
+      </div>
+
+      <p id="setup-hint" class="setup-note">
+        The password is checked against the mail server before the account is
+        saved, and then goes to this machine&rsquo;s keychain &mdash; never
+        into the config file.
+      </p>
+
+      <!-- Folded away the moment the built-in table recognises the address,
+           and open otherwise. §9 promises manual overrides that are never
+           required, and every field here means "the placeholder" when it is
+           left empty. -->
+      <section id="setup-servers">
+        <h2>IMAP</h2>
+        <div class="setup-row">
+          <div class="setup-field">
+            <label for="setup-imap-host">Host</label>
+            <input id="setup-imap-host" type="text" spellcheck="false"
+                   autocapitalize="none" placeholder="imap.example.com">
+          </div>
+          <div class="setup-field narrow">
+            <label for="setup-imap-port">Port</label>
+            <input id="setup-imap-port" type="number" inputmode="numeric"
+                   min="1" max="65535" placeholder="993">
+          </div>
+        </div>
+        <div class="setup-field">
+          <label for="setup-imap-user">Username</label>
+          <input id="setup-imap-user" type="text" spellcheck="false"
+                 autocapitalize="none" autocomplete="off" placeholder="Your address">
+        </div>
+
+        <h2>SMTP</h2>
+        <div class="setup-row">
+          <div class="setup-field">
+            <label for="setup-smtp-host">Host</label>
+            <input id="setup-smtp-host" type="text" spellcheck="false"
+                   autocapitalize="none" placeholder="smtp.example.com">
+          </div>
+          <div class="setup-field narrow">
+            <label for="setup-smtp-port">Port</label>
+            <input id="setup-smtp-port" type="number" inputmode="numeric"
+                   min="1" max="65535" placeholder="587">
+          </div>
+        </div>
+        <label class="setup-check">
+          <input id="setup-same-user" type="checkbox" checked>
+          Same username as IMAP
+        </label>
+        <div class="setup-field" id="setup-smtp-user-field" hidden>
+          <label for="setup-smtp-user">SMTP username</label>
+          <input id="setup-smtp-user" type="text" spellcheck="false"
+                 autocapitalize="none" autocomplete="off" placeholder="Your address">
+        </div>
+
+        <div class="setup-actions">
+          <button type="button" id="setup-discover">Discover servers</button>
+          <span id="setup-discover-note" class="setup-note"></span>
+        </div>
+      </section>
+
+      <div class="setup-actions">
+        <button type="submit" id="setup-add" class="primary">Add account</button>
+        <!-- The same connection Add makes, without the writing. Add will not
+             save an account that fails this, so the button is not a gate — it
+             is a way to find out which field is wrong before committing to
+             anything. -->
+        <button type="button" id="setup-test">Test</button>
+        <button type="button" id="setup-servers-toggle">Hide servers</button>
+      </div>
+    </form>
+
+    <!-- No form here: this server is reachable from the network, and a
+         password typed into a plain-HTTP page on it would be readable by
+         anyone on the way. -->
+    <div id="setup-guide" hidden>
+      <h1>No account yet</h1>
+      <p>This mailbox has no account, and this page is being served over the
+         network — so it will not take a password. Add the account on the
+         machine running <code>mailbox</code>, either in its own browser
+         window or with:</p>
+      <pre class="setup-command"><code id="setup-command">mailbox accounts add you@example.com</code></pre>
+      <p class="setup-note">Already have mailbox set up on another device?
+         <code>mailbox pair</code> copies its accounts across.</p>
+    </div>
+
+    <p id="setup-status" class="setup-note" role="status"></p>
+    <p id="setup-error" class="setup-error" role="alert" hidden></p>
+  </div>
+</section>
 
 <main>
   <nav id="folders" aria-label="Folders">

@@ -59,12 +59,29 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
+/// What [`Error::no_accounts`] puts in the `what` field.
+///
+/// Named because both the constructor and the hint have to agree on it: the
+/// hint is the difference between "no such account" and knowing which command
+/// makes one.
+const NO_ACCOUNTS: &str = "none configured";
+
 impl Error {
     pub fn not_found(kind: &'static str, what: impl Into<String>) -> Error {
         Error::NotFound {
             kind,
             what: what.into(),
         }
+    }
+
+    /// Nothing is configured at all — the first-launch state, as distinct
+    /// from a named account that does not exist.
+    ///
+    /// Reached by commands that act on mail and so have nowhere to put a
+    /// setup guide. The interfaces that *are* a place — `serve`, `gui`, the
+    /// TUI — open an empty workspace instead and draw the guide.
+    pub fn no_accounts() -> Error {
+        Error::not_found("account", NO_ACCOUNTS)
     }
 
     pub fn usage(msg: impl Into<String>) -> Error {
@@ -100,6 +117,14 @@ impl Error {
     /// to suggest — a wrong hint is worse than none.
     pub fn hint(&self) -> Option<String> {
         match self {
+            Error::NotFound {
+                kind: "account",
+                what,
+            } if what == NO_ACCOUNTS => Some(
+                "run `mailbox accounts add you@example.com`, or `mailbox pair` to copy an \
+                 account from another device"
+                    .into(),
+            ),
             Error::Ambiguous { .. } => {
                 Some("give more of the id, or pass the full id from `--json`".into())
             }

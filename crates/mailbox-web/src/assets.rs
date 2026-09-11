@@ -18,13 +18,20 @@ const SCRIPT: &str = include_str!("../web/mailbox.js");
 
 pub const UNAUTHORIZED: &str = include_str!("../web/unauthorized.html");
 
-pub fn serve(path: &str, token: Option<&str>) -> Response {
+pub fn serve(path: &str, token: Option<&str>, setup_allowed: bool) -> Response {
     match path {
         "/" | "/index.html" => {
             // The token is written into the page rather than left in the URL or
             // read from the cookie: the cookie is `HttpOnly` by design, and the
             // API wants the token in a header (see `server`).
-            let page = INDEX.replace("{{TOKEN}}", token.unwrap_or(""));
+            //
+            // Whether the setup form is offered is decided here too, rather
+            // than by the page trying a write to find out: a form that appears
+            // and then refuses on submit is worse than one that was never
+            // shown, and the answer depends on how this server was bound.
+            let page = INDEX
+                .replace("{{TOKEN}}", token.unwrap_or(""))
+                .replace("{{SETUP}}", if setup_allowed { "1" } else { "" });
             Response::new(200, "text/html; charset=utf-8", page.into_bytes())
                 // The page loads nothing from anywhere else, and says so. A
                 // sender's HTML renders in a sandboxed frame under its own,
@@ -75,6 +82,55 @@ mod tests {
         assert!(
             js.contains("multi-account"),
             "§7's per-account colour has nowhere to land"
+        );
+    }
+
+    /// `serve` and `gui` start whether or not an account exists (§9), and this
+    /// is the only page either of them has — so the way to add one is carried
+    /// here or nowhere. A browser tab and the desktop window are exactly the
+    /// two places where there may be no terminal.
+    #[test]
+    fn the_page_carries_the_first_launch_setup() {
+        assert!(
+            super::INDEX.contains(r#"id="setup-form""#),
+            "the page has no way to add an account"
+        );
+        for field in ["setup-address", "setup-password", "setup-imap-host"] {
+            assert!(super::INDEX.contains(field), "the form has no {field}");
+        }
+        assert!(
+            super::INDEX.contains("mailbox accounts add"),
+            "the off-loopback fallback does not say what to type instead"
+        );
+        assert!(
+            super::SCRIPT.contains("/api/accounts"),
+            "the client never asks whether an account exists, so it cannot \
+             tell an empty mailbox from an unconfigured one"
+        );
+        assert!(
+            super::INDEX.contains(r#"id="setup-test""#),
+            "the form has no way to try the settings before committing to them"
+        );
+        for route in ["/api/providers", "/api/discover", "/api/accounts/test"] {
+            assert!(
+                super::SCRIPT.contains(route),
+                "the form never asks {route}, so it cannot fill itself in"
+            );
+        }
+    }
+
+    /// The form is offered or withheld here, once, rather than by the page
+    /// trying a write to find out.
+    #[test]
+    fn the_page_is_told_whether_it_may_add_an_account() {
+        let allowed = super::serve("/", Some("t"), true);
+        let refused = super::serve("/", Some("t"), false);
+
+        let text = |r: &crate::http::Response| String::from_utf8_lossy(&r.body).into_owned();
+        assert!(text(&allowed).contains(r#"data-setup="1""#));
+        assert!(
+            text(&refused).contains(r#"data-setup="""#),
+            "a server that would refuse the write still offered the form"
         );
     }
 }

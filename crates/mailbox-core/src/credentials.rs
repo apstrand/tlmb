@@ -19,9 +19,17 @@
 //!    the delegated command is the same one a user can run by hand to check
 //!    what we will see.
 //!
-//! Native keychain *storage* is the frontend's job: the iOS app writes to
-//! the Keychain and calls [`install`] on launch. Until a secret is resolvable
-//! a store fails with `auth_failed` and a hint, which is the honest outcome.
+//! Where the platform has a keychain and the frontend has no keystore API of
+//! its own — the desktop — [`store_password`] is how a password given to
+//! `accounts add`, to the web interface's setup form, or to pairing becomes
+//! durable. iOS does its own storage through the Keychain and calls
+//! [`install`] on launch. Until a secret is resolvable a store fails with
+//! `auth_failed` and a hint, which is the honest outcome.
+//!
+//! `MAILBOX_KEYCHAIN=none` takes the keychain out of the chain entirely, for
+//! reads and writes alike. That is what keeps the suite off the desktop (§14):
+//! without it, running the tests files every fixture password in the
+//! developer's own keyring.
 
 use std::collections::HashMap;
 use std::process::Command;
@@ -103,6 +111,15 @@ pub fn env_key(account_id: &str) -> String {
 
 fn env_secret(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+/// Whether the platform keychain may be consulted or written at all.
+///
+/// Named like [`crate::open`]'s `MAILBOX_OPENER` and §11's `MAILBOX_NOTIFIER`,
+/// and for the same reason: this reaches out of the process at something the
+/// user owns, so there has to be a way to say "not here".
+fn keychain_enabled() -> bool {
+    !matches!(std::env::var("MAILBOX_KEYCHAIN").as_deref(), Ok("none"))
 }
 
 /// An OAuth2 access token, refreshed when the cached one has expired (§9).
@@ -198,6 +215,9 @@ pub fn store_refresh_token(account_id: &str, token: &str) -> Result<bool> {
 
 /// Reads a secret from the platform keychain by service and account.
 fn keychain_get(service: &str, account_id: &str) -> Option<String> {
+    if !keychain_enabled() {
+        return None;
+    }
     let (program, args) = if cfg!(target_os = "macos") {
         (
             "security",
@@ -231,41 +251,112 @@ fn keychain_get(service: &str, account_id: &str) -> Option<String> {
     (!secret.is_empty()).then_some(secret)
 }
 
-/// Writes a secret to the platform keychain. `false` when there is none.
+/// Writes a refresh token to the platform keychain. `false` when there is none.
 fn keychain_store(service: &str, account_id: &str, secret: &str) -> bool {
-    use std::io::Write;
-    use std::process::Stdio;
-
+    if !keychain_enabled() {
+        return false;
+    }
     if cfg!(target_os = "macos") {
         // `-U` updates an existing entry rather than failing on it. The secret
         // goes in as an argument here because `security` has no stdin form —
         // one of the reasons `secret-tool` is preferred where both exist.
-        return Command::new("security")
-            .args([
-                "add-generic-password",
-                "-U",
-                "-s",
-                service,
-                "-a",
-                account_id,
-                "-w",
-                secret,
-            ])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        return security(&[
+            "add-generic-password",
+            "-U",
+            "-s",
+            service,
+            "-a",
+            account_id,
+            "-w",
+            secret,
+        ]);
     }
+    secret_tool_store(
+        &format!("mailbox OAuth2 ({account_id})"),
+        service,
+        account_id,
+        secret,
+    )
+}
 
-    // stdin, so the token never appears in `ps` or in the shell history.
+/// The keychain service name account passwords are filed under on Linux.
+///
+/// It has to match what [`keychain_lookup`] reads, which is the whole reason
+/// this is one constant rather than a literal at each end.
+const PASSWORD_SERVICE: &str = "mailbox";
+
+/// Files an account's password where [`resolve`] will find it again.
+///
+/// The durable half of [`install`]. Without it a password given to
+/// `accounts add` or to the web interface's setup form lives in this
+/// process's memory and nowhere else, so the account works until the program
+/// exits and is broken afterwards — which is a trap for anyone who cannot
+/// reach a terminal to fix it.
+///
+/// Returns whether it went in. `false` means no keychain (a headless box, a
+/// locked keyring, `MAILBOX_KEYCHAIN=none`) and is not an error: the caller
+/// says so, and §9's other routes — `credential_command`, `MAILBOX_PASSWORD_*`
+/// — are still open.
+pub fn store_password(account_id: &str, cfg: &crate::config::AccountConfig, secret: &str) -> bool {
+    if !keychain_enabled() || secret.is_empty() {
+        return false;
+    }
+    if cfg!(target_os = "macos") {
+        // The *internet* password form, keyed by host and login, because that
+        // is the form `keychain_lookup` reads — and the form the user sees in
+        // Keychain Access next to every other entry for that server.
+        return security(&[
+            "add-internet-password",
+            "-U",
+            "-s",
+            cfg.imap_host.as_deref().unwrap_or_default(),
+            "-a",
+            cfg.login_user(),
+            "-w",
+            secret,
+        ]);
+    }
+    secret_tool_store(
+        &format!("mailbox ({account_id})"),
+        PASSWORD_SERVICE,
+        account_id,
+        secret,
+    )
+}
+
+/// What to call the place [`store_password`] puts things, for a caller that
+/// has to tell someone where their password went.
+///
+/// Named concretely rather than "the keychain", because "the keychain" is not
+/// somewhere anyone can go and look. These are: one is a tab in Keychain
+/// Access, the other is a row in Seahorse and a `secret-tool lookup` away.
+pub fn keychain_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "the macOS Keychain"
+    } else {
+        "the login keyring (service \"mailbox\")"
+    }
+}
+
+fn security(args: &[&str]) -> bool {
+    Command::new("security")
+        .args(args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// `secret-tool store`, with the secret on stdin.
+///
+/// stdin rather than an argument, so it never appears in `ps` or in a shell
+/// history — the reason `secret-tool` is preferred where both tools exist.
+fn secret_tool_store(label: &str, service: &str, account_id: &str, secret: &str) -> bool {
+    use std::io::Write;
+    use std::process::Stdio;
+
     let Ok(mut child) = Command::new("secret-tool")
         .args([
-            "store",
-            "--label",
-            &format!("mailbox OAuth2 ({account_id})"),
-            "service",
-            service,
-            "account",
-            account_id,
+            "store", "--label", label, "service", service, "account", account_id,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -332,6 +423,9 @@ fn run_credential_command(cmd: &str) -> Result<String> {
 /// missing: this is one step of a chain, and a missing keychain is not a
 /// failure until every step has been tried.
 fn keychain_lookup(account_id: &str, cfg: &crate::config::AccountConfig) -> Option<String> {
+    if !keychain_enabled() {
+        return None;
+    }
     let attempts: Vec<(&str, Vec<String>)> = if cfg!(target_os = "macos") {
         vec![(
             "security",
@@ -350,7 +444,7 @@ fn keychain_lookup(account_id: &str, cfg: &crate::config::AccountConfig) -> Opti
             vec![
                 "lookup".into(),
                 "service".into(),
-                "mailbox".into(),
+                PASSWORD_SERVICE.into(),
                 "account".into(),
                 account_id.to_string(),
             ],

@@ -41,6 +41,13 @@ impl Ctx<'_> {
         Workspace::open(&self.opts, self.tracer.clone(), self.clock.clone())
     }
 
+    /// The same, for the commands whose answer with nothing configured is
+    /// "nothing" rather than an error — `accounts` being the one that has to
+    /// work before there is an account to list.
+    pub(crate) fn workspace_or_empty(&self) -> Result<Workspace> {
+        Workspace::open_or_empty(&self.opts, self.tracer.clone(), self.clock.clone())
+    }
+
     fn list_options(&self, sort: Sort, with_total: bool) -> ListOptions {
         ListOptions {
             limit: self.global.limit.unwrap_or(50),
@@ -1022,7 +1029,7 @@ fn session_rng() -> mailbox_core::Rng {
 }
 
 fn accounts_list(ctx: &Ctx<'_>) -> Result<()> {
-    let list = ctx.workspace()?.accounts()?;
+    let list = ctx.workspace_or_empty()?.accounts()?;
     match ctx.out.mode {
         crate::output::Mode::Json => ctx.out.reply("accounts", &list)?,
         crate::output::Mode::Ndjson => ctx.out.ndjson_list("accounts", &list.accounts, None)?,
@@ -1055,7 +1062,9 @@ fn accounts_list(ctx: &Ctx<'_>) -> Result<()> {
                 ]);
             }
             if table.is_empty() {
-                ctx.out.print(ctx.out.dim("no accounts configured"));
+                ctx.out.print(ctx.out.dim(
+                    "no accounts configured — `mailbox accounts add you@example.com` adds one",
+                ));
             } else {
                 ctx.out.print(table.render(ctx.out));
             }

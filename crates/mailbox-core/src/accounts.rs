@@ -61,8 +61,14 @@ pub struct Added {
     pub credential: Option<String>,
 }
 
-/// Adds an account to the config at `path`.
-pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
+/// The id and config `add` would write, without writing anything.
+///
+/// Split out because the setup form in the web interface has to be able to
+/// *try* an account before committing to it (see [`verify`]): an account
+/// written with a password that does not work is one that whoever filled the
+/// form in cannot remove again without a terminal — which is exactly the
+/// person who has no terminal.
+pub fn prepare(spec: &NewAccount) -> Result<(String, AccountConfig, bool)> {
     let address = spec.address.trim().to_string();
     if address.is_empty() {
         return Err(Error::usage("an account needs an address"));
@@ -74,15 +80,6 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
         "" => id_from_address(&address),
         given => normalize_id(given)?,
     };
-
-    // Loaded before anything else fails, so a broken config is reported as
-    // itself rather than as a failure to add.
-    let mut config = load_or_empty(path)?;
-    if config.accounts.contains_key(&id) {
-        return Err(Error::usage(format!(
-            "account `{id}` already exists; pass an id to add a second one for the same address"
-        )));
-    }
 
     let hints = crate::providers::hints_for(&address);
     let discovered = hints.is_some() && spec.imap_host.is_none();
@@ -131,6 +128,91 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
         )));
     }
     validate(&cfg)?;
+    Ok((id, cfg, discovered))
+}
+
+/// What a successful [`verify`] found, for the caller to report.
+///
+/// The same three things `accounts test` prints, because they are the three
+/// that answer the question someone asks after "did it work": what the server
+/// offers, how much mail is behind it, and — since §5.3's fast paths are the
+/// difference between a sync that takes a second and one that takes a minute
+/// — which path this account will sync by.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Verified {
+    pub server: String,
+    pub login_user: String,
+    pub folders: usize,
+    pub capabilities: Vec<String>,
+    pub sync_path: String,
+}
+
+/// Connects to an account's IMAP server, authenticates, and looks around.
+///
+/// The check `accounts test` makes, available *before* the account exists —
+/// which is what lets the web interface's setup form offer a Test button, and
+/// what lets its Add refuse to write an account that could not have worked.
+///
+/// The connection is closed again immediately. Nothing is stored, and the
+/// account need not be in any config.
+pub fn verify(
+    id: &str,
+    cfg: &AccountConfig,
+    credential: &crate::imap::Credential,
+    tracer: crate::Tracer,
+    timeout: std::time::Duration,
+) -> Result<Verified> {
+    let host = cfg
+        .imap_host
+        .clone()
+        .ok_or_else(|| Error::usage(format!("account `{id}` has no imap_host")))?;
+
+    let conn = crate::imap::ConnectionConfig {
+        host: host.clone(),
+        port: cfg.port(),
+        security: cfg.security(),
+        // The same both-halves rule `Session::connect` applies: a config that
+        // turns TLS off for a public host still gets TLS (§9).
+        require_tls: cfg.require_tls || !is_loopback(&host),
+        timeout,
+    };
+
+    let mut client = crate::imap::Client::connect(&conn, tracer)?;
+    client.login(cfg.login_user(), credential)?;
+
+    let folders = client.list_folders()?.len();
+    let capabilities: Vec<String> = client.capabilities().iter().cloned().collect();
+    let qresync = client.qresync();
+    let _ = client.logout();
+
+    Ok(Verified {
+        server: format!("{host}:{}", cfg.port()),
+        login_user: cfg.login_user().to_string(),
+        folders,
+        sync_path: if qresync {
+            "qresync".to_string()
+        } else if capabilities.iter().any(|c| c == "CONDSTORE") {
+            "condstore".to_string()
+        } else {
+            "full-listing".to_string()
+        },
+        capabilities,
+    })
+}
+
+/// Adds an account to the config at `path`.
+pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
+    let (id, cfg, discovered) = prepare(spec)?;
+
+    // Loaded before anything else fails, so a broken config is reported as
+    // itself rather than as a failure to add.
+    let mut config = load_or_empty(path)?;
+    if config.accounts.contains_key(&id) {
+        return Err(Error::usage(format!(
+            "account `{id}` already exists; pass an id to add a second one for the same address"
+        )));
+    }
+    let address = cfg.address.clone();
 
     config.accounts.insert(id.clone(), cfg);
     config.save(path)?;
@@ -138,8 +220,7 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
     // Only after the config is written: a credential installed for an account
     // that failed to save would be a secret held for nothing.
     let credential = if let Some(password) = spec.password.clone().filter(|p| !p.is_empty()) {
-        crate::credentials::install(&id, crate::imap::Credential::Password(password));
-        Some("installed for this process".to_string())
+        Some(remember_password(&id, config.account(&id)?, &password))
     } else if spec.credential_command.is_some() {
         Some("credential_command".to_string())
     } else if spec.oauth_provider.is_some() {
@@ -154,6 +235,23 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
         discovered,
         credential,
     })
+}
+
+/// Holds a password for this process, and durably where the platform allows.
+///
+/// Both halves, always. The keychain is what makes the account still work
+/// tomorrow; the in-process copy is what makes it work *now*, before anything
+/// has re-read the keychain, and on the machines where there is no keychain to
+/// read. The returned string is what the caller tells the user, and the
+/// difference matters to them: one of these outcomes survives a restart.
+fn remember_password(id: &str, cfg: &AccountConfig, password: &str) -> String {
+    crate::credentials::install(id, crate::imap::Credential::Password(password.to_string()));
+    let store = crate::credentials::keychain_name();
+    if crate::credentials::store_password(id, cfg, password) {
+        format!("stored in {store}")
+    } else {
+        format!("installed for this session only — {store} did not take it")
+    }
 }
 
 /// Changes fields on an existing account. `None` leaves a field alone.
@@ -195,7 +293,7 @@ pub fn edit(path: &Path, id: &str, spec: &NewAccount) -> Result<AccountConfig> {
     config.save(path)?;
 
     if let Some(password) = spec.password.clone().filter(|p| !p.is_empty()) {
-        crate::credentials::install(id, crate::imap::Credential::Password(password));
+        remember_password(id, &updated, &password);
     }
     Ok(updated)
 }

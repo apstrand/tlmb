@@ -83,6 +83,9 @@ impl Device {
             // Nothing here may put a popup on the desktop of
             // whoever ran the suite (§11).
             .env("MAILBOX_NOTIFIER", "none")
+            // And out of the developer's keyring: adding an account files its
+            // password where the platform can find it again (§9, §14).
+            .env("MAILBOX_KEYCHAIN", "none")
             // The sending device resolves credentials from the environment
             // (§9), which is what makes this testable without a keychain.
             .env("MAILBOX_PASSWORD_WORK", "work-secret")

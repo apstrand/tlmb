@@ -98,7 +98,7 @@ impl Mailbox {
         let guard = self.lock()?;
         match guard.as_ref() {
             Some(ws) => f(ws),
-            None => Err(Error::not_found("account", "none configured")),
+            None => Err(Error::no_accounts()),
         }
     }
 
@@ -106,7 +106,7 @@ impl Mailbox {
         let mut guard = self.lock()?;
         match guard.as_mut() {
             Some(ws) => f(ws),
-            None => Err(Error::not_found("account", "none configured")),
+            None => Err(Error::no_accounts()),
         }
     }
 

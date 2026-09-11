@@ -56,6 +56,9 @@ impl World {
             // Nothing here may put a popup on the desktop of
             // whoever ran the suite (§11).
             .env("MAILBOX_NOTIFIER", "none")
+            // And out of the developer's keyring: adding an account files its
+            // password where the platform can find it again (§9, §14).
+            .env("MAILBOX_KEYCHAIN", "none")
             // Nothing here may put a consent screen on the desktop of whoever
             // is running `cargo test`.
             .env("MAILBOX_OPENER", "/bin/true")
@@ -260,8 +263,16 @@ fn removing_reports_the_store_it_did_not_delete() {
         "a mailbox's cache is not something to lose to a mistyped id"
     );
 
+    // Listing nothing is an answer, not a failure: this is the same state a
+    // fresh install is in, and `serve`, `gui`, and the TUI all come up in it
+    // to show the guide for adding one.
     let listed = w.run(&["--json", "accounts", "list"]);
-    assert_ne!(listed.status, 0, "there are no accounts left");
+    assert_eq!(listed.status, 0, "{}", listed.stderr);
+    assert_eq!(
+        listed.json()["accounts"].as_array().map(Vec::len),
+        Some(0),
+        "there are no accounts left"
+    );
 }
 
 #[test]

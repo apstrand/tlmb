@@ -106,7 +106,7 @@ impl Session {
             }
             None => config
                 .default_account()
-                .map_err(|_| Error::not_found("account", "none configured"))?
+                .map_err(|_| Error::no_accounts())?
                 .to_string(),
         };
 
