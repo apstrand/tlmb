@@ -367,6 +367,27 @@ impl Mailbox {
         }
     }
 
+    /// Looks up an unknown domain's servers on the network (§9). Unlike
+    /// `providers` this blocks on DNS, so the shell calls it from a worker and
+    /// behind an explicit action rather than on every keystroke.
+    pub fn discover(&self, address: &str) -> Result<Value> {
+        let d = providers::discover(address)?;
+        Ok(json!({
+            "known": true,
+            "imap_host": d.hints.imap_host,
+            "imap_port": d.hints.imap_port,
+            "imap_security": d.hints.imap_security,
+            "smtp_host": d.hints.smtp_host,
+            "smtp_port": d.hints.smtp_port,
+            "smtp_security": d.hints.smtp_security,
+            "imap_source": d.imap_source.as_str(),
+            "smtp_source": d.smtp_source.as_str(),
+            // One flag, because the question a setup screen asks is "may I
+            // present this as found, or must I say it is a guess?".
+            "authoritative": d.imap_source.is_authoritative() && d.smtp_source.is_authoritative(),
+        }))
+    }
+
     /// Dispatches a named command with a JSON argument object. This is the
     /// C ABI's one function, and it is also what a test can call without
     /// going through `extern "C"`.
@@ -477,6 +498,10 @@ impl Mailbox {
             "providers" => {
                 let a: AddressArgs = serde_from_value(args)?;
                 Ok(("accounts", self.providers(&a.address)?))
+            }
+            "discover" => {
+                let a: AddressArgs = serde_from_value(args)?;
+                Ok(("accounts", self.discover(&a.address)?))
             }
             other => Err(Error::usage(format!("unknown method `{other}`"))),
         }

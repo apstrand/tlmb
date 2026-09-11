@@ -215,4 +215,21 @@ struct ProviderHints: Decodable {
     var smtpHost: String?
     var smtpPort: UInt16?
     var smtpSecurity: String?
+    /// `table` | `srv` | `mx` | `guess`, present only on a `discover` reply.
+    var imapSource: String?
+    var smtpSource: String?
+    /// Whether the domain published these settings itself, as opposed to their
+    /// being assembled from its MX or from the conventional names.
+    var authoritative: Bool?
+
+    /// What the setup screen tells the user about where these came from.
+    var provenance: String? {
+        switch imapSource {
+        case "table": "Server settings for this provider are built in."
+        case "srv": "Found in the domain's own DNS records."
+        case "mx": "Guessed from the domain's mail exchanger — check them."
+        case "guess": "No settings published; these are the usual names — check them."
+        default: nil
+        }
+    }
 }

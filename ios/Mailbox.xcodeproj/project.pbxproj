@@ -307,7 +307,7 @@
 					"-lz",
 					"-liconv",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = se.nena.mailbox;
+				PRODUCT_BUNDLE_IDENTIFIER = com.thelastmailbox.ios;
 				PRODUCT_NAME = mailbox;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -342,7 +342,7 @@
 					"-lz",
 					"-liconv",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = se.nena.mailbox;
+				PRODUCT_BUNDLE_IDENTIFIER = com.thelastmailbox.ios;
 				PRODUCT_NAME = mailbox;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;

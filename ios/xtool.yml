@@ -1,0 +1,5 @@
+version: 1
+bundleID: com.thelastmailbox.ios
+product: mailbox
+infoPath: xtool-Info.plist
+iconPath: Mailbox/Assets.xcassets/AppIcon.appiconset/AppIcon.png

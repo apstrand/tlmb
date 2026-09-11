@@ -31,6 +31,30 @@ xcodebuild -project ios/Mailbox.xcodeproj -scheme mailbox \
   -configuration Debug build
 ```
 
+## Building on Linux with xtool
+
+`Package.swift` + `xtool.yml` describe the same app as the Xcode project, for
+[xtool](https://github.com/xtool-org/xtool). SwiftPM has no bridging header, so
+`MailboxClient.swift` imports the `CMailbox` system-library target
+(`CMailbox/module.modulemap` over `crates/mailbox-ffi/include/mailbox.h`).
+
+Cross-compiling the Rust staticlib needs the Darwin SDK sysroot; cc-rs shells
+out to `xcrun` otherwise:
+
+```sh
+export SDKROOT=$(swift sdk configure --show-configuration darwin aarch64-apple-ios \
+  | sed -n 's/^sdkRootPath: //p')
+export IPHONEOS_DEPLOYMENT_TARGET=18.0
+export CC_aarch64_apple_ios=clang AR_aarch64_apple_ios=llvm-ar
+export CFLAGS_aarch64_apple_ios="--target=arm64-apple-ios18.0 -isysroot $SDKROOT"
+cargo build -p mailbox-ffi --release --target aarch64-apple-ios
+
+cd ios && xtool dev run
+```
+
+`Package.swift` links `target/aarch64-apple-ios/release/libmailbox_ffi.a`, so
+rebuild the crate before `xtool dev run` when the FFI changes.
+
 ## What it does
 
 - Add an account (address + password; Gmail / Fastmail / Outlook / Yahoo /

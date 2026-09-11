@@ -1,0 +1,4 @@
+module CMailbox {
+    header "../../crates/mailbox-ffi/include/mailbox.h"
+    export *
+}
