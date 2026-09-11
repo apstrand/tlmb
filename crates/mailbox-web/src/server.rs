@@ -53,6 +53,16 @@ pub struct Server {
 /// Everything a connection needs, shared by the threads serving them.
 struct Inner {
     token: Option<String>,
+    /// Whether this server may add an account (§9's setup, done from the page
+    /// rather than from a terminal).
+    ///
+    /// True only for a loopback bind. The form carries a password for someone
+    /// else's mail server, and `serve` speaks plain HTTP — on the LAN that
+    /// password crosses the café Wi-Fi in the clear, which is the one thing
+    /// §9's transport rules refuse outright. Reading mail over that link is
+    /// the user's call to make with `--bind`; handing over a password they
+    /// have not yet typed is not.
+    setup_allowed: bool,
     workspace: Mutex<Workspace>,
     session: mailbox_core::session::SessionOptions,
     tracer: Tracer,
@@ -98,13 +108,18 @@ impl Server {
             ))
         })?;
 
-        let workspace = Workspace::open(&session, tracer.clone(), clock.clone())?;
+        // Empty is a valid mailbox: §9's setup is one line, and a server that
+        // refused to start until it had been run would be a server nobody
+        // could read the line from. The page draws the guide instead, and
+        // `refresh_if_empty` picks the account up once it exists.
+        let workspace = Workspace::open_or_empty(&session, tracer.clone(), clock.clone())?;
 
         Ok(Server {
             listener,
             max_requests: opts.max_requests,
             inner: Arc::new(Inner {
                 token: opts.token,
+                setup_allowed: opts.bind.is_loopback(),
                 workspace: Mutex::new(workspace),
                 session,
                 tracer,
@@ -185,6 +200,28 @@ impl Server {
 }
 
 impl Inner {
+    /// Reopens the workspace when nothing is configured, so an account added
+    /// while this is running is found without restarting it.
+    ///
+    /// Only from empty, and deliberately so. Reopening on every request would
+    /// throw away the open stores for a config file that almost never changes;
+    /// the first-launch state is the one case where it is worth a stat of the
+    /// config on each request, and it ends the moment an account exists.
+    fn refresh_if_empty(&self) {
+        let mut workspace = match self.workspace.lock() {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        if !workspace.is_empty() {
+            return;
+        }
+        if let Ok(reopened) =
+            Workspace::open_or_empty(&self.session, self.tracer.clone(), self.clock.clone())
+        {
+            *workspace = reopened;
+        }
+    }
+
     fn serve_one(&self, stream: TcpStream) -> std::result::Result<(), crate::http::Error> {
         crate::http::set_timeouts(&stream)?;
         let mut reader = BufReader::new(stream.try_clone()?);
@@ -220,6 +257,12 @@ impl Inner {
             return Response::text(403, "cross-origin requests are not accepted");
         }
 
+        // Someone reading the setup guide is about to run `mailbox accounts
+        // add` in a terminal beside this window, and the obvious thing for the
+        // page to do next is ask again. Cheap because it is only ever the
+        // empty case: a workspace with accounts in it is never reopened here.
+        self.refresh_if_empty();
+
         if let Some(path) = request.path.strip_prefix("/api/") {
             if !self.api_authorized(request) {
                 return Response::json(
@@ -239,6 +282,7 @@ impl Inner {
                 &self.session,
                 &self.tracer,
                 &self.clock,
+                self.setup_allowed,
             );
         }
 
@@ -250,7 +294,7 @@ impl Inner {
                 let response = if request.path == "/body" {
                     api::body_document(request, &self.workspace)
                 } else {
-                    assets::serve(&request.path, self.token.as_deref())
+                    assets::serve(&request.path, self.token.as_deref(), self.setup_allowed)
                 };
                 match set_cookie {
                     // `SameSite=Strict` so another site cannot cause a request

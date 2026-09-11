@@ -514,17 +514,10 @@ fn apply(ctx: &Ctx<'_>, payload: &Payload, mode: ApplyMode) -> Result<()> {
     for account in &payload.accounts {
         match &account.credential {
             Some(mailbox_core::pair::PairedCredential::Password { secret }) => {
-                // The core's writer, not a second one here: it knows what
-                // §9's lookup will read back on each platform, and one of the
-                // two copies of that knowledge was already wrong.
-                let cfg = config
-                    .accounts
-                    .get(&account.id)
-                    .cloned()
-                    .unwrap_or_default();
-                match mailbox_core::credentials::store_password(&account.id, &cfg, secret) {
-                    mailbox_core::credentials::Stored::Keychain => stored.push(account.id.clone()),
-                    mailbox_core::credentials::Stored::Process => manual.push(account.id.clone()),
+                if mailbox_core::credentials::store_password(&account.id, &account.config, secret) {
+                    stored.push(account.id.clone());
+                } else {
+                    manual.push(account.id.clone());
                 }
             }
             Some(mailbox_core::pair::PairedCredential::OAuth2 { refresh_token }) => {

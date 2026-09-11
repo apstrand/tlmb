@@ -36,11 +36,39 @@ pub struct Workspace {
     /// True when `--account` narrowed this to one, so listings and history stay
     /// scoped to it.
     restricted: bool,
+    /// The config the accounts came from, kept because a workspace with no
+    /// accounts open still has one — and the interfaces that come up before
+    /// any account exists still need its `[keys]` and `[general]`.
+    config: crate::config::Config,
 }
 
 impl Workspace {
     /// Opens every configured account, or just the one `--account` named.
+    ///
+    /// Fails when nothing is configured, because the caller is a command that
+    /// acts on mail and has nowhere to put a setup guide.
     pub fn open(opts: &SessionOptions, tracer: Tracer, clock: Clock) -> Result<Workspace> {
+        Workspace::open_inner(opts, tracer, clock, false)
+    }
+
+    /// The same, but "no accounts" is a state rather than an error.
+    ///
+    /// The interfaces that are a *place* rather than a command — `serve`,
+    /// `gui`, the TUI — have to come up on a machine where no account has been
+    /// added yet: refusing to start is the one response that leaves the user
+    /// with nowhere to read the instructions. They open an empty workspace,
+    /// which answers every listing with nothing, and draw §9's one-line setup
+    /// over it.
+    pub fn open_or_empty(opts: &SessionOptions, tracer: Tracer, clock: Clock) -> Result<Workspace> {
+        Workspace::open_inner(opts, tracer, clock, true)
+    }
+
+    fn open_inner(
+        opts: &SessionOptions,
+        tracer: Tracer,
+        clock: Clock,
+        allow_empty: bool,
+    ) -> Result<Workspace> {
         let config = match &opts.config_path {
             Some(p) => crate::config::Config::load(p)?,
             None => crate::config::Config::load_default()?,
@@ -54,8 +82,13 @@ impl Workspace {
                 config.account(a)?;
                 vec![a.clone()]
             }
+            // `--account` was not given and there is nothing to default to.
+            // Whether that is fatal is the caller's to say.
             None if config.accounts.is_empty() => {
-                return Err(Error::not_found("account", "none configured"))
+                if !allow_empty {
+                    return Err(Error::no_accounts());
+                }
+                Vec::new()
             }
             // §12's `unified_inbox`, which is what "several accounts feel like
             // one mailbox" means in practice. Turning it off makes every
@@ -74,7 +107,18 @@ impl Workspace {
         Ok(Workspace {
             accounts,
             restricted,
+            config,
         })
+    }
+
+    /// The config these accounts came from, open or not.
+    pub fn config(&self) -> &crate::config::Config {
+        &self.config
+    }
+
+    /// True when no account is configured — the first-launch state.
+    pub fn is_empty(&self) -> bool {
+        self.accounts.is_empty()
     }
 
     pub fn sessions(&self) -> &[Session] {
@@ -90,15 +134,11 @@ impl Workspace {
     /// Sending needs one: a message goes out through one server, from one
     /// identity.
     pub fn primary(&self) -> Result<&Session> {
-        self.accounts
-            .first()
-            .ok_or_else(|| Error::not_found("account", "none configured"))
+        self.accounts.first().ok_or_else(Error::no_accounts)
     }
 
     pub fn primary_mut(&mut self) -> Result<&mut Session> {
-        self.accounts
-            .first_mut()
-            .ok_or_else(|| Error::not_found("account", "none configured"))
+        self.accounts.first_mut().ok_or_else(Error::no_accounts)
     }
 
     /// The account that owns an identity, for `send --from`.
@@ -392,7 +432,15 @@ impl Workspace {
     /// Reads from the first open session, because the account list comes from
     /// the config and every session has the same one.
     pub fn accounts(&self) -> Result<AccountList> {
-        self.primary()?.accounts()
+        match self.accounts.first() {
+            Some(session) => session.accounts(),
+            // Nothing open means nothing configured, and that is an answer
+            // rather than a failure — it is what every interface's setup guide
+            // is drawn from.
+            None => Ok(AccountList {
+                accounts: Vec::new(),
+            }),
+        }
     }
 
     pub fn status(&self) -> Result<Status> {

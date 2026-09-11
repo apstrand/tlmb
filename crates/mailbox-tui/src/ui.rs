@@ -58,6 +58,13 @@ pub fn draw(
 }
 
 fn draw_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    // Before "no messages", because an unconfigured mailbox is empty for a
+    // reason no amount of syncing will fix.
+    if app.no_accounts {
+        draw_setup(frame, area);
+        return;
+    }
+
     if app.messages.is_empty() {
         let text = if app.query.is_empty() {
             "no messages — press @ to sync, ? for help"
@@ -97,6 +104,70 @@ fn draw_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
         area,
         &mut state,
     );
+}
+
+/// The first launch (§9): what to type, and where.
+///
+/// The interface starts without an account rather than refusing to — a mail
+/// client that will not open until it has mail leaves the instructions
+/// nowhere to be read. The command is shown, not offered: adding an account
+/// needs a password or a browser sign-in, which is a terminal's job and not
+/// this screen's.
+fn draw_setup(frame: &mut Frame<'_>, area: Rect) {
+    let dim = Style::default().fg(theme::DIM);
+    let command = Style::default()
+        .fg(theme::ACCENT)
+        .add_modifier(Modifier::BOLD);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "No account yet.",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Add one in another terminal — the server settings are discovered",
+            dim,
+        )),
+        Line::from(Span::styled("from the address:", dim)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "    mailbox accounts add you@example.com",
+            command,
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Google, Microsoft, and Yahoo sign in through the browser: add",
+            dim,
+        )),
+        Line::from(Span::styled("--oauth --login.", dim)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Already set up on another device? `mailbox pair` copies its",
+            dim,
+        )),
+        Line::from(Span::styled("accounts across.", dim)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "This screen is watching, and opens your mail as soon as an",
+            dim,
+        )),
+        Line::from(Span::styled(
+            "account appears.  ? for help, q to quit.",
+            dim,
+        )),
+    ];
+
+    // Indented by one, so the text does not start against the terminal's edge.
+    // Left alone otherwise: a centred block moves every time the window is
+    // resized, and there is nothing here worth that.
+    let inner = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(1),
+    };
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// One line of the index.
@@ -392,8 +463,17 @@ fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .filter(|m| !m.flags.iter().any(|f| f == "seen"))
         .count();
 
+    // "0 messages, 0 unread" over the setup guide is a count of something
+    // that does not exist yet, and reads as a mailbox that has failed to load
+    // rather than one that has not been set up.
+    let summary = if app.no_accounts {
+        " no account ".to_string()
+    } else {
+        format!(" {} messages, {unread} unread ", app.messages.len())
+    };
+
     let mut spans = vec![Span::styled(
-        format!(" {} messages, {unread} unread ", app.messages.len()),
+        summary,
         Style::default().add_modifier(Modifier::REVERSED),
     )];
 
@@ -504,4 +584,64 @@ fn truncate(s: &str, max: usize) -> String {
 #[allow(dead_code)]
 fn accent() -> Color {
     theme::ACCENT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::draw;
+    use crate::app::App;
+    use crate::keys::Keymap;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn painted(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("a test terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, app, &Keymap::vim());
+            })
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// The first screen a new install sees.
+    ///
+    /// "no messages" would be true and useless: it sends someone looking for
+    /// mail that has nowhere to arrive from, and offers a sync that cannot
+    /// help. The index has to say what is actually missing.
+    #[test]
+    fn an_unconfigured_mailbox_says_how_to_add_an_account() {
+        let mut app = App::new();
+        app.no_accounts = true;
+
+        let screen = painted(&mut app);
+        assert!(
+            screen.contains("mailbox accounts add"),
+            "the setup guide does not name the command: {screen:?}"
+        );
+        assert!(
+            !screen.contains("no messages"),
+            "an unconfigured mailbox was reported as an empty one: {screen:?}"
+        );
+    }
+
+    /// The other half of the same rule: a mailbox that *is* configured and
+    /// happens to be empty still wants the sync it can act on.
+    #[test]
+    fn a_configured_but_empty_mailbox_still_offers_a_sync() {
+        let mut app = App::new();
+
+        let screen = painted(&mut app);
+        assert!(
+            screen.contains("no messages"),
+            "an empty inbox lost its own message: {screen:?}"
+        );
+        assert!(!screen.contains("mailbox accounts add"));
+    }
 }

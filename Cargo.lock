@@ -2546,6 +2546,7 @@ dependencies = [
  "libc",
  "mail-parser",
  "mailbox-api",
+ "mailbox-l3",
  "nom",
  "pake-cpace",
  "rusqlite",

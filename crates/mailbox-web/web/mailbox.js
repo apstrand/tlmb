@@ -604,6 +604,10 @@ function withSelected(run) {
 }
 
 document.addEventListener("keydown", (event) => {
+    // Nothing to drive until there is an account. The shortcuts act on a
+    // listing and a selection, and neither exists on the setup page.
+    if (document.body.dataset.state === "setup") return;
+
     // The compose window owns every key while it is open. A `d` typed into a
     // message must not delete the one behind it.
     if (composeWindow.open) {
@@ -675,6 +679,329 @@ el("sync").addEventListener("click", () => syncNow());
 el("host").textContent =
     window.__MAILBOX_SHELL__ === "gui" ? "local store" : location.host;
 
-loadFolders();
-loadIdentities();
-reload();
+// ---- the first launch (§9) ----
+//
+// `serve` and `gui` start whether or not an account exists, so the page has
+// two states and has to decide which before it asks for any mail. An empty
+// mailbox and an unconfigured one look identical in a listing, and telling
+// someone "No messages" when what is missing is the account is how a working
+// program looks broken.
+//
+// The setup state is a form, not an instruction to go and type something: a
+// browser tab and the desktop window are exactly the two places where there
+// may be no terminal to type it in. It is the iOS setup screen's flow, over
+// the same core calls.
+
+/** Said in two places, and it is the thing people most want to know. */
+const PASSWORD_NOTE =
+    "The password is checked against the mail server before the account is " +
+    "saved, and then goes to this machine's keychain — never into the config file.";
+
+/** How often to look for an account added elsewhere, when this page cannot. */
+const SETUP_POLL_MS = 2000;
+
+/** Whether this server will take a password — loopback only. See `server.rs`. */
+const setupAllowed = document.getElementById("config").dataset.setup === "1";
+
+let setupTimer = 0;
+
+async function accountsExist() {
+    const { accounts } = await api("/api/accounts");
+    return (accounts ?? []).length > 0;
+}
+
+/** Loads the mailbox, or shows the setup card and waits for an account. */
+async function start() {
+    let configured;
+    try {
+        configured = await accountsExist();
+    } catch (e) {
+        // A failure here is the token or the server, not the config; say so
+        // and let the mailbox load, where the same error will be legible.
+        fail(e);
+        configured = true;
+    }
+
+    if (!configured) {
+        showSetup();
+        return;
+    }
+
+    clearTimeout(setupTimer);
+    document.body.dataset.state = "mail";
+    el("setup").hidden = true;
+    loadFolders();
+    loadIdentities();
+    reload();
+}
+
+function showSetup() {
+    document.body.dataset.state = "setup";
+    el("setup").hidden = false;
+    el("setup-form").hidden = !setupAllowed;
+    el("setup-guide").hidden = setupAllowed;
+    say("");
+    if (setupAllowed) {
+        updatePlaceholders();
+        el("setup-address").focus();
+        return;
+    }
+    // Nothing to do here but wait for the account to be added elsewhere, so
+    // watch for it: coming back to find the mail already there is the whole
+    // point of leaving the page open.
+    clearTimeout(setupTimer);
+    setupTimer = setTimeout(pollForAccount, SETUP_POLL_MS);
+}
+
+async function pollForAccount() {
+    try {
+        if (await accountsExist()) {
+            await start();
+            return;
+        }
+    } catch (e) {
+        setupError(e);
+    }
+    setupTimer = setTimeout(pollForAccount, SETUP_POLL_MS);
+}
+
+function setupError(error) {
+    const box = el("setup-error");
+    box.textContent = String(error?.message ?? error ?? "");
+    box.hidden = !box.textContent;
+}
+
+// ---- where the servers come from ----
+//
+// Two lookups, as on the phone. The built-in table is instant and offline, so
+// it runs as the address is typed and folds the server fields away when it
+// recognises the domain. Discovery talks to a nameserver, so it waits behind a
+// button — and says where each answer came from, because a `SRV` record and a
+// guess at `imap.<domain>` deserve different amounts of trust (§9).
+
+let providerTimer = 0;
+let providerKnown = false;
+
+const domainOf = (address) => address.split("@")[1] ?? "";
+
+/** What an empty host field means: discovery's answer, else the usual name. */
+function placeholderHost(service) {
+    const domain = domainOf(el("setup-address").value.trim());
+    return domain ? `${service}.${domain}` : `${service}.example.com`;
+}
+
+el("setup-address").addEventListener("input", () => {
+    updatePlaceholders();
+    clearTimeout(providerTimer);
+    providerTimer = setTimeout(lookupProvider, 300);
+});
+
+function updatePlaceholders() {
+    el("setup-imap-host").placeholder = placeholderHost("imap");
+    el("setup-smtp-host").placeholder = placeholderHost("smtp");
+    const address = el("setup-address").value.trim();
+    for (const id of ["setup-imap-user", "setup-smtp-user"]) {
+        el(id).placeholder = address || "Your address";
+    }
+    el("setup-discover").disabled = !domainOf(address).includes(".");
+}
+
+/** The instant, offline table lookup, on every keystroke. */
+async function lookupProvider() {
+    const address = el("setup-address").value.trim();
+    if (!address.includes("@")) {
+        providerKnown = false;
+        return;
+    }
+
+    let hints;
+    try {
+        hints = await api(`/api/providers?address=${encodeURIComponent(address)}`);
+    } catch {
+        // The table is a convenience. Failing to reach it is not a reason to
+        // stop someone typing their own servers in.
+        return;
+    }
+    if (address !== el("setup-address").value.trim()) return; // Typed on since.
+
+    providerKnown = hints.known === true;
+    if (!providerKnown) return;
+    apply(hints);
+    // Nothing left to fill in, so nothing left to show.
+    showServers(false);
+}
+
+/** The network lookup, behind the button. */
+async function discoverServers() {
+    const address = el("setup-address").value.trim();
+    const button = el("setup-discover");
+    const note = el("setup-discover-note");
+
+    button.disabled = true;
+    note.textContent = `Looking up ${domainOf(address)}…`;
+    try {
+        apply(await api(`/api/discover?address=${encodeURIComponent(address)}`));
+    } catch (e) {
+        note.textContent = "";
+        setupError(e);
+    } finally {
+        button.disabled = false;
+        updatePlaceholders();
+    }
+}
+
+el("setup-discover").addEventListener("click", () => discoverServers());
+
+/** Where a set of settings came from, in the words the phone uses. */
+function provenance(hints) {
+    switch (hints.imap_source) {
+        case "table": return "Server settings for this provider are built in.";
+        case "srv": return "Found in the domain's own DNS records.";
+        case "mx": return "Guessed from the domain's mail exchanger — check them.";
+        case "guess": return "No settings published; these are the usual names — check them.";
+        default: return "";
+    }
+}
+
+/// Fills in what a lookup is confident about, leaving typed-in values alone.
+///
+/// The security of each host rides along in a field of its own: it is not
+/// something to ask anyone to choose, and dropping it would quietly downgrade
+/// a STARTTLS server to the implicit-TLS default.
+let security = { imap: null, smtp: null };
+
+function apply(hints) {
+    if (hints.imap_host && (!el("setup-imap-host").value || !providerKnown)) {
+        el("setup-imap-host").value = hints.imap_host;
+    }
+    if (hints.imap_port) el("setup-imap-port").value = String(hints.imap_port);
+    if (hints.smtp_host && (!el("setup-smtp-host").value || !providerKnown)) {
+        el("setup-smtp-host").value = hints.smtp_host;
+    }
+    if (hints.smtp_port) el("setup-smtp-port").value = String(hints.smtp_port);
+    security = {
+        imap: hints.imap_security ?? security.imap,
+        smtp: hints.smtp_security ?? security.smtp,
+    };
+
+    const said = provenance(hints);
+    el("setup-hint").textContent = said ? `${said} ${PASSWORD_NOTE}` : PASSWORD_NOTE;
+    el("setup-discover-note").textContent = "";
+}
+
+function showServers(shown) {
+    el("setup-servers").hidden = !shown;
+    el("setup-servers-toggle").textContent = shown ? "Hide servers" : "Servers";
+}
+
+el("setup-servers-toggle").addEventListener("click", () => {
+    showServers(el("setup-servers").hidden);
+});
+
+// One login for both servers is the overwhelmingly common case, so it is the
+// default and the SMTP field appears only when it is turned off.
+el("setup-same-user").addEventListener("change", () => {
+    el("setup-smtp-user-field").hidden = el("setup-same-user").checked;
+});
+
+// ---- testing, and adding ----
+
+/// The account as the fields currently describe it.
+///
+/// One reading for both buttons: Test has to send exactly what Add would, or
+/// it is testing something other than what it is about to save.
+function accountFromForm() {
+    const value = (id) => el(id).value.trim();
+    const port = (id, fallback) => Number(value(id) || fallback);
+    const user = value("setup-imap-user");
+
+    return {
+        address: value("setup-address"),
+        password: el("setup-password").value,
+        // An empty field means the placeholder, so the two are resolved
+        // together here rather than sending a host with no port.
+        imap_host: value("setup-imap-host") || placeholderHost("imap"),
+        imap_port: port("setup-imap-port", 993),
+        imap_user: user,
+        imap_security: security.imap,
+        smtp_host: value("setup-smtp-host") || placeholderHost("smtp"),
+        smtp_port: port("setup-smtp-port", 587),
+        smtp_user: el("setup-same-user").checked ? user : value("setup-smtp-user"),
+        smtp_security: security.smtp,
+    };
+}
+
+/** Both buttons make a connection, so neither may run twice or at once. */
+function setupBusy(busy, button, label) {
+    el("setup-add").disabled = busy;
+    el("setup-test").disabled = busy;
+    button.textContent = busy ? label : button.dataset.label;
+}
+
+for (const id of ["setup-add", "setup-test"]) {
+    el(id).dataset.label = el(id).textContent;
+}
+
+el("setup-test").addEventListener("click", () => testAccount());
+
+/// Connects and logs in, and writes nothing.
+///
+/// The answer says what the server offers, because "it worked" is the least
+/// useful true thing to report: the folder count says the login reached the
+/// right mailbox, and the sync path is the answer to "why is my mail slow"
+/// before it has been asked (§5.3).
+async function testAccount() {
+    const button = el("setup-test");
+    setupBusy(true, button, "Testing…");
+    setupError("");
+    el("setup-status").textContent = "";
+    try {
+        const result = await post("/api/accounts/test", accountFromForm());
+        el("setup-status").textContent =
+            `Logged in to ${result.server} as ${result.login_user} — ` +
+            `${result.folders} folder${result.folders === 1 ? "" : "s"}, ` +
+            `syncs by ${result.sync_path}.`;
+    } catch (e) {
+        setupError(e);
+        // Whatever the server objected to, the answer is in these fields.
+        showServers(true);
+    } finally {
+        setupBusy(false, button);
+    }
+}
+
+el("setup-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await addAccount();
+});
+
+async function addAccount() {
+    const button = el("setup-add");
+
+    setupBusy(true, button, "Checking…");
+    setupError("");
+    el("setup-status").textContent = "";
+    say("");
+    try {
+        const added = await post("/api/accounts", accountFromForm());
+
+        // Out of the DOM as soon as it has been used. It is not needed again,
+        // and a password sitting in a field is one a screen or a form restore
+        // can hand to whoever is there next.
+        el("setup-password").value = "";
+
+        await start();
+        say(`added ${added.address} — ${added.credential ?? "no credential"}`);
+        // The mailbox is open and empty until something fetches; nobody should
+        // have to know to press Sync on their first minute.
+        syncNow();
+    } catch (e) {
+        setupError(e);
+        // Whatever the server objected to, the answer is in these fields.
+        showServers(true);
+    } finally {
+        setupBusy(false, button);
+    }
+}
+
+start();

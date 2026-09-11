@@ -155,6 +155,14 @@ pub struct App {
     pub page_size: usize,
     /// Set when the list no longer matches the store and should be reloaded.
     pub dirty: bool,
+    /// True when nothing is configured yet, so the index draws §9's setup
+    /// guide instead of a listing.
+    ///
+    /// Kept apart from "the list is empty" because the two want opposite
+    /// answers: an empty inbox is good news and wants a sync, and an
+    /// unconfigured mailbox wants a command typed in another window. Saying
+    /// "no messages" for the second is how a working program looks broken.
+    pub no_accounts: bool,
     /// Which link is highlighted in [`View::Links`].
     pub link_selected: usize,
     /// Where `?` was pressed, so closing the help goes back there.
@@ -179,6 +187,7 @@ impl App {
             syncing: false,
             page_size: DEFAULT_PAGE,
             dirty: false,
+            no_accounts: false,
             link_selected: 0,
             help_return: View::List,
         }
@@ -224,6 +233,11 @@ impl App {
     }
 
     pub fn reload(&mut self, workspace: &Workspace) -> Result<()> {
+        // Read from the workspace on every reload rather than latched at
+        // startup: the interface stays up while an account is added elsewhere,
+        // and the guide has to come down again when one is.
+        self.no_accounts = workspace.is_empty();
+
         let opts = ListOptions {
             limit: 500,
             sort: if self.query.is_empty() {
