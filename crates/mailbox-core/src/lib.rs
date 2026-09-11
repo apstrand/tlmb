@@ -13,7 +13,6 @@ pub mod clock;
 pub mod compose;
 pub mod config;
 pub mod credentials;
-pub mod discover;
 pub mod dns;
 pub mod error;
 pub mod fixture;

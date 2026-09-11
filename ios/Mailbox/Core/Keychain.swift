@@ -5,7 +5,10 @@ import Security
 /// or in meta.db; this is the durable copy, and `mailbox_exec set_password`
 /// is how the core hears about it for the life of the process.
 enum Keychain {
-    private static let service = "se.nena.mailbox"
+    /// Tracks the bundle ID. Changing it orphans items written under the old
+    /// name, which is moot here because the keychain access group moved with
+    /// the bundle ID anyway.
+    private static let service = "com.thelastmailbox.ios"
 
     static func password(account: String) -> String? {
         let query: [String: Any] = [

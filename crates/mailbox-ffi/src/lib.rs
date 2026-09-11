@@ -373,17 +373,25 @@ impl Mailbox {
         }
     }
 
-    /// §9's whole discovery chain, network included.
-    ///
-    /// For a setup screen that has an address and is about to add an account.
-    /// The reply carries the trail as well as the answer, so a domain that
-    /// yields nothing can say what it was asked.
+    /// Looks up an unknown domain's servers on the network (§9). Unlike
+    /// `providers` this blocks on DNS, so the shell calls it from a worker and
+    /// behind an explicit action rather than on every keystroke.
     pub fn discover(&self, address: &str) -> Result<Value> {
-        let discovery = mailbox_core::discover::discover(
-            address,
-            &mailbox_core::discover::Options::from_env(),
-        )?;
-        Ok(serde_json::to_value(discovery)?)
+        let d = providers::discover(address)?;
+        Ok(json!({
+            "known": true,
+            "imap_host": d.hints.imap_host,
+            "imap_port": d.hints.imap_port,
+            "imap_security": d.hints.imap_security,
+            "smtp_host": d.hints.smtp_host,
+            "smtp_port": d.hints.smtp_port,
+            "smtp_security": d.hints.smtp_security,
+            "imap_source": d.imap_source.as_str(),
+            "smtp_source": d.smtp_source.as_str(),
+            // One flag, because the question a setup screen asks is "may I
+            // present this as found, or must I say it is a guess?".
+            "authoritative": d.imap_source.is_authoritative() && d.smtp_source.is_authoritative(),
+        }))
     }
 
     /// Dispatches a named command with a JSON argument object. This is the

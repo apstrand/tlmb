@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CMailbox)
+import CMailbox
+#endif
 
 /// Thin Swift shell over the Rust core (§4). Every operation is a mailbox-api
 /// JSON round-trip; the types in Types.swift are that contract.
@@ -127,7 +130,7 @@ final class MailboxClient: @unchecked Sendable {
         try decode("reply_draft", ["id": id, "all": all, "forward": forward])
     }
 
-    func addAccount(address: String, password: String, imapHost: String? = nil, imapPort: Int? = nil, imapSecurity: String? = nil, imapUser: String? = nil, smtpHost: String? = nil, smtpPort: Int? = nil, smtpSecurity: String? = nil, requireTLS: Bool = true) throws -> String {
+    func addAccount(address: String, password: String, imapHost: String? = nil, imapPort: Int? = nil, imapSecurity: String? = nil, imapUser: String? = nil, smtpHost: String? = nil, smtpPort: Int? = nil, smtpSecurity: String? = nil, smtpUser: String? = nil, requireTLS: Bool = true) throws -> String {
         var args: [String: Any] = [
             "address": address,
             "password": password,
@@ -140,6 +143,7 @@ final class MailboxClient: @unchecked Sendable {
         if let smtpHost, !smtpHost.isEmpty { args["smtp_host"] = smtpHost }
         if let smtpPort { args["smtp_port"] = smtpPort }
         if let smtpSecurity, !smtpSecurity.isEmpty { args["smtp_security"] = smtpSecurity }
+        if let smtpUser, !smtpUser.isEmpty { args["smtp_user"] = smtpUser }
         struct Added: Decodable { var id: String }
         let added: Added = try decode("add_account", args)
         try Keychain.setPassword(password, account: added.id)
@@ -156,12 +160,9 @@ final class MailboxClient: @unchecked Sendable {
         try decode("providers", ["address": address])
     }
 
-    /// §9's whole chain, network included: autoconfig, the ISPDB,
-    /// autodiscover, DNS, and a verified probe of the usual hosts.
-    ///
-    /// Not for a keystroke — it resolves and connects. Call it once the
-    /// address is complete.
-    func discover(address: String) throws -> Discovery {
+    /// Asks the network where a domain's servers are. Blocks on DNS, so this
+    /// belongs on a worker; `providers` is the instant, offline sibling.
+    func discover(address: String) throws -> ProviderHints {
         try decode("discover", ["address": address])
     }
 
