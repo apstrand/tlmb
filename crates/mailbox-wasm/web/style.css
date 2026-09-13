@@ -1,0 +1,13 @@
+:root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; background: #101513; color: #e7eee9; }
+main { width: min(44rem, calc(100% - 2rem)); margin: 4rem auto; }
+.eyebrow { color: #9fcaae; letter-spacing: .08em; text-transform: uppercase; }
+h1 { font-size: clamp(2rem, 6vw, 4rem); line-height: 1; }
+section { border-top: 1px solid #415047; padding: 1.5rem 0; }
+form { display: grid; gap: 1rem; }
+label { display: grid; gap: .35rem; }
+input, button { box-sizing: border-box; font: inherit; padding: .65rem .8rem; }
+button { width: fit-content; cursor: pointer; }
+pre { padding: 1rem; overflow: auto; background: #070a09; border-radius: .35rem; }
+pre[data-ok="true"] { border-left: .3rem solid #67d391; }
+pre[data-ok="false"] { border-left: .3rem solid #eb6f6f; }

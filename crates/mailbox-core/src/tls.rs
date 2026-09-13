@@ -25,6 +25,7 @@ fn ensure_provider() {
 pub fn root_store() -> Result<rustls::RootCertStore> {
     ensure_provider();
     let mut roots = rustls::RootCertStore::empty();
+    #[cfg(not(target_arch = "wasm32"))]
     for cert in rustls_native_certs::load_native_certs().certs {
         let _ = roots.add(cert);
     }
@@ -45,12 +46,19 @@ pub fn client_config() -> Result<rustls::ClientConfig> {
         .with_no_client_auth())
 }
 
-/// Wraps `tcp` in TLS for `host`, using the roots of [`root_store`].
-pub fn stream(host: &str, tcp: TcpStream) -> Result<TlsStream> {
+/// Starts a verified TLS client connection without choosing its byte stream.
+/// Native IMAP/SMTP attach this to TCP; hosted mode drives the same state
+/// machine with ciphertext received from its WebSocket relay.
+pub fn client_connection(host: &str) -> Result<rustls::ClientConnection> {
     let config = client_config()?;
     let server_name = rustls_pki_types::ServerName::try_from(host.to_string())
         .map_err(|_| Error::usage(format!("`{host}` is not a valid server name")))?;
-    let client = rustls::ClientConnection::new(Arc::new(config), server_name)
-        .map_err(|e| Error::Network(format!("starting TLS with {host}: {e}")))?;
+    rustls::ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|e| Error::Network(format!("starting TLS with {host}: {e}")))
+}
+
+/// Wraps `tcp` in TLS for `host`, using the roots of [`root_store`].
+pub fn stream(host: &str, tcp: TcpStream) -> Result<TlsStream> {
+    let client = client_connection(host)?;
     Ok(rustls::StreamOwned::new(client, tcp))
 }

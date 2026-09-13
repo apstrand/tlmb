@@ -603,6 +603,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1552,9 +1562,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2540,15 +2552,18 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "chacha20poly1305",
+ "getrandom 0.2.17",
  "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "hkdf",
  "imap-proto",
+ "js-sys",
  "libc",
  "mail-parser",
  "mailbox-api",
  "mailbox-l3",
  "nom",
- "pake-cpace",
+ "ring",
  "rusqlite",
  "rustls",
  "rustls-native-certs",
@@ -2559,6 +2574,7 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "toml 0.9.12+spec-1.1.0",
+ "wasm-bindgen",
  "webpki-roots",
  "zstd",
 ]
@@ -2607,6 +2623,26 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+]
+
+[[package]]
+name = "mailbox-wasm"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "blake3",
+ "console_error_panic_hook",
+ "getrandom 0.3.4",
+ "imap-proto",
+ "js-sys",
+ "mail-parser",
+ "mailbox-core",
+ "mailbox-ffi",
+ "rustls",
+ "serde_json",
+ "time",
+ "wasm-bindgen",
+ "zstd",
 ]
 
 [[package]]
@@ -3702,6 +3738,7 @@ version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
 dependencies = [
+ "web-time",
  "zeroize",
 ]
 
@@ -5304,6 +5341,16 @@ name = "web-sys"
 version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fbddc4a036f00ec4f18c83445bd3115cb306a91da554919a099d9222fe4a7f8"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

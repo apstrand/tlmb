@@ -9,6 +9,7 @@ members = [
     "crates/mailbox-ui",
     "crates/mailbox-web",
     "crates/mailbox-ffi",
+    "crates/mailbox-wasm",
 ]
 
 [workspace.package]

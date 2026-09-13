@@ -12,6 +12,7 @@
 
 use std::collections::BTreeSet;
 use std::io::{BufWriter, Read, Write};
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -19,6 +20,11 @@ use imap_proto::{Response, Status};
 
 use crate::error::{Error, Result};
 use crate::trace::{event, redact_command, summarize_response, Tracer};
+
+#[cfg(target_arch = "wasm32")]
+type Socket = crate::wasm_stream::BrowserStream;
+#[cfg(not(target_arch = "wasm32"))]
+type Socket = TcpStream;
 
 /// How much of a response line reaches the trace before it is summarized.
 const TRACE_LINE_LIMIT: usize = 512;
@@ -62,8 +68,8 @@ pub enum Credential {
 /// An enum rather than `Box<dyn ReadWrite>` because `STARTTLS` has to take the
 /// socket back out to upgrade it, which a trait object will not let us do.
 enum Transport {
-    Plain(TcpStream),
-    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    Plain(Socket),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, Socket>>),
     /// A recorded conversation played back (§14.2's L1). No socket exists.
     Replay(Box<crate::imap::transcript::Replay>),
     /// Held only during the `STARTTLS` upgrade.
@@ -247,17 +253,22 @@ impl Connection {
         );
 
         let addr = format!("{}:{}", cfg.host, cfg.port);
-        let tcp = TcpStream::connect(&addr)
+        #[cfg(not(target_arch = "wasm32"))]
+        let socket = TcpStream::connect(&addr)
             .map_err(|e| Error::Network(format!("connecting to {addr}: {e}")))?;
-        tcp.set_read_timeout(Some(cfg.timeout))?;
-        tcp.set_write_timeout(Some(cfg.timeout))?;
+        #[cfg(target_arch = "wasm32")]
+        let socket = Socket::connect(&cfg.host, cfg.port)
+            .map_err(|e| Error::Network(format!("connecting to {addr}: {e}")))?;
+        socket.set_read_timeout(Some(cfg.timeout))?;
+        socket.set_write_timeout(Some(cfg.timeout))?;
         // Commands are small and latency-sensitive; Nagle would add a round
         // trip to every one of them.
-        let _ = tcp.set_nodelay(true);
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = socket.set_nodelay(true);
 
         let transport = match cfg.security {
-            Security::Implicit => Transport::Tls(Box::new(tls_stream(&cfg.host, tcp)?)),
-            Security::StartTls | Security::None => Transport::Plain(tcp),
+            Security::Implicit => Transport::Tls(Box::new(tls_stream(&cfg.host, socket)?)),
+            Security::StartTls | Security::None => Transport::Plain(socket),
         };
 
         // §14.2: L1 transcripts are recorded from L2 and L4 runs. Arming it
@@ -853,9 +864,10 @@ pub fn quote_astring(s: &str) -> String {
 
 fn tls_stream(
     host: &str,
-    tcp: TcpStream,
-) -> Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>> {
-    crate::tls::stream(host, tcp)
+    socket: Socket,
+) -> Result<rustls::StreamOwned<rustls::ClientConnection, Socket>> {
+    let client = crate::tls::client_connection(host)?;
+    Ok(rustls::StreamOwned::new(client, socket))
 }
 
 impl Connection {

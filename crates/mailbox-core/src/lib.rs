@@ -41,6 +41,8 @@ pub mod store;
 pub mod threading;
 pub mod tls;
 pub mod trace;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_stream;
 pub mod workspace;
 
 pub use clock::{Clock, Rng, Timestamp};

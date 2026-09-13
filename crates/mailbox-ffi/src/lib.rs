@@ -11,6 +11,7 @@
 //! - `mailbox_open` / `mailbox_exec` / `mailbox_close` is the C ABI the
 //!   SwiftUI app links.
 
+#[cfg(not(target_arch = "wasm32"))]
 mod c;
 
 use std::path::{Path, PathBuf};
@@ -683,4 +684,5 @@ impl From<AddAccount> for accounts::NewAccount {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use c::{mailbox_close, mailbox_exec, mailbox_open, mailbox_string_free};

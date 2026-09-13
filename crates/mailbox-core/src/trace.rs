@@ -243,6 +243,7 @@ impl CrashPoint {
 /// `SIGKILL` rather than `abort()` because `abort()` raises `SIGABRT`, which
 /// dumps core — and a crash-only suite that loops over every trace event would
 /// leave hundreds of core files behind on a developer's machine.
+#[cfg(not(target_arch = "wasm32"))]
 fn die_abruptly() -> ! {
     // Safety: raising a signal on the current process. There is no state to
     // corrupt because nothing after this point runs.
@@ -252,6 +253,11 @@ fn die_abruptly() -> ! {
     // SIGKILL cannot be caught, so this is unreachable; it satisfies the
     // return type without an unreachable_unchecked.
     std::process::exit(137)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn die_abruptly() -> ! {
+    panic!("MAILBOX_CRASH_AT is not supported in wasm")
 }
 
 /// Strips credentials from an IMAP command before it reaches the trace.

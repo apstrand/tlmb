@@ -83,6 +83,28 @@ pub struct Store {
 }
 
 impl Store {
+    /// Opens the real mailbox schema in memory.
+    ///
+    /// This is intentionally a narrow constructor for targets without a host
+    /// filesystem.  Stage 2 will add persistence behind a storage seam; until
+    /// then it lets the wasm feasibility probe exercise migrations and FTS5
+    /// without implying that browser storage has already been designed.
+    pub fn open_in_memory(account: &str, tracer: Tracer, clock: Clock) -> Result<Store> {
+        let mut conn = Connection::open_in_memory()?;
+        schema::migrate(&mut conn, &tracer)?;
+        configure(&conn)?;
+
+        Ok(Store {
+            blobs: Blobs::new(PathBuf::from("blobs")),
+            dir: PathBuf::new(),
+            account: account.to_string(),
+            conn,
+            tracer,
+            clock,
+            read_only: false,
+        })
+    }
+
     /// Opens a store for writing, creating it if absent.
     pub fn open(
         dir: impl AsRef<Path>,

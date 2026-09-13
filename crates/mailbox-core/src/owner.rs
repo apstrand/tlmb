@@ -20,7 +20,9 @@
 //! Reads never come here at all — they open the store read-only and skip
 //! ownership entirely, which is the fast path for scripts and agents.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs::{File, OpenOptions};
+#[cfg(not(target_arch = "wasm32"))]
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
@@ -35,6 +37,7 @@ use crate::error::{Error, Result};
 /// deletes it by hand.
 #[derive(Debug)]
 pub struct Owner {
+    #[cfg(not(target_arch = "wasm32"))]
     _file: File,
     account: String,
 }
@@ -45,6 +48,7 @@ impl Owner {
     /// Never waits. A caller who cannot be the sync engine wants to know now,
     /// so it can say so; blocking would turn "the TUI is running" into "this
     /// command hangs".
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn acquire(store_dir: &Path, account: &str) -> Result<Owner> {
         std::fs::create_dir_all(store_dir)?;
         let path = store_dir.join("owner.lock");
@@ -89,6 +93,15 @@ impl Owner {
 
         Ok(Owner {
             _file: file,
+            account: account.to_string(),
+        })
+    }
+
+    /// A browser worker is already the single owner of its in-memory store.
+    /// Stage 2 will replace this placeholder with OPFS-backed ownership.
+    #[cfg(target_arch = "wasm32")]
+    pub fn acquire(_store_dir: &Path, account: &str) -> Result<Owner> {
+        Ok(Owner {
             account: account.to_string(),
         })
     }
