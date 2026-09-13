@@ -19,7 +19,6 @@ imap-proto = "0.16"
 blake3 = "1"
 zstd = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-rustls-native-certs = "0.8"
 rustls-pki-types = "1"
 webpki-roots = "1"
 base64 = "0.22"
@@ -32,6 +31,20 @@ chacha20poly1305 = "0.11.0"
 hkdf = "0.13.0"
 sha2 = "0.11.0"
 argon2 = "0.6.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rustls-native-certs = "0.8"
+
+# `wasm32-unknown-unknown` has no ambient entropy source. All three versions
+# are present in the crypto graph, so the JS backend must be selected for each.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+js-sys = "0.3"
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+rustls-pki-types = { version = "1", features = ["web"] }
+wasm-bindgen = "0.2"
 
 [dev-dependencies]
 getrandom = "0.3"

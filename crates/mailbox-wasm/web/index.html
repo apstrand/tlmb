@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>mailbox hosted feasibility</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">mailbox · hosted Stage 0</p>
+      <h1>Browser core feasibility</h1>
+      <section>
+        <h2>SQLite + FTS5</h2>
+        <pre id="l0">running…</pre>
+      </section>
+      <section>
+        <h2>Blocking Worker transport</h2>
+        <form id="tls-form">
+          <label>Relay URL <input id="relay" value="ws://127.0.0.1:9001/" required></label>
+          <label>IMAP server name <input id="host" value="imap.gmail.com" required></label>
+          <label>IMAP port <input id="port" type="number" value="993" required></label>
+          <button>Run Worker connection</button>
+        </form>
+        <pre id="tls">not run</pre>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

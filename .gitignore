@@ -1,4 +1,5 @@
 /target
+/crates/mailbox-wasm/web/pkg/
 *.trace.ndjson
 .DS_Store
 xcuserdata/
