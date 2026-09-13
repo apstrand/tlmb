@@ -164,6 +164,35 @@ fn fixture_seeds_every_message() {
 }
 
 #[test]
+fn serialized_in_memory_store_round_trips() {
+    let mut store = Store::open_in_memory("browser", Tracer::disabled(), Clock::fixed(0)).unwrap();
+    store
+        .upsert_folder(&FolderRecord {
+            path: "INBOX".into(),
+            name: "Inbox".into(),
+            selectable: true,
+            special_use: Some("inbox".into()),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let database = store.serialize().unwrap();
+    assert!(database.starts_with(b"SQLite format 3\0"));
+
+    let restored = Store::open_serialized(
+        Some(&database),
+        "browser",
+        Tracer::disabled(),
+        Clock::fixed(0),
+    )
+    .unwrap();
+    let folders = restored.folders().unwrap();
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].path, "INBOX");
+    assert_eq!(folders[0].special_use.as_deref(), Some("inbox"));
+}
+
+#[test]
 fn folder_counts_are_derived_not_incremented() {
     let fx = Fx::new();
     let folders = fx.store.folders().unwrap();

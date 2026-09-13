@@ -13,7 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
-rusqlite = { version = "0.40", features = ["bundled", "blob"] }
+rusqlite = { version = "0.40", features = ["bundled", "blob", "serialize"] }
 mail-parser = "0.11"
 imap-proto = "0.16"
 blake3 = "1"

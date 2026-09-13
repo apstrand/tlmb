@@ -2,8 +2,10 @@
 //! browser boundary before committing to persistence or a complete transport.
 
 use std::io::Cursor;
+use std::sync::Arc;
 
 use mailbox_core::query;
+use mailbox_core::storage::MemoryStorage;
 use mailbox_core::store::read::ListOptions;
 use mailbox_core::{Clock, Store, Tracer};
 use wasm_bindgen::prelude::*;
@@ -125,6 +127,125 @@ impl TlsProbe {
 
 fn js_error(error: impl std::fmt::Display) -> JsError {
     JsError::new(&error.to_string())
+}
+
+/// A production-schema SQLite database whose durable representation is an
+/// opaque byte image. JavaScript persists that image in OPFS after mutations.
+#[wasm_bindgen]
+pub struct BrowserStore {
+    store: Store,
+    storage: Arc<MemoryStorage>,
+}
+
+#[wasm_bindgen]
+impl BrowserStore {
+    #[wasm_bindgen(constructor)]
+    pub fn open(checkpoint: Option<Vec<u8>>) -> Result<BrowserStore, JsError> {
+        let (database, files) = decode_checkpoint(checkpoint.as_deref()).map_err(js_error)?;
+        let storage = Arc::new(MemoryStorage::decode(files.as_deref()).map_err(js_error)?);
+        let store = Store::open_serialized_with_storage(
+            database.as_deref(),
+            storage.clone(),
+            "browser",
+            Tracer::disabled(),
+            Clock::fixed(0),
+        )
+        .map_err(js_error)?;
+        Ok(BrowserStore { store, storage })
+    }
+
+    /// Idempotent mutation used by the Stage 2 page to prove a reload restored
+    /// state rather than merely opening another fresh schema.
+    #[wasm_bindgen(js_name = ensureProbeFolder)]
+    pub fn ensure_probe_folder(&mut self) -> Result<u32, JsError> {
+        self.store
+            .upsert_folder(&mailbox_core::store::FolderRecord {
+                path: "Hosted persistence probe".into(),
+                name: "Hosted persistence probe".into(),
+                selectable: true,
+                ..Default::default()
+            })
+            .map_err(js_error)?;
+        self.store.folder_count().map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = folderCount)]
+    pub fn folder_count(&self) -> Result<u32, JsError> {
+        self.store.folder_count().map_err(js_error)
+    }
+
+    /// Exercises the non-SQLite half of the storage seam with a compressed
+    /// blob and `state.toml`. The `restored` bit is true only after reopening
+    /// a checkpoint that contained both.
+    #[wasm_bindgen(js_name = storageProbe)]
+    pub fn storage_probe(&self) -> Result<String, JsError> {
+        const RAW: &[u8] = b"Subject: Hosted storage probe\r\n\r\nOPFS bytes";
+        let blob_id = mailbox_core::id::blob_id(RAW);
+        let state = self.store.sync_state();
+        let restored = self.store.blobs().has(&blob_id) && state.account == "browser";
+        let stored_id = self.store.blobs().put(RAW).map_err(js_error)?;
+        let mut state = state;
+        state.account = "browser".into();
+        self.store.save_sync_state(&state).map_err(js_error)?;
+        let blob_ok = self.store.blobs().get(&stored_id).map_err(js_error)? == RAW;
+        serde_json::to_string(&serde_json::json!({
+            "ok": blob_ok,
+            "restored": restored,
+            "blob": stored_id,
+        }))
+        .map_err(js_error)
+    }
+
+    /// One atomic OPFS payload containing SQLite plus all byte-store entries.
+    pub fn snapshot(&self) -> Result<Vec<u8>, JsError> {
+        let database = self.store.serialize().map_err(js_error)?;
+        let files = self.storage.encode().map_err(js_error)?;
+        let mut checkpoint = b"MBCHECK1".to_vec();
+        checkpoint.extend_from_slice(&(database.len() as u64).to_le_bytes());
+        checkpoint.extend_from_slice(&database);
+        checkpoint.extend_from_slice(&files);
+        Ok(checkpoint)
+    }
+}
+
+fn decode_checkpoint(image: Option<&[u8]>) -> std::io::Result<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+    let Some(image) = image.filter(|bytes| !bytes.is_empty()) else {
+        return Ok((None, None));
+    };
+    // Accept the Stage 2 prototype's raw SQLite image so existing previews
+    // migrate forward without clearing browser storage.
+    if image.starts_with(b"SQLite format 3\0") {
+        return Ok((Some(image.to_vec()), None));
+    }
+    if image.len() < 16 || &image[..8] != b"MBCHECK1" {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid browser checkpoint",
+        ));
+    }
+    let database_len = usize::try_from(u64::from_le_bytes(image[8..16].try_into().unwrap()))
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "browser database image is too large",
+            )
+        })?;
+    let files_start = 16usize.checked_add(database_len).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "browser checkpoint length overflow",
+        )
+    })?;
+    if image.len() < files_start {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "truncated browser checkpoint",
+        ));
+    }
+    Ok((
+        Some(image[16..files_start].to_vec()),
+        Some(image[files_start..].to_vec()),
+    ))
 }
 
 /// Runs the real blocking IMAP connection path in a dedicated Worker. The

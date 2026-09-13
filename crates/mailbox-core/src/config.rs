@@ -15,6 +15,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::storage::{ByteStorage, FsStorage};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -347,13 +348,26 @@ impl AccountConfig {
 impl Config {
     /// Loads the config, or returns defaults when the file does not exist.
     pub fn load(path: &Path) -> Result<Config> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|e| {
-                // A config error must say where: a user staring at a rejected
-                // file needs the line, not the fact.
-                Error::usage(format!("{}: {e}", path.display()))
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        let root = path.parent().unwrap_or_else(|| Path::new("."));
+        let key = path.file_name().map(Path::new).ok_or_else(|| {
+            Error::usage(format!("{}: expected a config file path", path.display()))
+        })?;
+        Config::load_from(&FsStorage::new(root), key)
+    }
+
+    pub fn load_from(storage: &dyn ByteStorage, key: &Path) -> Result<Config> {
+        match storage.read(key) {
+            Ok(Some(bytes)) => {
+                let text = std::str::from_utf8(&bytes).map_err(|e| {
+                    Error::usage(format!("{}: config is not UTF-8: {e}", key.display()))
+                })?;
+                toml::from_str(text).map_err(|e| {
+                    // A config error must say where: a user staring at a rejected
+                    // file needs the line, not the fact.
+                    Error::usage(format!("{}: {e}", key.display()))
+                })
+            }
+            Ok(None) => Ok(Config::default()),
             Err(e) => Err(e.into()),
         }
     }
@@ -367,15 +381,20 @@ impl Config {
     /// Secrets still do not belong here: [`crate::credentials::install`] is
     /// how a frontend hands over a password.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let root = path.parent().unwrap_or_else(|| Path::new("."));
+        let key = path.file_name().map(Path::new).ok_or_else(|| {
+            Error::usage(format!("{}: expected a config file path", path.display()))
+        })?;
+        self.save_to(&FsStorage::new(root), key)
+    }
+
+    pub fn save_to(&self, storage: &dyn ByteStorage, key: &Path) -> Result<()> {
         let text = toml::to_string_pretty(self)
-            .map_err(|e| Error::usage(format!("{}: could not serialise: {e}", path.display())))?;
+            .map_err(|e| Error::usage(format!("{}: could not serialise: {e}", key.display())))?;
         // Owner-only: the config carries no password (§9), but it does carry
         // `oauth_client_secret`, and a mail account's server and login name are
         // not something to leave world-readable either.
-        crate::paths::write_private(path, text.as_bytes())?;
+        storage.write(key, text.as_bytes())?;
         Ok(())
     }
 

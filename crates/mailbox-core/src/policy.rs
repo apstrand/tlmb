@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::compose::Draft;
 use crate::error::{Error, Result};
+use crate::storage::{ByteStorage, FsStorage};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,11 +85,22 @@ impl From<Violation> for Error {
 
 impl Policy {
     pub fn load(path: &Path) -> Result<Policy> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => {
-                toml::from_str(&text).map_err(|e| Error::usage(format!("{}: {e}", path.display())))
+        let root = path.parent().unwrap_or_else(|| Path::new("."));
+        let key = path.file_name().map(Path::new).ok_or_else(|| {
+            Error::usage(format!("{}: expected a policy file path", path.display()))
+        })?;
+        Policy::load_from(&FsStorage::new(root), key)
+    }
+
+    pub fn load_from(storage: &dyn ByteStorage, key: &Path) -> Result<Policy> {
+        match storage.read(key) {
+            Ok(Some(bytes)) => {
+                let text = std::str::from_utf8(&bytes).map_err(|e| {
+                    Error::usage(format!("{}: policy is not UTF-8: {e}", key.display()))
+                })?;
+                toml::from_str(text).map_err(|e| Error::usage(format!("{}: {e}", key.display())))
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Policy::default()),
+            Ok(None) => Ok(Policy::default()),
             Err(e) => Err(e.into()),
         }
     }
