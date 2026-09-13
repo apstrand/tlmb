@@ -32,6 +32,7 @@ use std::time::Duration;
 use base64::Engine;
 
 use crate::error::{Error, Result};
+use crate::storage::{ByteStorage, FsStorage};
 
 /// A provider's endpoints and the scopes mail needs from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -686,22 +687,42 @@ fn token_path(account_id: &str) -> PathBuf {
 /// the cache is an optimisation, and a corrupt one means logging in again
 /// rather than failing.
 pub fn cached(account_id: &str) -> Option<Tokens> {
-    let text = std::fs::read_to_string(token_path(account_id)).ok()?;
-    serde_json::from_str(&text).ok()
+    let path = token_path(account_id);
+    let root = path.parent()?;
+    let key = path.file_name().map(PathBuf::from)?;
+    cached_in(&FsStorage::new(root), &key)
+}
+
+pub fn cached_in(storage: &dyn ByteStorage, key: &std::path::Path) -> Option<Tokens> {
+    let bytes = storage.read(key).ok()??;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Writes the cache, readable only by this user.
 pub fn cache(account_id: &str, tokens: &Tokens) -> Result<()> {
     let path = token_path(account_id);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    Ok(crate::paths::write_private(
-        &path,
-        serde_json::to_string(tokens)?.as_bytes(),
-    )?)
+    let root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let key = path
+        .file_name()
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::store(format!("invalid OAuth token path `{}`", path.display())))?;
+    cache_in(&FsStorage::new(root), &key, tokens)
+}
+
+pub fn cache_in(storage: &dyn ByteStorage, key: &std::path::Path, tokens: &Tokens) -> Result<()> {
+    storage.write(key, serde_json::to_string(tokens)?.as_bytes())?;
+    Ok(())
 }
 
 pub fn forget_tokens(account_id: &str) {
-    let _ = std::fs::remove_file(token_path(account_id));
+    let path = token_path(account_id);
+    let Some(root) = path.parent() else { return };
+    let Some(key) = path.file_name().map(PathBuf::from) else {
+        return;
+    };
+    forget_tokens_in(&FsStorage::new(root), &key);
+}
+
+pub fn forget_tokens_in(storage: &dyn ByteStorage, key: &std::path::Path) {
+    let _ = storage.remove(key);
 }

@@ -22,11 +22,13 @@ pub mod state;
 pub mod write;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rusqlite::{Connection, OpenFlags};
 
 use crate::clock::Clock;
 use crate::error::{Error, Result};
+use crate::storage::{ByteStorage, FsStorage, MemoryStorage};
 use crate::trace::{event, Tracer};
 
 pub use blobs::Blobs;
@@ -77,6 +79,7 @@ pub struct Store {
     account: String,
     conn: Connection,
     blobs: Blobs,
+    storage: Arc<dyn ByteStorage>,
     tracer: Tracer,
     clock: Clock,
     read_only: bool,
@@ -86,16 +89,53 @@ impl Store {
     /// Opens the real mailbox schema in memory.
     ///
     /// This is intentionally a narrow constructor for targets without a host
-    /// filesystem.  Stage 2 will add persistence behind a storage seam; until
-    /// then it lets the wasm feasibility probe exercise migrations and FTS5
-    /// without implying that browser storage has already been designed.
+    /// filesystem. It lets the wasm target exercise the production schema;
+    /// persistent browser callers should restore and checkpoint serialized
+    /// images with [`Store::open_serialized`] and [`Store::serialize`].
     pub fn open_in_memory(account: &str, tracer: Tracer, clock: Clock) -> Result<Store> {
+        Self::open_serialized(None, account, tracer, clock)
+    }
+
+    /// Restores an in-memory store from SQLite's portable serialized image.
+    /// Browser code reads/writes this image through OPFS; callers above Store
+    /// remain unaware of where the bytes live.
+    pub fn open_serialized(
+        database: Option<&[u8]>,
+        account: &str,
+        tracer: Tracer,
+        clock: Clock,
+    ) -> Result<Store> {
+        Self::open_serialized_with_storage(
+            database,
+            Arc::new(MemoryStorage::new()),
+            account,
+            tracer,
+            clock,
+        )
+    }
+
+    pub fn open_serialized_with_storage(
+        database: Option<&[u8]>,
+        storage: Arc<dyn ByteStorage>,
+        account: &str,
+        tracer: Tracer,
+        clock: Clock,
+    ) -> Result<Store> {
         let mut conn = Connection::open_in_memory()?;
+        if let Some(database) = database.filter(|bytes| !bytes.is_empty()) {
+            conn.deserialize_read_exact(
+                rusqlite::MAIN_DB,
+                std::io::Cursor::new(database),
+                database.len(),
+                false,
+            )?;
+        }
         schema::migrate(&mut conn, &tracer)?;
         configure(&conn)?;
 
         Ok(Store {
-            blobs: Blobs::new(PathBuf::from("blobs")),
+            blobs: Blobs::with_storage(storage.clone(), "blobs"),
+            storage,
             dir: PathBuf::new(),
             account: account.to_string(),
             conn,
@@ -103,6 +143,11 @@ impl Store {
             clock,
             read_only: false,
         })
+    }
+
+    /// Takes a consistent SQLite image suitable for an atomic OPFS write.
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        Ok(self.conn.serialize(rusqlite::MAIN_DB)?.to_vec())
     }
 
     /// Opens a store for writing, creating it if absent.
@@ -123,9 +168,11 @@ impl Store {
         let mut conn = Connection::open(dir.join("meta.db"))?;
         schema::migrate(&mut conn, &tracer)?;
         configure(&conn)?;
+        let storage: Arc<dyn ByteStorage> = Arc::new(FsStorage::new(&dir));
 
         Ok(Store {
-            blobs: Blobs::new(dir.join("blobs")),
+            blobs: Blobs::with_storage(storage.clone(), "blobs"),
+            storage,
             dir,
             account: account.to_string(),
             conn,
@@ -154,8 +201,10 @@ impl Store {
         if !db.exists() {
             let mut conn = Connection::open_in_memory()?;
             schema::migrate(&mut conn, &tracer)?;
+            let storage: Arc<dyn ByteStorage> = Arc::new(FsStorage::new(&dir));
             return Ok(Store {
-                blobs: Blobs::new(dir.join("blobs")),
+                blobs: Blobs::with_storage(storage.clone(), "blobs"),
+                storage,
                 dir,
                 account: account.to_string(),
                 conn,
@@ -197,8 +246,10 @@ impl Store {
             )));
         }
         configure(&conn)?;
+        let storage: Arc<dyn ByteStorage> = Arc::new(FsStorage::new(&dir));
         Ok(Store {
-            blobs: Blobs::new(dir.join("blobs")),
+            blobs: Blobs::with_storage(storage.clone(), "blobs"),
+            storage,
             dir,
             account: account.to_string(),
             conn,
@@ -370,19 +421,17 @@ impl Store {
     pub fn disk_usage(&self) -> u64 {
         let mut total = self.blobs.disk_usage();
         for name in ["meta.db", "meta.db-wal", "meta.db-shm", "state.toml"] {
-            total += std::fs::metadata(self.dir.join(name))
-                .map(|m| m.len())
-                .unwrap_or(0);
+            total += self.storage.usage(Path::new(name));
         }
         total
     }
 
     pub fn sync_state(&self) -> SyncState {
-        SyncState::load(&self.dir)
+        SyncState::load_from(self.storage.as_ref(), Path::new("state.toml"))
     }
 
     pub fn save_sync_state(&self, s: &SyncState) -> Result<()> {
-        s.save(&self.dir)
+        s.save_to(self.storage.as_ref(), Path::new("state.toml"))
     }
 }
 

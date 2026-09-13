@@ -36,7 +36,7 @@ pub mod render;
 pub mod send;
 pub mod session;
 pub mod smtp;
-pub mod state;
+pub mod storage;
 pub mod store;
 pub mod threading;
 pub mod tls;

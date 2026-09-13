@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::storage::{ByteStorage, FsStorage};
 
 /// Per-folder sync position.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,21 +96,28 @@ impl SyncState {
     /// it costs one full rescan, which is strictly better than refusing to
     /// start.
     pub fn load(store_dir: &Path) -> SyncState {
-        let path = SyncState::path(store_dir);
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        SyncState::load_from(&FsStorage::new(store_dir), Path::new("state.toml"))
+    }
+
+    pub fn load_from(storage: &dyn ByteStorage, key: &Path) -> SyncState {
+        let Ok(Some(bytes)) = storage.read(key) else {
             return SyncState::default();
         };
-        toml::from_str(&text).unwrap_or_default()
+        std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| toml::from_str(text).ok())
+            .unwrap_or_default()
     }
 
     /// Writes atomically. Call *after* the `meta.db` transaction has committed.
     pub fn save(&self, store_dir: &Path) -> Result<()> {
-        let path = SyncState::path(store_dir);
+        self.save_to(&FsStorage::new(store_dir), Path::new("state.toml"))
+    }
+
+    pub fn save_to(&self, storage: &dyn ByteStorage, key: &Path) -> Result<()> {
         let text = toml::to_string_pretty(self)
             .map_err(|e| crate::Error::store(format!("serializing state.toml: {e}")))?;
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, text.as_bytes())?;
-        std::fs::rename(&tmp, &path)?;
+        storage.write_atomic(key, text.as_bytes())?;
         Ok(())
     }
 

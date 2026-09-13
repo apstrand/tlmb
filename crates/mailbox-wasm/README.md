@@ -1,14 +1,16 @@
-# mailbox-wasm Stage 0
+# mailbox-wasm hosted core
 
-This crate contains the feasibility spike and Stage 1 transport requested by
-`hosted.md`, not the complete hosted product. It gives the existing
-`mailbox_ffi::Mailbox` facade a wasm-bindgen ABI and includes a browser page
-that exercises the architectural unknowns:
+This crate contains Stages 0–2 of the hosted flavour requested by `hosted.md`,
+not the complete hosted product. It gives the existing `mailbox_ffi::Mailbox`
+facade a wasm-bindgen ABI and includes a browser page that exercises:
 
 - the production SQLite schema, including an FTS5 query, in memory;
 - a verified rustls client handshake whose TLS records cross a WebSocket relay;
 - the real blocking IMAP connection running in a dedicated Worker over a
-  SharedArrayBuffer `Read`/`Write` bridge.
+  SharedArrayBuffer `Read`/`Write` bridge;
+- SQLite, compressed blobs, and sync bookkeeping restored from one atomic OPFS
+  checkpoint; and
+- account settings and credentials persisted in IndexedDB.
 
 Build and open the page:
 

@@ -1,8 +1,11 @@
-import init, { l0_probe } from "./pkg/mailbox_wasm.js";
+import init, { BrowserStore, l0_probe } from "./pkg/mailbox_wasm.js";
 import { runWorkerImapProbe } from "./sab-bridge.js";
+import { persistedDatabaseProbe, persistedSettingsProbe } from "./storage.js";
 
 const l0 = document.querySelector("#l0");
 const tls = document.querySelector("#tls");
+const storage = document.querySelector("#storage");
+const settings = document.querySelector("#settings");
 
 try {
   await init();
@@ -11,6 +14,24 @@ try {
 } catch (error) {
   l0.textContent = String(error?.stack || error);
   l0.dataset.ok = "false";
+}
+
+try {
+  const result = await persistedSettingsProbe();
+  settings.textContent = JSON.stringify(result, null, 2);
+  settings.dataset.ok = String(result.ok);
+} catch (error) {
+  settings.textContent = String(error?.stack || error);
+  settings.dataset.ok = "false";
+}
+
+try {
+  const result = await persistedDatabaseProbe(BrowserStore);
+  storage.textContent = JSON.stringify(result, null, 2);
+  storage.dataset.ok = String(result.ok);
+} catch (error) {
+  storage.textContent = String(error?.stack || error);
+  storage.dataset.ok = "false";
 }
 
 function runTls() {

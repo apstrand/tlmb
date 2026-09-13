@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::clock::Clock;
+use crate::storage::ByteStorage;
 
 /// The event names the engine emits. They are a public interface: `sync --once
 /// --until <event>` takes one, and tests assert on them, so renaming one is a
@@ -57,6 +58,23 @@ pub mod event {
 
 struct Sink {
     out: BufWriter<Box<dyn Write + Send>>,
+}
+
+struct StorageWriter {
+    storage: Arc<dyn ByteStorage>,
+    key: std::path::PathBuf,
+    bytes: Vec<u8>,
+}
+
+impl Write for StorageWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.storage.write_atomic(&self.key, &self.bytes)
+    }
 }
 
 /// A handle to the trace stream. Cloning shares the sink and the counter, so
@@ -105,6 +123,26 @@ impl Tracer {
     ) -> std::io::Result<Tracer> {
         let file = File::create(path)?;
         Ok(Tracer::to_writer(Box::new(file), clock, bodies, until))
+    }
+
+    /// A trace sink for browser-backed or otherwise virtual storage.
+    pub fn to_storage(
+        storage: Arc<dyn ByteStorage>,
+        key: impl Into<std::path::PathBuf>,
+        clock: Clock,
+        bodies: bool,
+        until: Option<String>,
+    ) -> Tracer {
+        Tracer::to_writer(
+            Box::new(StorageWriter {
+                storage,
+                key: key.into(),
+                bytes: Vec::new(),
+            }),
+            clock,
+            bodies,
+            until,
+        )
     }
 
     /// `until` arms `sync --once --until <event>`: the run stops at the next

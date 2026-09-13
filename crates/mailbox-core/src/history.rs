@@ -13,6 +13,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::storage::{ByteStorage, FsStorage};
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct History {
     /// Full ids, in the order the last listing printed them.
@@ -30,9 +32,19 @@ impl History {
     }
 
     pub fn load(account: &str) -> History {
-        std::fs::read_to_string(History::path(account))
+        let path = History::path(account);
+        let root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let key = path.file_name().map(std::path::Path::new);
+        key.map(|key| History::load_from(&FsStorage::new(root), key))
+            .unwrap_or_default()
+    }
+
+    pub fn load_from(storage: &dyn ByteStorage, key: &std::path::Path) -> History {
+        storage
+            .read(key)
             .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
     }
 
@@ -40,14 +52,19 @@ impl History {
     /// that cannot be saved must not fail the command that produced the output.
     pub fn save(account: &str, ids: &[String]) {
         let path = History::path(account);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+        let root = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let Some(key) = path.file_name().map(std::path::Path::new) else {
+            return;
+        };
+        History::save_to(&FsStorage::new(root), key, ids);
+    }
+
+    pub fn save_to(storage: &dyn ByteStorage, key: &std::path::Path, ids: &[String]) {
         let h = History {
             listing: ids.to_vec(),
         };
         if let Ok(text) = serde_json::to_string(&h) {
-            let _ = std::fs::write(path, text);
+            let _ = storage.write(key, text.as_bytes());
         }
     }
 
