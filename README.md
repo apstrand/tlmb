@@ -476,7 +476,18 @@ manifest, and exports the result into a local Flatpak repository to install
 from. Installing it that way, rather than from the build directory, means a
 local install updates itself from the next local build.
 
-Releasing is one command, for the version in `Cargo.toml`:
+Releasing is pushing a tag that matches the version in `Cargo.toml`:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/flatpak-release.yml` then runs `build.sh --release` on a
+runner. It wants two repository secrets: `FLATPAK_GPG_PRIVATE_KEY`, the output
+of `gpg --armor --export-secret-keys 772EE1812AA4D782E519E62E4496C4F85CE95DB1`,
+and `FLATPAK_GPG_PASSPHRASE`; the `MAILBOX_*_CLIENT_ID`/`_SECRET` OAuth2
+credentials are picked up from secrets of the same names when they exist. The
+same release can be made from a machine that holds the key:
 
 ```sh
 packaging/flatpak/build.sh --release --dry-run   # everything but publishing
@@ -499,9 +510,10 @@ flat list:
   `flatpak install --user https://apstrand.github.io/tlmb/tlmb.flatpakref`.
 
 `--release` refuses a dirty tree, a version that already has a release, and a
-version without a `<release>` entry in the metainfo. The commit it tags must
-already be pushed. Pages and anonymous downloads need `apstrand/tlmb` to be
-public.
+version without a `<release>` entry in the metainfo, and the workflow also
+refuses a tag that does not match `Cargo.toml`. From a machine, the commit it
+tags must already be pushed. Pages and anonymous downloads need
+`apstrand/tlmb` to be public.
 
 **It updates itself.** The window asks the Flatpak portal to watch the
 repository it was installed from. When a newer build is there, the status bar
