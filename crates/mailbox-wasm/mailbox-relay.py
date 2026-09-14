@@ -11,6 +11,7 @@ import asyncio
 import base64
 import hashlib
 import struct
+from urllib.parse import urlsplit
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ALLOWED_PORTS = (143, 993, 465, 587)
@@ -27,6 +28,13 @@ def endpoint(value):
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError("port must be between 1 and 65535")
     return host.strip("[]"), port
+
+
+def upstream(value):
+    name, separator, destination = value.partition("=")
+    if not separator or not name or not name.isidentifier():
+        raise argparse.ArgumentTypeError("expected NAME=HOST:PORT")
+    return name, endpoint(destination)
 
 
 async def read_frame(reader, max_bytes):
@@ -89,13 +97,20 @@ async def pipe_tcp_to_web(tcp_reader, web_writer, max_bytes, idle_timeout):
         await asyncio.wait_for(web_writer.drain(), idle_timeout)
 
 
-async def handle(web_reader, web_writer, target, policy, slots):
+async def handle(web_reader, web_writer, targets, policy, slots):
     tcp_writer = None
     try:
         async with slots:
             request = await asyncio.wait_for(
                 web_reader.readuntil(b"\r\n\r\n"), policy["idle_timeout"]
             )
+            request_line = request.decode("latin1").split("\r\n", 1)[0].split(" ", 2)
+            if len(request_line) != 3 or request_line[0] != "GET":
+                raise ValueError("invalid WebSocket request line")
+            route = urlsplit(request_line[1]).path.rstrip("/") or "/"
+            target = targets.get(route)
+            if target is None:
+                raise ValueError(f"unknown relay route {route!r}")
             headers = {}
             for line in request.decode("latin1").split("\r\n")[1:]:
                 if ":" in line:
@@ -138,19 +153,30 @@ async def handle(web_reader, web_writer, target, policy, slots):
 
 
 async def run(args):
-    target_host, target_port = args.target
-    if target_port not in args.allowed_port:
-        raise SystemExit(f"target port {target_port} is not in --allowed-port")
-    if args.allowed_host and target_host not in args.allowed_host:
-        raise SystemExit(f"target host {target_host!r} is not in --allowed-host")
+    targets = {}
+    if args.target is not None:
+        targets["/"] = args.target
+    for name, target in args.upstream or []:
+        route = f"/{name}"
+        if route in targets:
+            raise SystemExit(f"duplicate relay route {route}")
+        targets[route] = target
+    if not targets:
+        raise SystemExit("provide --target or at least one --upstream NAME=HOST:PORT")
+    for target_host, target_port in targets.values():
+        if target_port not in args.allowed_port:
+            raise SystemExit(f"target port {target_port} is not in --allowed-port")
+        if args.allowed_host and target_host not in args.allowed_host:
+            raise SystemExit(f"target host {target_host!r} is not in --allowed-host")
     policy = {"max_bytes": args.max_bytes, "idle_timeout": args.idle_timeout}
     slots = asyncio.Semaphore(args.max_connections)
     server = await asyncio.start_server(
-        lambda reader, writer: handle(reader, writer, args.target, policy, slots),
+        lambda reader, writer: handle(reader, writer, targets, policy, slots),
         *args.listen,
     )
     addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets)
-    print(f"mailbox relay on {addresses} -> {target_host}:{target_port} "
+    routes = ", ".join(f"{route} -> {host}:{port}" for route, (host, port) in targets.items())
+    print(f"mailbox relay on {addresses} ({routes}) "
           f"(max {args.max_bytes} bytes, {args.idle_timeout}s idle, "
           f"{args.max_connections} connections)")
     async with server:
@@ -160,7 +186,10 @@ async def run(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--listen", type=endpoint, default=("127.0.0.1", 9001))
-    parser.add_argument("--target", type=endpoint, required=True)
+    parser.add_argument("--target", type=endpoint,
+                        help="single upstream, exposed at the root route (legacy form)")
+    parser.add_argument("--upstream", action="append", type=upstream,
+                        help="named fixed upstream NAME=HOST:PORT, exposed at /NAME")
     parser.add_argument("--allowed-host", action="append", default=[])
     parser.add_argument(
         "--allowed-port", action="append", type=int,

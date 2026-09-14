@@ -2,8 +2,19 @@
 
 The generated site is static, but browser IMAP access needs a relay process.
 The relay must be reachable as `wss://` and must be behind a TLS reverse
-proxy. It is a fixed-destination pipe: run one instance for each allowed
-upstream endpoint, or replace it with a policy-aware multi-tenant service.
+proxy. It supports either one fixed destination or a named allow-list of
+destinations. Named routes keep the upstream choice out of browser data:
+
+```sh
+python crates/mailbox-wasm/mailbox-relay.py \
+  --upstream own=imap.example.com:993 \
+  --upstream google=imap.gmail.com:993 \
+  --allowed-host imap.example.com --allowed-host imap.gmail.com \
+  --tls-terminated
+```
+
+The generated site should use `wss://relay.example.com/google` (or `/own`).
+There is no arbitrary host or port parameter in the WebSocket protocol.
 
 1. Build the wasm package and generate the site with the public relay URL:
 
@@ -13,9 +24,9 @@ upstream endpoint, or replace it with a policy-aware multi-tenant service.
      --relay wss://relay.example.com/
    ```
 
-2. Install `mailbox-relay.service`, change its `--target` and
-   `--allowed-host`, create the unprivileged `mailbox-relay` user, and enable
-   it with systemd.
+2. Install `mailbox-relay.service`, change its `ExecStart` to the desired
+   `--upstream NAME=HOST:PORT` entries and `--allowed-host` values, create the
+   unprivileged `mailbox-relay` user, and enable it with systemd.
 
 3. Install `deploy/Caddyfile` as `/etc/caddy/Caddyfile`, replacing both host
    names and the static-site path. Caddy obtains certificates and forwards the

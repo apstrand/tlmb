@@ -185,3 +185,29 @@
      │ rest. It is a day or two of work and it decides whether the other stages are              │
      │ worth planning in detail.                                                                 │
      ╰───────────────────────────────────────────────────────────────────────────────────────────╯
+
+## Fixed providers and arbitrary IMAP
+
+The safe hosted default is a finite provider allow-list. The relay exposes
+named WebSocket routes such as `/own` and `/google`; each route maps to a
+destination configured at startup. The browser can select a route, but cannot
+send a host or port. This supports a small set of known providers while
+keeping the relay a blind, bounded pipe.
+
+An arbitrary-IMAP service cannot safely accept an unauthenticated `HOST:PORT`
+from the browser. Even though the relay cannot decrypt the TLS payload, it
+would still be an internet-wide TCP proxy and could be abused for scanning,
+spam, credential attacks, or connections to internal addresses. A generic
+service therefore needs destination validation before TCP (including DNS
+rebinding and private-IP rejection), authenticated tenants, quotas, abuse
+monitoring, revocation, isolated outbound egress, and connection/rate/byte/
+idle/lifetime limits.
+
+The viable options are: named static routes for a curated provider list;
+per-user relay instances provisioned after account verification; an
+authenticated broker that resolves and policy-checks destinations in a
+sandbox before issuing short-lived route tokens; or a server-side connector
+that terminates IMAP TLS. The last option supports arbitrary servers most
+easily, but the server sees credentials and mailbox traffic, changing the
+hosted privacy promise. If that trade-off is unacceptable, use a brokered
+authenticated design rather than a raw arbitrary TCP relay.
