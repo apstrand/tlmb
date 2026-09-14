@@ -27,7 +27,7 @@ def endpoint(value):
         raise argparse.ArgumentTypeError("port must be an integer") from error
 
 
-async def read_frame(reader):
+async def read_frame(reader, max_bytes):
     first, second = await reader.readexactly(2)
     opcode = first & 0x0F
     masked = bool(second & 0x80)
@@ -36,7 +36,7 @@ async def read_frame(reader):
         length = struct.unpack("!H", await reader.readexactly(2))[0]
     elif length == 127:
         length = struct.unpack("!Q", await reader.readexactly(8))[0]
-    if length > MAX_BYTES:
+    if length > max_bytes:
         raise ValueError("WebSocket frame exceeds spike byte cap")
     mask = await reader.readexactly(4) if masked else None
     payload = bytearray(await reader.readexactly(length))
@@ -56,10 +56,10 @@ def frame(payload, opcode=2):
     return header + bytes([127]) + struct.pack("!Q", length) + payload
 
 
-async def websocket_to_tcp(web_reader, tcp_writer):
+async def websocket_to_tcp(web_reader, tcp_writer, max_bytes):
     total = 0
     while True:
-        opcode, payload = await read_frame(web_reader)
+        opcode, payload = await read_frame(web_reader, max_bytes)
         if opcode == 8:
             return
         if opcode == 9:
@@ -69,23 +69,23 @@ async def websocket_to_tcp(web_reader, tcp_writer):
         if opcode != 2:
             raise ValueError("the relay accepts binary frames only")
         total += len(payload)
-        if total > MAX_BYTES:
+        if total > max_bytes:
             raise ValueError("connection exceeds spike byte cap")
         tcp_writer.write(payload)
         await tcp_writer.drain()
 
 
-async def tcp_to_websocket(tcp_reader, web_writer):
+async def tcp_to_websocket(tcp_reader, web_writer, max_bytes):
     total = 0
     while chunk := await tcp_reader.read(64 * 1024):
         total += len(chunk)
-        if total > MAX_BYTES:
+        if total > max_bytes:
             raise ValueError("connection exceeds spike byte cap")
         web_writer.write(frame(chunk))
         await web_writer.drain()
 
 
-async def handle(web_reader, web_writer, target):
+async def handle(web_reader, web_writer, target, max_bytes):
     tcp_writer = None
     try:
         request = await web_reader.readuntil(b"\r\n\r\n")
@@ -113,8 +113,8 @@ async def handle(web_reader, web_writer, target):
         await web_writer.drain()
 
         tasks = [
-            asyncio.create_task(websocket_to_tcp(web_reader, tcp_writer)),
-            asyncio.create_task(tcp_to_websocket(tcp_reader, web_writer)),
+            asyncio.create_task(websocket_to_tcp(web_reader, tcp_writer, max_bytes)),
+            asyncio.create_task(tcp_to_websocket(tcp_reader, web_writer, max_bytes)),
         ]
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
@@ -133,12 +133,15 @@ async def handle(web_reader, web_writer, target):
         await web_writer.wait_closed()
 
 
-async def run(listen, target):
+async def run(listen, target, max_bytes):
     server = await asyncio.start_server(
-        lambda reader, writer: handle(reader, writer, target), *listen
+        lambda reader, writer: handle(reader, writer, target, max_bytes), *listen
     )
     addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets)
-    print(f"spike relay on {addresses} -> {target[0]}:{target[1]}")
+    print(
+        f"spike relay on {addresses} -> {target[0]}:{target[1]} "
+        f"(max {max_bytes} bytes/connection)"
+    )
     async with server:
         await server.serve_forever()
 
@@ -147,8 +150,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--listen", type=endpoint, default=("127.0.0.1", 9001))
     parser.add_argument("--target", type=endpoint, required=True)
+    parser.add_argument(
+        "--max-bytes",
+        type=int,
+        default=MAX_BYTES,
+        metavar="BYTES",
+        help=f"maximum bytes in either direction (default: {MAX_BYTES})",
+    )
     args = parser.parse_args()
-    asyncio.run(run(args.listen, args.target))
+    if args.max_bytes <= 0:
+        parser.error("--max-bytes must be positive")
+    asyncio.run(run(args.listen, args.target, args.max_bytes))
 
 
 if __name__ == "__main__":

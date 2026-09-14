@@ -26,6 +26,11 @@ python crates/mailbox-wasm/spike-relay.py \
   --target imap.gmail.com:993
 ```
 
+The probe limits each direction to 8 MiB by default. For a mailbox whose
+initial sync is larger, raise the limit explicitly, for example
+`--max-bytes 67108864` (64 MiB). This is still a development-only relay and
+must not be exposed publicly.
+
 Then visit `http://127.0.0.1:8765/?run-tls=1`. `serve.py` sets COOP and COEP;
 without those headers the browser correctly refuses to expose
 SharedArrayBuffer. The relay forwards opaque binary frames and cannot decrypt
