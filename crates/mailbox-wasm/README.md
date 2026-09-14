@@ -38,10 +38,12 @@ concurrent-connection limits:
 ```sh
 python crates/mailbox-wasm/mailbox-relay.py \
   --listen 127.0.0.1:9001 \
-  --target mail.zarquon.se:993 \
+  --upstream zarquon=mail.zarquon.se:993 \
   --allowed-host mail.zarquon.se \
   --tls-terminated
 ```
+
+Use `wss://relay.example.com/zarquon` as the generated site's relay URL.
 
 Then visit `http://127.0.0.1:8765/?run-tls=1`. `serve.py` sets COOP and COEP;
 without those headers the browser correctly refuses to expose
