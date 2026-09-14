@@ -31,6 +31,18 @@ initial sync is larger, raise the limit explicitly, for example
 `--max-bytes 67108864` (64 MiB). This is still a development-only relay and
 must not be exposed publicly.
 
+For deployment, use `mailbox-relay.py` behind a TLS/WSS reverse proxy. It
+requires `--tls-terminated` and enforces destination policy, byte, idle, and
+concurrent-connection limits:
+
+```sh
+python crates/mailbox-wasm/mailbox-relay.py \
+  --listen 127.0.0.1:9001 \
+  --target mail.zarquon.se:993 \
+  --allowed-host mail.zarquon.se \
+  --tls-terminated
+```
+
 Then visit `http://127.0.0.1:8765/?run-tls=1`. `serve.py` sets COOP and COEP;
 without those headers the browser correctly refuses to expose
 SharedArrayBuffer. The relay forwards opaque binary frames and cannot decrypt
