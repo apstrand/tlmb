@@ -264,6 +264,7 @@ impl HostedMailbox {
         credential: Option<String>,
         checkpoint: Option<Vec<u8>>,
     ) -> Result<HostedMailbox, JsError> {
+        #[cfg(target_arch = "wasm32")]
         console_error_panic_hook::set_once();
         let config: mailbox_core::config::Config =
             serde_json::from_str(config_json).map_err(js_error)?;
