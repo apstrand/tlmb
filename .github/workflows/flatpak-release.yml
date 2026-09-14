@@ -16,6 +16,7 @@ name: flatpak-release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch: 
 
 # Two releases at once would both fetch gh-pages and the second push would
 # drop the first one's build from the update history.
