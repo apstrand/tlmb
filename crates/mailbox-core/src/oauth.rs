@@ -374,10 +374,10 @@ impl Redirect {
         self.listener
             .set_nonblocking(false)
             .map_err(|e| Error::Network(format!("{e}")))?;
-        let deadline = std::time::Instant::now() + timeout;
+        let deadline = web_time::Instant::now() + timeout;
 
         loop {
-            if std::time::Instant::now() >= deadline {
+            if web_time::Instant::now() >= deadline {
                 // Not `Error::Timeout`: "timed out after 300000 ms" says
                 // nothing about what was being waited for, and what someone
                 // needs to know here is that nothing was changed and the

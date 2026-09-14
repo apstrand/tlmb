@@ -2575,6 +2575,7 @@ dependencies = [
  "time",
  "toml 0.9.12+spec-1.1.0",
  "wasm-bindgen",
+ "web-time",
  "webpki-roots",
  "zstd",
 ]
