@@ -177,6 +177,43 @@ fn flag_and_archive_are_instant() {
 }
 
 #[test]
+fn hosted_dispatch_covers_the_shared_web_clients_missing_calls() {
+    let (_tmp, mb, id) = seeded();
+
+    let identities = payload(&mb.exec("identities", "{}").unwrap());
+    assert_eq!(identities["identities"][0]["address"], "peter@example.com");
+
+    let moved = payload(
+        &mb.exec("move", &format!(r#"{{"ids":["{id}"],"folder":"Archive"}}"#))
+            .unwrap(),
+    );
+    assert_eq!(moved["changed"], 1);
+
+    let snoozed = payload(
+        &mb.exec(
+            "snooze",
+            &format!(r#"{{"ids":["{id}"],"until":"2030-01-01"}}"#),
+        )
+        .unwrap(),
+    );
+    assert_eq!(snoozed["snoozed"][0], id);
+    let listing = payload(&mb.exec("snoozed", "{}").unwrap());
+    assert_eq!(listing["snoozed"][0]["id"], id);
+    let woke = payload(
+        &mb.exec("snooze", &format!(r#"{{"ids":["{id}"]}}"#))
+            .unwrap(),
+    );
+    assert_eq!(woke["woke"][0], id);
+
+    let outbox = payload(&mb.exec("outbox", "{}").unwrap());
+    assert_eq!(outbox["messages"].as_array().unwrap().len(), 0);
+    assert!(mb
+        .database_snapshot()
+        .unwrap()
+        .starts_with(b"SQLite format 3\0"));
+}
+
+#[test]
 fn add_account_fills_gmail_hosts_and_keeps_the_password_out_of_config() {
     let tmp = TempDir::new();
     let config = tmp.path().join("config.toml");

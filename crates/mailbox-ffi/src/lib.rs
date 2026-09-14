@@ -49,6 +49,15 @@ pub struct Mailbox {
 }
 
 impl Mailbox {
+    /// Wraps stores opened by a platform layer instead of by filesystem path.
+    pub fn from_workspace(workspace: Workspace) -> Mailbox {
+        Mailbox {
+            config_path: PathBuf::new(),
+            state_dir: PathBuf::new(),
+            inner: Mutex::new(Some(workspace)),
+        }
+    }
+
     pub fn open(config_path: impl AsRef<Path>, state_dir: impl AsRef<Path>) -> Result<Mailbox> {
         let config_path = config_path.as_ref().to_path_buf();
         let state_dir = state_dir.as_ref().to_path_buf();
@@ -172,6 +181,14 @@ impl Mailbox {
         self.move_special(ids, "trash")
     }
 
+    pub fn move_to(&self, ids: &[String], folder: &str) -> Result<Value> {
+        let refs: Vec<IdRef> = ids.iter().cloned().map(IdRef::Id).collect();
+        let written = self.with_ws_mut(|workspace| {
+            workspace.write_each(&refs, |session, ids| session.move_to(ids, folder))
+        })?;
+        Ok(json!({ "changed": written.iter().filter(|item| item.changed).count() }))
+    }
+
     fn move_special(&self, ids: &[String], special: &str) -> Result<Value> {
         let refs: Vec<IdRef> = ids.iter().cloned().map(IdRef::Id).collect();
         let written = self.with_ws_mut(|ws| {
@@ -195,6 +212,9 @@ impl Mailbox {
     }
 
     pub fn accounts(&self) -> Result<AccountList> {
+        if self.config_path.as_os_str().is_empty() {
+            return self.with_ws(|workspace| workspace.accounts());
+        }
         let config = Config::load(&self.config_path)?;
         if config.accounts.is_empty() {
             return Ok(AccountList {
@@ -236,6 +256,54 @@ impl Mailbox {
             })),
             Err(e) => Err(e),
         }
+    }
+
+    pub fn identities(&self) -> Result<Value> {
+        Ok(serde_json::to_value(
+            self.with_ws(|workspace| workspace.identities())?,
+        )?)
+    }
+
+    pub fn snooze(&self, ids: &[String], until: Option<&str>) -> Result<Value> {
+        let refs: Vec<IdRef> = ids.iter().cloned().map(IdRef::Id).collect();
+        self.with_ws_mut(|workspace| match until {
+            Some(until) => {
+                let when = mailbox_core::store::snooze::parse_until(until, &Clock::from_env())?;
+                Ok(json!({
+                    "snoozed": workspace.snooze(&refs, when)?,
+                    "until": mailbox_core::clock::format_rfc3339(when),
+                    "device": mailbox_core::paths::device_name(),
+                }))
+            }
+            None => Ok(json!({ "woke": workspace.unsnooze(&refs)? })),
+        })
+    }
+
+    pub fn snoozed(&self) -> Result<Value> {
+        Ok(json!({ "snoozed": self.with_ws(|workspace| workspace.snoozed())? }))
+    }
+
+    pub fn outbox(&self) -> Result<Value> {
+        self.with_ws(|workspace| {
+            let mut messages = Vec::new();
+            for session in workspace.sessions() {
+                for entry in session.store().outbox_entries(None)? {
+                    messages.push(mailbox_core::send::outbox_item(session.store(), &entry));
+                }
+            }
+            Ok(json!({ "messages": messages }))
+        })
+    }
+
+    /// Serializes the store in a single-account platform workspace.
+    pub fn database_snapshot(&self) -> Result<Vec<u8>> {
+        self.with_ws(|workspace| {
+            let session = workspace
+                .sessions()
+                .first()
+                .ok_or_else(Error::no_accounts)?;
+            session.store().serialize()
+        })
     }
 
     pub fn sync(&self, full: bool) -> Result<Value> {
@@ -461,9 +529,20 @@ impl Mailbox {
                 let a: IdsArgs = serde_from_value(args)?;
                 Ok(("rm", self.trash(&a.ids)?))
             }
+            "move" => {
+                let a: MoveArgs = serde_from_value(args)?;
+                Ok(("mv", self.move_to(&a.ids, &a.folder)?))
+            }
             "folders" => Ok(("folders", serde_json::to_value(self.folders()?)?)),
             "accounts" => Ok(("accounts", serde_json::to_value(self.accounts()?)?)),
+            "identities" => Ok(("identities", self.identities()?)),
             "status" => Ok(("status", self.status()?)),
+            "snooze" => {
+                let a: SnoozeArgs = serde_from_value(args)?;
+                Ok(("snooze", self.snooze(&a.ids, a.until.as_deref())?))
+            }
+            "snoozed" => Ok(("snooze", self.snoozed()?)),
+            "outbox" => Ok(("outbox", self.outbox()?)),
             "sync" => {
                 let a: SyncArgs = serde_from_value(args)?;
                 Ok(("sync", self.sync(a.full.unwrap_or(false))?))
@@ -583,6 +662,18 @@ struct IdsArgs {
 #[derive(Debug, Deserialize)]
 struct IdArgs {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MoveArgs {
+    ids: Vec<String>,
+    folder: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnoozeArgs {
+    ids: Vec<String>,
+    until: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

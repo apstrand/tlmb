@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
 <title>mailbox</title>
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="style.css">
 </head>
 <body data-pane="list">
 <!--
@@ -17,7 +17,8 @@
 -->
 <!-- Read by the module below. A `data-` attribute rather than an inline
      script, so the page's policy needs no `unsafe-inline` for scripts. -->
-<div id="config" data-token="{{TOKEN}}" data-setup="{{SETUP}}" hidden></div>
+<div id="config" data-token="{{TOKEN}}" data-setup="{{SETUP}}"
+     data-backend="{{BACKEND}}" hidden></div>
 
 <header class="bar">
   <button id="back" class="icon" aria-label="Back to the list" hidden>&#8592;</button>
@@ -209,6 +210,6 @@
   <span id="host"></span>
 </footer>
 
-<script type="module" src="/mailbox.js"></script>
+<script type="module" src="mailbox.js"></script>
 </body>
 </html>

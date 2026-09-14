@@ -139,6 +139,36 @@ impl Session {
         })
     }
 
+    /// Builds the ordinary session facade around a caller-provided store.
+    /// Hosted wasm restores that store from OPFS; every operation above this
+    /// constructor is the same one native and mobile frontends use.
+    pub fn from_store(
+        config: Config,
+        account_id: impl Into<String>,
+        store: Store,
+        tracer: Tracer,
+        clock: Clock,
+    ) -> Result<Session> {
+        let account_id = account_id.into();
+        config.account(&account_id)?;
+        if store.account() != account_id {
+            return Err(Error::store(format!(
+                "store for `{}` cannot be opened as `{account_id}`",
+                store.account()
+            )));
+        }
+        Ok(Session {
+            config,
+            account_id,
+            clock,
+            rng: crate::Rng::from_env(),
+            tracer,
+            agent_mode: false,
+            timeout_ms: 30_000,
+            store,
+        })
+    }
+
     pub fn store(&self) -> &Store {
         &self.store
     }

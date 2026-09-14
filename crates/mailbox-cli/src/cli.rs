@@ -142,6 +142,9 @@ pub enum Command {
     /// Start the web interface (§3).
     Serve(ServeArgs),
 
+    /// Generate a static hosted mailbox site whose state stays in the browser.
+    Site(SiteArgs),
+
     /// Launch the graphical interface (§7).
     Gui,
 
@@ -284,6 +287,18 @@ pub struct ServeArgs {
     /// Stop after this many connections. For tests.
     #[arg(long, hide = true)]
     pub max_requests: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+pub struct SiteArgs {
+    /// Directory to write the static site into.
+    #[arg(long)]
+    pub out: std::path::PathBuf,
+
+    /// Stateless WebSocket-to-TCP relay used for mail connections.
+    /// Without one the generated site can be opened and configured but not synced.
+    #[arg(long)]
+    pub relay: Option<String>,
 }
 
 #[derive(Debug, Args)]

@@ -43,6 +43,15 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// Builds a workspace from sessions restored by a platform storage layer.
+    pub fn from_sessions(config: crate::config::Config, accounts: Vec<Session>) -> Workspace {
+        Workspace {
+            restricted: accounts.len() == 1,
+            accounts,
+            config,
+        }
+    }
+
     /// Opens every configured account, or just the one `--account` named.
     ///
     /// Fails when nothing is configured, because the caller is a command that

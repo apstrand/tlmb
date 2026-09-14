@@ -13,10 +13,17 @@
 use crate::http::Response;
 
 const INDEX: &str = include_str!("../web/index.html");
-const STYLE: &str = include_str!("../web/style.css");
-const SCRIPT: &str = include_str!("../web/mailbox.js");
+pub(crate) const STYLE: &str = include_str!("../web/style.css");
+pub(crate) const SCRIPT: &str = include_str!("../web/mailbox.js");
 
 pub const UNAUTHORIZED: &str = include_str!("../web/unauthorized.html");
+
+pub(crate) fn index(token: &str, setup_allowed: bool, backend: &str) -> String {
+    INDEX
+        .replace("{{TOKEN}}", token)
+        .replace("{{SETUP}}", if setup_allowed { "1" } else { "" })
+        .replace("{{BACKEND}}", backend)
+}
 
 pub fn serve(path: &str, token: Option<&str>, setup_allowed: bool) -> Response {
     match path {
@@ -29,9 +36,7 @@ pub fn serve(path: &str, token: Option<&str>, setup_allowed: bool) -> Response {
             // than by the page trying a write to find out: a form that appears
             // and then refuses on submit is worse than one that was never
             // shown, and the answer depends on how this server was bound.
-            let page = INDEX
-                .replace("{{TOKEN}}", token.unwrap_or(""))
-                .replace("{{SETUP}}", if setup_allowed { "1" } else { "" });
+            let page = index(token.unwrap_or(""), setup_allowed, "http");
             Response::new(200, "text/html; charset=utf-8", page.into_bytes())
                 // The page loads nothing from anywhere else, and says so. A
                 // sender's HTML renders in a sandboxed frame under its own,

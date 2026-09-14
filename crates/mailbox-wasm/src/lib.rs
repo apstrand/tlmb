@@ -248,6 +248,187 @@ fn decode_checkpoint(image: Option<&[u8]>) -> std::io::Result<(Option<Vec<u8>>, 
     ))
 }
 
+/// The production JSON facade backed by browser-restored configuration and
+/// store bytes. Calls are identical to the mobile FFI surface.
+#[wasm_bindgen]
+pub struct HostedMailbox {
+    inner: mailbox_ffi::Mailbox,
+    storage: Option<Arc<MemoryStorage>>,
+}
+
+#[wasm_bindgen]
+impl HostedMailbox {
+    #[wasm_bindgen(constructor)]
+    pub fn open(
+        config_json: &str,
+        credential: Option<String>,
+        checkpoint: Option<Vec<u8>>,
+    ) -> Result<HostedMailbox, JsError> {
+        console_error_panic_hook::set_once();
+        let config: mailbox_core::config::Config =
+            serde_json::from_str(config_json).map_err(js_error)?;
+        if config.accounts.len() > 1 {
+            return Err(JsError::new(
+                "hosted multi-account checkpointing is not implemented yet",
+            ));
+        }
+
+        let (workspace, storage) = if let Some((account_id, _)) = config.accounts.first_key_value()
+        {
+            let account_id = account_id.clone();
+            if let Some(password) = credential.filter(|value| !value.is_empty()) {
+                mailbox_core::credentials::install(
+                    &account_id,
+                    mailbox_core::imap::Credential::Password(password),
+                );
+            }
+            let (database, files) = decode_checkpoint(checkpoint.as_deref()).map_err(js_error)?;
+            let storage = Arc::new(MemoryStorage::decode(files.as_deref()).map_err(js_error)?);
+            let tracer = Tracer::disabled();
+            let clock = Clock::from_env();
+            let store = Store::open_serialized_with_storage(
+                database.as_deref(),
+                storage.clone(),
+                &account_id,
+                tracer.clone(),
+                clock.clone(),
+            )
+            .map_err(js_error)?;
+            let session = mailbox_core::session::Session::from_store(
+                config.clone(),
+                account_id,
+                store,
+                tracer,
+                clock,
+            )
+            .map_err(js_error)?;
+            (
+                mailbox_core::Workspace::from_sessions(config, vec![session]),
+                Some(storage),
+            )
+        } else {
+            (
+                mailbox_core::Workspace::from_sessions(config, Vec::new()),
+                None,
+            )
+        };
+        Ok(HostedMailbox {
+            inner: mailbox_ffi::Mailbox::from_workspace(workspace),
+            storage,
+        })
+    }
+
+    pub fn exec(&self, method: &str, args_json: &str) -> Result<String, JsError> {
+        self.inner.exec(method, args_json).map_err(|error| {
+            JsError::new(
+                &serde_json::to_string(&error)
+                    .unwrap_or_else(|_| "mailbox request failed".to_string()),
+            )
+        })
+    }
+
+    pub fn snapshot(&self) -> Result<Vec<u8>, JsError> {
+        let Some(storage) = &self.storage else {
+            return Ok(Vec::new());
+        };
+        let database = self.inner.database_snapshot().map_err(js_error)?;
+        encode_checkpoint(&database, &storage.encode().map_err(js_error)?)
+    }
+}
+
+fn encode_checkpoint(database: &[u8], files: &[u8]) -> Result<Vec<u8>, JsError> {
+    let mut checkpoint = b"MBCHECK1".to_vec();
+    checkpoint.extend_from_slice(&(database.len() as u64).to_le_bytes());
+    checkpoint.extend_from_slice(database);
+    checkpoint.extend_from_slice(files);
+    Ok(checkpoint)
+}
+
+#[wasm_bindgen(js_name = prepareAccount)]
+pub fn prepare_account(args_json: &str) -> Result<String, JsError> {
+    let input: HostedAccountInput = serde_json::from_str(args_json).map_err(js_error)?;
+    let password = input.password.clone();
+    let (id, account, discovered) =
+        mailbox_core::accounts::prepare(&input.into()).map_err(js_error)?;
+    let mut config = mailbox_core::config::Config::default();
+    config.accounts.insert(id.clone(), account);
+    serde_json::to_string(&serde_json::json!({
+        "id": id,
+        "config": config,
+        "discovered": discovered,
+        "has_credential": password.is_some_and(|value| !value.is_empty()),
+    }))
+    .map_err(js_error)
+}
+
+#[wasm_bindgen(js_name = testAccount)]
+pub fn test_account(args_json: &str) -> Result<String, JsError> {
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
+    let input: HostedAccountInput = serde_json::from_str(args_json).map_err(js_error)?;
+    let password = input
+        .password
+        .clone()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| JsError::new("an account test needs a password"))?;
+    let (id, account, _) = mailbox_core::accounts::prepare(&input.into()).map_err(js_error)?;
+    let verified = mailbox_core::accounts::verify(
+        &id,
+        &account,
+        &mailbox_core::imap::Credential::Password(password),
+        Tracer::disabled(),
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(js_error)?;
+    serde_json::to_string(&verified).map_err(js_error)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = installBrowserStream)]
+pub fn install_browser_stream(
+    control: js_sys::Int32Array,
+    data: js_sys::Uint8Array,
+) -> Result<(), JsError> {
+    mailbox_core::wasm_stream::install(control, data).map_err(js_error)
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct HostedAccountInput {
+    #[serde(default)]
+    id: String,
+    address: String,
+    imap_host: Option<String>,
+    imap_port: Option<u16>,
+    imap_security: Option<String>,
+    imap_user: Option<String>,
+    smtp_host: Option<String>,
+    smtp_port: Option<u16>,
+    smtp_security: Option<String>,
+    smtp_user: Option<String>,
+    password: Option<String>,
+    require_tls: Option<bool>,
+}
+
+impl From<HostedAccountInput> for mailbox_core::accounts::NewAccount {
+    fn from(input: HostedAccountInput) -> Self {
+        mailbox_core::accounts::NewAccount {
+            id: input.id,
+            address: input.address,
+            imap_host: input.imap_host,
+            imap_port: input.imap_port,
+            imap_security: input.imap_security,
+            imap_user: input.imap_user,
+            smtp_host: input.smtp_host,
+            smtp_port: input.smtp_port,
+            smtp_security: input.smtp_security,
+            smtp_user: input.smtp_user,
+            password: input.password,
+            require_tls: input.require_tls,
+            ..Default::default()
+        }
+    }
+}
+
 /// Runs the real blocking IMAP connection path in a dedicated Worker. The
 /// page owns the WebSocket and services `BrowserStream` through these shared
 /// arrays while this call is sleeping in `Atomics.wait`.

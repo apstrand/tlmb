@@ -117,6 +117,17 @@ export async function saveCheckpoint(bytes, account = "browser") {
   await writable.close();
 }
 
+export async function clearCheckpoint(account = "browser") {
+  const directory = await accountDirectory(account);
+  for (const name of ["store.bin", "meta.db"]) {
+    try {
+      await directory.removeEntry(name);
+    } catch (error) {
+      if (error.name !== "NotFoundError") throw error;
+    }
+  }
+}
+
 export async function persistedDatabaseProbe(BrowserStore) {
   const checkpoint = await loadCheckpoint();
   const restored = checkpoint !== undefined;
