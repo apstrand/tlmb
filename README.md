@@ -476,7 +476,9 @@ manifest, and exports the result into a local Flatpak repository to install
 from. Installing it that way, rather than from the build directory, means a
 local install updates itself from the next local build.
 
-Releasing is pushing a tag that matches the version in `Cargo.toml`:
+Releasing is pushing a tag that matches the version in `Cargo.toml`. The full
+checklist, manual releases, and what to do when one goes wrong are in
+[deploy/Release.md](deploy/Release.md).
 
 ```sh
 git tag v0.2.0 && git push origin v0.2.0
