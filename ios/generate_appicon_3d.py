@@ -17,7 +17,7 @@ TRAY_W, TRAY_D, TRAY_H = 158.0, 198.0, 36.0
 WALL = 12.0
 BOTTOM = 8.0
 SLAT_H = 2.6
-SLAT_COUNT = 5
+SLAT_COUNT = 0
 SLAT_GAP = 3.0
 
 # #10 envelope proportions, standing on the long edge, packed into the tray.
@@ -25,7 +25,8 @@ ENV_W, ENV_H, ENV_T = 128.0, 70.0, 7.5
 ENV_TILT_DEG = 15.0
 ENV_COUNT = 6
 ENV_SPACING = 23.0
-ENV_X_OFFSET = -2.0
+ENV_X_OFFSET = 20.0
+ENV_Z_OFFSET = 50
 FLAP_PROUD = 1.1
 FLAP_V = 0.44  # V-point as a fraction of envelope height from the bottom
 
@@ -106,6 +107,8 @@ class Mesh:
         self.nrm: list[tuple[float, float, float]] = []
         self.col: list[tuple[float, float, float, float]] = []
         self.idx: list[int] = []
+        # (verts, color, from_box). Winding matches the outward normal.
+        self.faces: list[tuple[list[tuple[float, float, float]], tuple, bool]] = []
 
     def tri(self, a, b, c, color):
         n = normalize(cross(sub(b, a), sub(c, a)))
@@ -124,7 +127,12 @@ class Mesh:
             b, c = c, b
         self.tri(a, b, c, color)
 
-    def face(self, verts, color, outward):
+    def face(self, verts, color, outward, from_box=False):
+        verts = [tuple(v) for v in verts]
+        n = cross(sub(verts[1], verts[0]), sub(verts[2], verts[0]))
+        if dot(n, outward) < 0:
+            verts = [verts[0], *reversed(verts[1:])]
+        self.faces.append((verts, color, from_box))
         if len(verts) == 3:
             self.tri_out(verts[0], verts[1], verts[2], color, outward)
             return
@@ -134,6 +142,10 @@ class Mesh:
 
     def map_positions(self, fn):
         self.pos = [fn(p) for p in self.pos]
+        self.faces = [
+            ([fn(p) for p in verts], color, from_box)
+            for verts, color, from_box in self.faces
+        ]
 
     def recompute_normals(self):
         for i in range(0, len(self.idx), 3):
@@ -171,31 +183,37 @@ def add_box(mesh: Mesh, x0, y0, z0, x1, y1, z1, color, faces=None):
         [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0)],
         c("nz"),
         (0, 0, -1),
+        from_box=True,
     )
     mesh.face(
         [(x1, y0, z1), (x0, y0, z1), (x0, y1, z1), (x1, y1, z1)],
         c("pz"),
         (0, 0, 1),
+        from_box=True,
     )
     mesh.face(
         [(x0, y0, z1), (x0, y0, z0), (x0, y1, z0), (x0, y1, z1)],
         c("nx"),
         (-1, 0, 0),
+        from_box=True,
     )
     mesh.face(
         [(x1, y0, z0), (x1, y0, z1), (x1, y1, z1), (x1, y1, z0)],
         c("px"),
         (1, 0, 0),
+        from_box=True,
     )
     mesh.face(
         [(x0, y0, z0), (x0, y0, z1), (x1, y0, z1), (x1, y0, z0)],
         c("ny"),
         (0, -1, 0),
+        from_box=True,
     )
     mesh.face(
         [(x0, y1, z0), (x1, y1, z0), (x1, y1, z1), (x0, y1, z1)],
         c("py"),
         (0, 1, 0),
+        from_box=True,
     )
 
 
@@ -263,7 +281,7 @@ def build_tray() -> Mesh:
     )
 
     inner_w = inner_x1 - inner_x0
-    slat_w = (inner_w - (SLAT_COUNT + 1) * SLAT_GAP) / SLAT_COUNT
+    slat_w = (inner_w - (SLAT_COUNT + 1) * SLAT_GAP) / SLAT_COUNT if SLAT_COUNT else 0
     x = inner_x0 + SLAT_GAP
     for _ in range(SLAT_COUNT):
         add_box(
@@ -331,7 +349,7 @@ def envelope_translations():
     inner_z0 = -hd + WALL
     floor = BOTTOM + SLAT_H + 0.15
     # Sit the stack a little forward of the back wall, with a lip at the front.
-    z0 = inner_z0 + 16.0
+    z0 = inner_z0 + ENV_Z_OFFSET
     xs = ENV_X_OFFSET
     return [(xs, floor, z0 + i * ENV_SPACING) for i in range(ENV_COUNT)]
 
@@ -342,6 +360,10 @@ def translate_mesh(mesh: Mesh, t):
     out.nrm = list(mesh.nrm)
     out.col = list(mesh.col)
     out.idx = list(mesh.idx)
+    out.faces = [
+        ([add(p, t) for p in verts], color, from_box)
+        for verts, color, from_box in mesh.faces
+    ]
     return out
 
 
@@ -637,15 +659,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 """
 
 
-def lin_to_srgb(x: float) -> float:
-    x = 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
-    if x <= 0.0031308:
-        return 12.92 * x
-    return 1.055 * (x ** (1.0 / 2.4)) - 0.055
-
-
-def hex_lin(rgba) -> str:
-    r, g, b = (int(round(lin_to_srgb(c) * 255)) for c in rgba[:3])
+def hex_rgb(rgba) -> str:
+    r, g, b = (int(rgba[0]), int(rgba[1]), int(rgba[2]))
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
@@ -693,11 +708,11 @@ def project_point(p, eye, right, cam_up, fwd, fl):
 
 # Icon camera: 3/4 from the front-left, matching screenshot-2026-09-10_21-15-27.png
 ICON_AZ = 40.0
-ICON_EL = 19.0
-ICON_DIST = 240.0
+ICON_EL = 17.0
+ICON_DIST = 300.0
 ICON_FOV = 34.0
-ICON_TARGET = (0.0, 50.0, -50.0)
-
+ICON_TARGET = (0.0, 40.0, -50.0)
+ICON_SCALE = 1.1
 
 def write_svg(
     path: str,
@@ -719,8 +734,9 @@ def write_svg(
 
     hw, hd = TRAY_W / 2, TRAY_D / 2
 
-    def outer_wall(p0, p1, p2):
-        xs, zs = (p0[0], p1[0], p2[0]), (p0[2], p1[2], p2[2])
+    def outer_wall(verts):
+        xs = [p[0] for p in verts]
+        zs = [p[2] for p in verts]
         return (
             all(x <= -hw + 0.25 for x in xs)
             or all(x >= hw - 0.25 for x in xs)
@@ -738,42 +754,46 @@ def write_svg(
     faces = []
     edge_map = defaultdict(list)
     for kind, env_i, mesh in collect_world_meshes():
-        for i in range(0, len(mesh.idx), 3):
-            ia, ib, ic = mesh.idx[i], mesh.idx[i + 1], mesh.idx[i + 2]
-            a, b, c = mesh.pos[ia], mesh.pos[ib], mesh.pos[ic]
-            n = mesh.nrm[ia]
-            if dot(n, sub(eye, a)) <= 0:
+        for verts, color, from_box in mesh.faces:
+            n = normalize(cross(sub(verts[1], verts[0]), sub(verts[2], verts[0])))
+            if from_box and dot(n, sub(eye, verts[0])) <= 0:
                 continue
-            pa = project_point(a, eye, right, cam_up, fwd, fl)
-            pb = project_point(b, eye, right, cam_up, fwd, fl)
-            pc = project_point(c, eye, right, cam_up, fwd, fl)
-            if pa is None or pb is None or pc is None:
+            proj = []
+            clipped = False
+            for v in verts:
+                p = project_point(v, eye, right, cam_up, fwd, fl)
+                if p is None:
+                    clipped = True
+                    break
+                proj.append(p)
+            if clipped:
                 continue
-            depth = (pa[2] + pb[2] + pc[2]) / 3.0
-            # Tray interior, then letters back-to-front, then outer walls.
-            if kind == "tray" and outer_wall(a, b, c):
-                layer = 20
+            depth = sum(p[2] for p in proj) / len(proj)
+            # Interior, then letters, then the outer rim — rim quads are large
+            # enough that centroid z-sort alone cannot occlude letter bottoms.
+            if kind == "tray" and outer_wall(verts):
+                group = 20
             elif kind == "tray":
-                layer = 0
+                group = 0
             else:
-                layer = 10 + (ENV_COUNT - 1 - env_i)
-            faces.append((layer, depth, pa, pb, pc, mesh.col[ia]))
-            for wa, wb, sa, sb in (
-                (a, b, pa, pb),
-                (b, c, pb, pc),
-                (c, a, pc, pa),
-            ):
-                edge_map[ekey(wa, wb)].append((layer, depth, n, sa, sb))
+                group = 10 + (ENV_COUNT - 1 - env_i)
+            faces.append((group, depth, proj, color, n, verts))
+            nv = len(verts)
+            for i in range(nv):
+                wa, wb = verts[i], verts[(i + 1) % nv]
+                sa, sb = proj[i], proj[(i + 1) % nv]
+                edge_map[ekey(wa, wb)].append((group, depth, n, sa, sb))
 
-    faces.sort(key=lambda f: (f[0], -f[1]))  # back layer, then far first
-    xs = [p[0] for f in faces for p in f[2:5]]
-    ys = [p[1] for f in faces for p in f[2:5]]
+    # Painter's algorithm: later group in front, far (larger z) first within a group.
+    faces.sort(key=lambda f: (f[0], -f[1]))
+    xs = [p[0] for f in faces for p in f[2]]
+    ys = [p[1] for f in faces for p in f[2]]
     minx, maxx = min(xs), max(xs)
     miny, maxy = min(ys), max(ys)
     w, h = maxx - minx, maxy - miny
     span = max(w, h)
     # Fit the longer axis; center on both.
-    scale = (size - 2 * (size * pad)) / span
+    scale = ICON_SCALE * (size - 2 * (size * pad)) / span
     # Recenter using pixel pad so the object sits in the square.
     cx, cy = (minx + maxx) / 2.0, (miny + maxy) / 2.0
     px0, py0 = size / 2.0, size / 2.0
@@ -787,24 +807,23 @@ def write_svg(
     lines = []
     for recs in edge_map.values():
         if len(recs) == 1:
-            layer, depth, _n, sa, sb = recs[0]
-            lines.append((layer, depth, sa, sb, "sil"))
+            group, depth, _n, sa, sb = recs[0]
+            lines.append((group, depth, sa, sb, "sil"))
             continue
         recs = sorted(recs, key=lambda r: (-r[0], r[1]))
         n0, n1 = recs[0][2], recs[1][2]
         if dot(n0, n1) < crease_lim:
-            layer = recs[0][0]
-            depth = recs[0][1]
+            group, depth = recs[0][0], recs[0][1]
             sa, sb = recs[0][3], recs[0][4]
-            lines.append((layer, depth, sa, sb, "crease"))
+            lines.append((group, depth, sa, sb, "crease"))
     lines.sort(key=lambda L: (L[0], -L[1]))
 
-    def poly_elem(a, b, c, col):
-        sa, sb, sc = to_svg(a), to_svg(b), to_svg(c)
-        fill = hex_lin(col)
-        pts = f"{sa[0]:.2f},{sa[1]:.2f} {sb[0]:.2f},{sb[1]:.2f} {sc[0]:.2f},{sc[1]:.2f}"
+    def poly_elem(pts, col):
+        svg_pts = [to_svg(p) for p in pts]
+        fill = hex_rgb(col)
+        pts_s = " ".join(f"{x:.2f},{y:.2f}" for x, y in svg_pts)
         return (
-            f'<polygon points="{pts}" fill="{fill}" stroke="{fill}" '
+            f'<polygon points="{pts_s}" fill="{fill}" stroke="{fill}" '
             f'stroke-width="0.8" stroke-linejoin="round"/>'
         )
 
@@ -815,20 +834,14 @@ def write_svg(
             f'stroke="{color}" stroke-width="{width}" stroke-linecap="round"/>'
         )
 
-    by_layer = defaultdict(lambda: {"fills": [], "lines": []})
-    for layer, _depth, a, b, c, col in faces:
-        by_layer[layer]["fills"].append(poly_elem(a, b, c, col))
-    for layer, _depth, sa, sb, kind in lines:
+    items = []
+    for group, depth, proj, col, _n, _verts in faces:
+        items.append((group, depth, 0, poly_elem(proj, col)))
+    for group, depth, sa, sb, kind in lines:
         color, width = ("#1a120c", 9.0) if kind == "sil" else ("#2a1c12", 5.0)
-        by_layer[layer]["lines"].append(line_elem(sa, sb, color, width))
-
-    chunks = []
-    for layer in sorted(by_layer):
-        chunks.append(f'<g>\n' + "\n".join(by_layer[layer]["fills"]) + "\n</g>")
-        if by_layer[layer]["lines"]:
-            chunks.append(
-                f'<g fill="none">\n' + "\n".join(by_layer[layer]["lines"]) + "\n</g>"
-            )
+        items.append((group, depth, 1, line_elem(sa, sb, color, width)))
+    items.sort(key=lambda it: (it[0], -it[1], it[2]))
+    chunks = [it[3] for it in items]
 
     svg = (
         f'<?xml version="1.0" encoding="UTF-8"?>\n'
