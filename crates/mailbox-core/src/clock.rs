@@ -44,10 +44,7 @@ impl Clock {
 
     pub fn now(&self) -> Timestamp {
         match self {
-            Clock::System => SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
+            Clock::System => system_now(),
             Clock::Fixed(t) => t.load(Ordering::SeqCst) as i64,
         }
     }
@@ -59,6 +56,19 @@ impl Clock {
             t.fetch_add(seconds, Ordering::SeqCst);
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn system_now() -> Timestamp {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn system_now() -> Timestamp {
+    (js_sys::Date::now() / 1000.0) as i64
 }
 
 impl Default for Clock {
