@@ -17,8 +17,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--directory", type=Path)
     args = parser.parse_args()
-    root = Path(__file__).parent / "web"
+    root = args.directory or Path(__file__).parent / "web"
     handler = lambda *a, **kw: Handler(*a, directory=root, **kw)
     http.server.ThreadingHTTPServer((args.bind, args.port), handler).serve_forever()
 

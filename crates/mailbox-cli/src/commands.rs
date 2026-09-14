@@ -2255,3 +2255,32 @@ pub fn serve(ctx: &Ctx<'_>, args: &crate::cli::ServeArgs) -> Result<()> {
     }
     server.run()
 }
+
+/// `site` (hosted §3): write static assets, with no per-user server state.
+pub fn site(ctx: &Ctx<'_>, args: &crate::cli::SiteArgs) -> Result<()> {
+    let report = mailbox_web::site::generate(&mailbox_web::site::Options {
+        out: args.out.clone(),
+        relay: args.relay.clone(),
+        wasm_pkg: None,
+    })?;
+    if ctx.out.is_structured() {
+        ctx.out.reply("site", &report)?;
+    } else {
+        ctx.out.print(format!(
+            "generated {} static files in {}",
+            report.files,
+            report.out.display()
+        ));
+        if report.relay.is_none() {
+            ctx.out.print(
+                ctx.out
+                    .dim("no relay configured — setup and offline use work, sync does not"),
+            );
+        }
+        ctx.out.print(
+            ctx.out
+                .dim("the host must serve the COOP/COEP headers written in _headers"),
+        );
+    }
+    Ok(())
+}

@@ -110,7 +110,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Attach(args) => commands::attach(&ctx, args),
         Command::Snooze(args) => commands::snooze(&ctx, args),
         Command::Serve(args) => commands::serve(&ctx, args),
-        Command::Relay(args) => relay::relay(&ctx, args),
+        Command::Site(args) => commands::site(&ctx, args),
         Command::Gui => gui::run(&ctx),
         Command::Send(args) => sending::send(&ctx, args),
         Command::Compose(args) => sending::compose(&ctx, args),
@@ -172,9 +172,7 @@ fn needs_write(cmd: &Command) -> bool {
         // The server reads; each write it performs opens its own session
         // (§4.1), so the handle it holds stays read-only.
         Command::Serve(_) => false,
-        // The relay touches no mailbox at all: it holds opaque bytes for two
-        // other machines and never opens a store.
-        Command::Relay(_) => false,
+        Command::Site(_) => false,
         // Adding, editing, or removing an account rewrites the config; a
         // login writes a token file. Listing and testing do not.
         Command::Accounts(args) => matches!(

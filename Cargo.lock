@@ -2639,6 +2639,7 @@ dependencies = [
  "mailbox-core",
  "mailbox-ffi",
  "rustls",
+ "serde",
  "serde_json",
  "time",
  "wasm-bindgen",

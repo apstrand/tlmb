@@ -84,28 +84,41 @@ impl Notifier {
     /// test suite that syncs new mail puts real popups on the desktop of
     /// whoever ran it, which is how it came to exist.
     pub fn discover(configured: Option<&str>) -> Notifier {
-        match std::env::var("MAILBOX_NOTIFIER") {
-            Ok(v) if v.trim() == "none" => return Notifier::Unavailable,
-            Ok(v) if !v.trim().is_empty() => return Notifier::Custom(v),
-            _ => {}
-        }
-        if let Some(command) = configured.filter(|c| !c.trim().is_empty()) {
-            return Notifier::Custom(command.to_string());
-        }
-        for (program, build) in [
-            (
-                "notify-send",
-                Notifier::NotifySend as fn(String) -> Notifier,
-            ),
-            ("osascript", Notifier::OsaScript as fn(String) -> Notifier),
-        ] {
-            if let Some(path) = which(program) {
-                return build(path);
-            }
-        }
-        Notifier::Unavailable
+        discover_impl(configured)
     }
+}
 
+#[cfg(target_arch = "wasm32")]
+fn discover_impl(configured: Option<&str>) -> Notifier {
+    let _ = configured;
+    Notifier::Unavailable
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn discover_impl(configured: Option<&str>) -> Notifier {
+    match std::env::var("MAILBOX_NOTIFIER") {
+        Ok(v) if v.trim() == "none" => return Notifier::Unavailable,
+        Ok(v) if !v.trim().is_empty() => return Notifier::Custom(v),
+        _ => {}
+    }
+    if let Some(command) = configured.filter(|c| !c.trim().is_empty()) {
+        return Notifier::Custom(command.to_string());
+    }
+    for (program, build) in [
+        (
+            "notify-send",
+            Notifier::NotifySend as fn(String) -> Notifier,
+        ),
+        ("osascript", Notifier::OsaScript as fn(String) -> Notifier),
+    ] {
+        if let Some(path) = which(program) {
+            return build(path);
+        }
+    }
+    Notifier::Unavailable
+}
+
+impl Notifier {
     pub fn is_available(&self) -> bool {
         !matches!(self, Notifier::Unavailable)
     }
@@ -182,6 +195,7 @@ fn applescript_string(value: &str) -> String {
 ///
 /// Hand-rolled rather than shelling out to `which`, which would be a process
 /// per lookup on a path this runs after every sync.
+#[cfg(not(target_arch = "wasm32"))]
 fn which(program: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)

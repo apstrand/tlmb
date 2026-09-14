@@ -113,17 +113,25 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
 /// `MAILBOX_DEVICE` overrides it: tests need a stable name, and a hostname like
 /// `arch-vm-3` is not what anyone calls their laptop.
 pub fn device_name() -> String {
-    if let Ok(name) = std::env::var("MAILBOX_DEVICE") {
-        let name = name.trim();
-        if !name.is_empty() {
-            return name.to_string();
-        }
+    #[cfg(target_arch = "wasm32")]
+    {
+        return "this browser".to_string();
     }
-    std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "this device".to_string())
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Ok(name) = std::env::var("MAILBOX_DEVICE") {
+            let name = name.trim();
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+        std::fs::read_to_string("/etc/hostname")
+            .ok()
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "this device".to_string())
+    }
 }
 
 /// Writes a file only its owner can read.

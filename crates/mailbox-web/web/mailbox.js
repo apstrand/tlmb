@@ -13,7 +13,11 @@
 // The desktop shell sets `window.__MAILBOX_SHELL__` before this module runs,
 // so the status line can say "local store" rather than an ephemeral port.
 
-const token = document.getElementById("config").dataset.token;
+const pageConfig = document.getElementById("config");
+const token = pageConfig.dataset.token;
+const hostedBackend = pageConfig.dataset.backend === "hosted"
+    ? await import("./hosted.js")
+    : null;
 
 const el = (id) => document.getElementById(id);
 const listEl = el("list");
@@ -42,6 +46,7 @@ async function api(path, options = {}) {
     state.inFlight += 1;
     el("spinner").hidden = false;
     try {
+        if (hostedBackend) return await hostedBackend.api(path, options);
         const response = await fetch(path, { ...options, headers });
         const text = await response.text();
         const value = text ? JSON.parse(text) : {};
@@ -329,6 +334,7 @@ function bodyFrame(message) {
 }
 
 function bodyUrl(message, images) {
+    if (hostedBackend) return hostedBackend.hostedBodyUrl(message, images);
     const params = new URLSearchParams({ id: message.id });
     if (images) params.set("images", "1");
     return `/body?${params}`;
@@ -676,8 +682,9 @@ function syncNow() {
 
 el("sync").addEventListener("click", () => syncNow());
 
-el("host").textContent =
-    window.__MAILBOX_SHELL__ === "gui" ? "local store" : location.host;
+el("host").textContent = hostedBackend
+    ? "browser store"
+    : window.__MAILBOX_SHELL__ === "gui" ? "local store" : location.host;
 
 // ---- the first launch (§9) ----
 //
@@ -693,15 +700,17 @@ el("host").textContent =
 // the same core calls.
 
 /** Said in two places, and it is the thing people most want to know. */
-const PASSWORD_NOTE =
-    "The password is checked against the mail server before the account is " +
-    "saved, and then goes to this machine's keychain — never into the config file.";
+const PASSWORD_NOTE = hostedBackend
+    ? "The password is checked against the mail server, then stays in this browser — " +
+      "it is never sent to the site host."
+    : "The password is checked against the mail server before the account is " +
+      "saved, and then goes to this machine's keychain — never into the config file.";
 
 /** How often to look for an account added elsewhere, when this page cannot. */
 const SETUP_POLL_MS = 2000;
 
 /** Whether this server will take a password — loopback only. See `server.rs`. */
-const setupAllowed = document.getElementById("config").dataset.setup === "1";
+const setupAllowed = pageConfig.dataset.setup === "1";
 
 let setupTimer = 0;
 
