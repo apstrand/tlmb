@@ -782,7 +782,9 @@ fn old_mail_is_fetched_lazily_and_sync_full_gets_it() {
         w.has("ancient@example.org"),
         "the headers should arrive regardless"
     );
-    let shown = w.json(&["show", &w.id("ancient@example.org")]);
+    // Normal `show` fetches a missing body on demand (§5.1). Inspect the
+    // post-sync cache without making that explicit read request.
+    let shown = w.json(&["show", "--offline", &w.id("ancient@example.org")]);
     assert_eq!(shown["message"]["subject"], "From the vault");
     assert!(
         shown["message"]["body"].is_null(),
