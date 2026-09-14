@@ -17,3 +17,9 @@ serde.workspace = true
 serde_json.workspace = true
 
 tauri = { version = "2", default-features = true }
+
+# The Flatpak portal is reached over D-Bus with the GLib bindings Tauri's GTK
+# window already links, so self-update adds no second D-Bus stack.
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.18"
+glib = "0.18"

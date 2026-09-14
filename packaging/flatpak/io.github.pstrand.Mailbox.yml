@@ -1,0 +1,75 @@
+# The Linux desktop app, as a Flatpak.
+#
+# Built by `build.sh` beside this file, which vendors the crates first: the
+# build sandbox has no network, and a lockfile-exact vendor directory is what
+# makes the build the same one every time. Building this manifest directly
+# without running `build.sh` fails on the missing `.build/` sources.
+
+app-id: io.github.pstrand.Mailbox
+runtime: org.gnome.Platform
+# GNOME 50 carries WebKitGTK 4.1, which is the webview Tauri drives on Linux.
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: mailbox-desktop
+
+# Self-update (mailbox-ui's update.rs) is refused by the portal when a new
+# build asks for more than the installed one had. Adding a line here therefore
+# means every existing install has to be updated by hand once — keep this list
+# as short as it can be, and change it rarely.
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # One config and one store, shared with a `mailbox` installed on the host
+  # rather than a second mailbox under ~/.var/app. See mailbox.sh.
+  - --filesystem=xdg-config/mailbox:create
+  - --filesystem=xdg-data/mailbox:create
+  # `notify-send` for new mail (§11), `secret-tool` for the keychain.
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.secrets
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+
+modules:
+  - name: mailbox
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/mailbox/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      # OAuth2 client credentials are compiled in when the environment has
+      # them (README, "Building"); `build.sh` writes whatever it was given.
+      - set -a && . ./oauth.env && set +a && cargo build --release --locked --offline -p mailbox-cli
+      - install -Dm755 target/release/mailbox /app/libexec/mailbox
+      - install -Dm755 packaging/flatpak/mailbox.sh /app/bin/mailbox
+      - install -Dm755 packaging/flatpak/mailbox-desktop.sh /app/bin/mailbox-desktop
+      - install -Dm644 packaging/flatpak/io.github.pstrand.Mailbox.desktop -t /app/share/applications
+      - install -Dm644 packaging/flatpak/io.github.pstrand.Mailbox.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 crates/mailbox-ui/icons/32x32.png /app/share/icons/hicolor/32x32/apps/io.github.pstrand.Mailbox.png
+      - install -Dm644 crates/mailbox-ui/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.github.pstrand.Mailbox.png
+      - install -Dm644 crates/mailbox-ui/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/io.github.pstrand.Mailbox.png
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - target
+          - dist
+          - ios
+          - tests/e2e
+          - packaging/flatpak/.build
+      - type: dir
+        path: .build/vendor
+        dest: vendor
+      - type: file
+        path: .build/cargo-config.toml
+        dest: cargo
+        dest-filename: config.toml
+      - type: file
+        path: .build/oauth.env

@@ -2529,6 +2529,8 @@ dependencies = [
 name = "mailbox-ui"
 version = "0.1.0"
 dependencies = [
+ "gio",
+ "glib",
  "mailbox-api",
  "mailbox-core",
  "mailbox-web",

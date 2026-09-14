@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.pstrand.Mailbox</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>Mailbox</name>
+  <summary>A self-contained IMAP and SMTP client</summary>
+  <developer id="io.github.pstrand">
+    <name>Peter Strand</name>
+  </developer>
+  <description>
+    <p>
+      One mail client with many faces: this window, a terminal interface, a
+      command line and a local web page, all over the same offline store.
+    </p>
+    <ul>
+      <li>A single search field that takes the same query language as the command line</li>
+      <li>Keyboard triage: archive, delete, snooze and flag without leaving the list</li>
+      <li>Messages render as sanitized HTML with remote images off until you allow them</li>
+      <li>Works offline, and sends from an outbox that survives a crash</li>
+      <li>Updates itself from inside the window</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.pstrand.Mailbox.desktop</launchable>
+  <url type="homepage">https://github.com/pstrand/mailbox</url>
+  <url type="bugtracker">https://github.com/pstrand/mailbox/issues</url>
+  <categories>
+    <category>Network</category>
+    <category>Email</category>
+  </categories>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-09-13"/>
+  </releases>
+</component>

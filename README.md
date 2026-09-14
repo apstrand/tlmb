@@ -298,6 +298,52 @@ verification status; see [Adding an account](#oauth2). The test suite passes
 either way, and asserts that the binary's behaviour matches what it was built
 with.
 
+### The Linux desktop app
+
+On Linux the window ships as a Flatpak, `io.github.pstrand.Mailbox`, on the
+GNOME runtime — which is where WebKitGTK comes from, so nothing needs
+installing on the host:
+
+```sh
+flatpak install flathub org.flatpak.Builder   # once
+packaging/flatpak/build.sh --run              # build, install for this user, open
+```
+
+`build.sh` vendors the crates (the build sandbox has no network), builds the
+manifest, and exports the result into a Flatpak repository. That repository is
+the release channel: plain static files that any HTTPS host can serve.
+
+```sh
+MAILBOX_FLATPAK_URL=https://example.org/mailbox \
+MAILBOX_FLATPAK_GPG_KEY=<fingerprint> \
+    packaging/flatpak/build.sh --bundle
+```
+
+signs the commits, writes `mailbox.flatpakref` into the repository — upload the
+directory and point people at that file — and a one-file `mailbox.flatpak`
+installer beside it. Export every release into the same repository.
+
+**It updates itself.** The window asks the Flatpak portal to watch the
+repository it was installed from. When a newer build is there, the status bar
+says so and offers *Install*; the portal downloads and deploys it while the
+mail stays open, and *Restart* starts the new build in place of the old one.
+It is the same transaction `flatpak update` runs, so an update installed from
+a terminal or a software centre shows up as *Restart* too. Three things to
+know:
+
+- The portal checks every 30 minutes, not at launch.
+- An update that asks for more sandbox permissions than the installed build
+  has is refused — the portal's rule, not ours — and says so. Treat
+  `finish-args` in the manifest as a contract with every existing install.
+- Only a Flatpak installed *from a repository* can update: a build installed
+  straight from a build directory has nowhere to look. A browser, `mailbox
+  serve`, and a `cargo build` never show the control at all.
+
+The sandbox shares the host's `~/.config/mailbox` and `~/.local/share/mailbox`
+rather than keeping a second mailbox under `~/.var/app`, so a `mailbox` on the
+host and the window are one mailbox. The CLI and TUI are in the package too:
+`flatpak run --command=mailbox io.github.pstrand.Mailbox tui`.
+
 ### A mailbox with twenty years in it
 
 The first sync does not fetch twenty years before showing you anything. Each
@@ -754,6 +800,7 @@ crates/mailbox-ui     the GUI (Tauri, around the web client)
 crates/mailbox-web    the local web UI, and the page the GUI shows
 crates/mailbox-ffi    C ABI for the native mobile shells
 ios/                  SwiftUI app over mailbox-ffi
+packaging/flatpak     the Linux desktop app: manifest, build and release
 tests/dovecot         the L2 server, configured in-tree
 tests/e2e             KVM UI evidence: TUI, web, GUI, isolated mail
 ```

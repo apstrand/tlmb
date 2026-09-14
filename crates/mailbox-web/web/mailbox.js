@@ -1013,4 +1013,70 @@ async function addAccount() {
     }
 }
 
+// ---- updating the desktop app ----
+//
+// The packaged Linux app asks the Flatpak portal for updates; the shell holds
+// that state and hands it over through Tauri's IPC. In a browser, in a
+// non-Flatpak build, and before anything newer exists, this draws nothing:
+// an "up to date" line nobody asked about is noise in a status bar.
+
+const shellIpc = window.__MAILBOX_SHELL__ === "gui" ? window.__TAURI__?.core : null;
+
+const UPDATE_COPY = {
+    available: ["A new version is available", "Install"],
+    ready: ["The new version is installed", "Restart"],
+};
+
+function drawUpdate(status) {
+    const box = el("update");
+    const action = el("update-action");
+    const [text, button] = UPDATE_COPY[status.state] ?? [null, null];
+    box.classList.toggle("is-failed", status.state === "failed");
+
+    if (status.state === "installing") {
+        el("update-text").textContent = `Updating… ${status.percent}%`;
+        action.hidden = true;
+    } else if (status.state === "failed") {
+        el("update-text").textContent = `Update failed: ${status.message}`;
+        action.textContent = "Try again";
+        action.hidden = false;
+    } else if (text) {
+        el("update-text").textContent = text;
+        action.textContent = button;
+        action.hidden = false;
+    } else {
+        box.hidden = true;
+        return;
+    }
+    action.dataset.state = status.state;
+    box.hidden = false;
+}
+
+async function updateAction() {
+    const action = el("update-action");
+    if (action.dataset.state === "ready") {
+        // Restarting closes this window, and an open compose window is the
+        // only copy of what is in it.
+        if (composeWindow.open) {
+            fail(new Error("send or discard the message before restarting"));
+            return;
+        }
+        action.disabled = true;
+        try {
+            await shellIpc.invoke("update_restart");
+        } catch (e) {
+            fail(e);
+            action.disabled = false;
+        }
+        return;
+    }
+    await shellIpc.invoke("update_install").catch(fail);
+}
+
+if (shellIpc) {
+    window.addEventListener("mailbox-update", (event) => drawUpdate(event.detail));
+    el("update-action").addEventListener("click", () => updateAction());
+    shellIpc.invoke("update_status").then(drawUpdate, () => {});
+}
+
 start();

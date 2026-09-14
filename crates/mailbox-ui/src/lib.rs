@@ -13,18 +13,21 @@
 
 pub mod app;
 pub mod backend;
+pub mod update;
 
 pub use app::{App, Focus};
 pub use backend::{Backend, Request, Response, Seq};
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::{Arc, Mutex};
 
 use mailbox_core::error::{Error, Result};
 use mailbox_core::session::SessionOptions;
 use mailbox_core::{Clock, Tracer};
 use mailbox_web::server::{make_token, Options, Server};
+use tauri::ipc::CapabilityBuilder;
 use tauri::webview::{NewWindowResponse, WebviewWindowBuilder};
-use tauri::WebviewUrl;
+use tauri::{AppHandle, Manager, WebviewUrl};
 
 /// Opens the window and runs until it closes.
 pub fn run(opts: SessionOptions, tracer: Tracer, clock: Clock) -> Result<()> {
@@ -68,7 +71,26 @@ fn open_window(url: &str, port: u16) -> Result<()> {
     let _ = std::fs::create_dir_all(&webview_dir);
 
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            update_status,
+            update_install,
+            update_restart
+        ])
         .setup(move |app| {
+            // The page is served from loopback, which Tauri counts as remote
+            // content and refuses every command to. This grants the three
+            // update commands to exactly this process's server — not to any
+            // port, and not to anything a message links to.
+            app.add_capability(
+                CapabilityBuilder::new("shell-updates")
+                    .remote(format!("http://127.0.0.1:{port}"))
+                    .window("main")
+                    .permission("allow-update-status")
+                    .permission("allow-update-install")
+                    .permission("allow-update-restart"),
+            )?;
+            app.manage(Updates::start(app.handle()));
+
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
                 .title("mailbox")
                 .inner_size(1100.0, 720.0)
@@ -115,7 +137,108 @@ fn prepare_webview_env() {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
+        // A compositor pairs a window with its desktop entry, and so its icon
+        // and name in a dock, by the Wayland app_id — which GTK takes from the
+        // program name. In a Flatpak the entry is named after the app id.
+        // Tauri's own `enableGTKAppId` would do this too, but it also makes
+        // the process single-instance, and restarting into an update starts
+        // the new process while the old one is still closing.
+        if let Ok(id) = std::env::var("FLATPAK_ID") {
+            glib::set_prgname(Some(id.as_str()));
+        }
     }
+}
+
+/// The update state the page asks for, and the portal behind it.
+struct Updates {
+    tracker: Arc<Mutex<update::Tracker>>,
+    #[cfg(target_os = "linux")]
+    portal: Option<update::portal::Portal>,
+}
+
+impl Updates {
+    fn start(app: &AppHandle) -> Updates {
+        if !update::in_flatpak() {
+            return Updates {
+                tracker: Arc::new(Mutex::new(update::Tracker::unsupported())),
+                #[cfg(target_os = "linux")]
+                portal: None,
+            };
+        }
+        let tracker = Arc::new(Mutex::new(update::Tracker::watching()));
+        #[cfg(target_os = "linux")]
+        {
+            let handle = app.clone();
+            let portal =
+                update::portal::Portal::start(tracker.clone(), move || push_update_status(&handle));
+            if portal.is_none() {
+                *tracker.lock().unwrap_or_else(|e| e.into_inner()) = update::Tracker::unsupported();
+            }
+            Updates { tracker, portal }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = app;
+            Updates { tracker }
+        }
+    }
+
+    fn status(&self) -> update::Status {
+        self.tracker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .status()
+            .clone()
+    }
+}
+
+/// Tells the page the update status moved. The page also asks on load, so a
+/// change that lands before it is listening is not lost.
+fn push_update_status(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let status = app.state::<Updates>().status();
+    let Ok(json) = serde_json::to_string(&status) else {
+        return;
+    };
+    let _ = window.eval(format!(
+        "window.dispatchEvent(new CustomEvent('mailbox-update', {{ detail: {json} }}))"
+    ));
+}
+
+#[tauri::command]
+fn update_status(updates: tauri::State<'_, Updates>) -> update::Status {
+    updates.status()
+}
+
+#[tauri::command]
+fn update_install(app: AppHandle, updates: tauri::State<'_, Updates>) {
+    #[cfg(target_os = "linux")]
+    if let Some(portal) = &updates.portal {
+        portal.install(move || push_update_status(&app));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (app, updates);
+}
+
+/// Starts the newest installed build and closes this one.
+///
+/// The empty command is the portal's way of saying "the app's own command",
+/// so this does not need to know what the package calls its launcher.
+#[tauri::command]
+fn update_restart(
+    app: AppHandle,
+    updates: tauri::State<'_, Updates>,
+) -> std::result::Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if let Some(portal) = &updates.portal {
+        portal.spawn_latest(&[""])?;
+        app.exit(0);
+        return Ok(());
+    }
+    let _ = (app, updates);
+    Err("this build does not update itself".into())
 }
 
 /// Marks the page as the desktop shell so the status line can say "local

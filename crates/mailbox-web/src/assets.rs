@@ -90,6 +90,26 @@ mod tests {
         );
     }
 
+    /// The packaged desktop app updates itself (mailbox-ui's `update.rs`), and
+    /// the only place it can say so is this page. The names are the shell's
+    /// side of the contract: the event it dispatches and the commands it
+    /// grants.
+    #[test]
+    fn the_page_can_show_a_desktop_update() {
+        assert!(super::INDEX.contains(r#"id="update-action""#));
+        for needle in [
+            "mailbox-update",
+            "update_status",
+            "update_install",
+            "update_restart",
+        ] {
+            assert!(
+                super::SCRIPT.contains(needle),
+                "mailbox.js is missing {needle}"
+            );
+        }
+    }
+
     /// `serve` and `gui` start whether or not an account exists (§9), and this
     /// is the only page either of them has — so the way to add one is carried
     /// here or nowhere. A browser tab and the desktop window are exactly the
