@@ -17,7 +17,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/pstrand/mailbox"
+repository = "https://github.com/apstrand/tlmb"
 
 [workspace.dependencies]
 mailbox-api = { path = "crates/mailbox-api" }

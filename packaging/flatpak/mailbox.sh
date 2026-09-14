@@ -6,7 +6,7 @@
 # store, and a second sync engine fighting the first for the same account. The
 # manifest grants the host's `mailbox` directories instead, and this points
 # the binary at them, so the window, a `mailbox` on the host, and
-# `flatpak run --command=mailbox io.github.pstrand.Mailbox tui` are one mailbox.
+# `flatpak run --command=mailbox com.thelastmailbox.flat tui` are one mailbox.
 #
 # Flatpak exports the host's own XDG variables as HOST_XDG_* when they are set,
 # which is also how it resolved the `xdg-config` and `xdg-data` grants.

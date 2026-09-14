@@ -462,7 +462,7 @@ with.
 
 ### The Linux desktop app
 
-On Linux the window ships as a Flatpak, `io.github.pstrand.Mailbox`, on the
+On Linux the window ships as a Flatpak, `com.thelastmailbox.flat`, on the
 GNOME runtime — which is where WebKitGTK comes from, so nothing needs
 installing on the host:
 
@@ -472,18 +472,36 @@ packaging/flatpak/build.sh --run              # build, install for this user, op
 ```
 
 `build.sh` vendors the crates (the build sandbox has no network), builds the
-manifest, and exports the result into a Flatpak repository. That repository is
-the release channel: plain static files that any HTTPS host can serve.
+manifest, and exports the result into a local Flatpak repository to install
+from. Installing it that way, rather than from the build directory, means a
+local install updates itself from the next local build.
+
+Releasing is one command, for the version in `Cargo.toml`:
 
 ```sh
-MAILBOX_FLATPAK_URL=https://example.org/mailbox \
-MAILBOX_FLATPAK_GPG_KEY=<fingerprint> \
-    packaging/flatpak/build.sh --bundle
+packaging/flatpak/build.sh --release --dry-run   # everything but publishing
+packaging/flatpak/build.sh --release
 ```
 
-signs the commits, writes `mailbox.flatpakref` into the repository — upload the
-directory and point people at that file — and a one-file `mailbox.flatpak`
-installer beside it. Export every release into the same repository.
+A release has two halves, because GitHub Releases cannot hold a Flatpak
+repository — it is a tree of files at fixed paths, and release assets are a
+flat list:
+
+- **The update repository** lives on the `gh-pages` branch and is served at
+  <https://apstrand.github.io/tlmb/repo>, signed with
+  `772EE1812AA4D782E519E62E4496C4F85CE95DB1`. `--release` fetches the
+  published one first and adds the new build on top, so each release is an
+  update from the last, with a static delta cut from it; the branch itself is
+  replaced by one commit each time rather than growing with every binary.
+- **The GitHub release** `v<version>` carries `tlmb-<version>.flatpak`, a
+  one-file installer, and `tlmb.flatpakref`. Both point at the Pages
+  repository, so an install from either updates itself:
+  `flatpak install --user https://apstrand.github.io/tlmb/tlmb.flatpakref`.
+
+`--release` refuses a dirty tree, a version that already has a release, and a
+version without a `<release>` entry in the metainfo. The commit it tags must
+already be pushed. Pages and anonymous downloads need `apstrand/tlmb` to be
+public.
 
 **It updates itself.** The window asks the Flatpak portal to watch the
 repository it was installed from. When a newer build is there, the status bar
@@ -504,7 +522,7 @@ know:
 The sandbox shares the host's `~/.config/mailbox` and `~/.local/share/mailbox`
 rather than keeping a second mailbox under `~/.var/app`, so a `mailbox` on the
 host and the window are one mailbox. The CLI and TUI are in the package too:
-`flatpak run --command=mailbox io.github.pstrand.Mailbox tui`.
+`flatpak run --command=mailbox com.thelastmailbox.flat tui`.
 
 ### A mailbox with twenty years in it
 

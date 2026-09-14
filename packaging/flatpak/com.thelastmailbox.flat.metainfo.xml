@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.pstrand.Mailbox</id>
+  <id>com.thelastmailbox.flat</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
   <name>Mailbox</name>
   <summary>A self-contained IMAP and SMTP client</summary>
-  <developer id="io.github.pstrand">
+  <developer id="com.thelastmailbox">
     <name>Peter Strand</name>
   </developer>
   <description>
@@ -21,9 +21,9 @@
       <li>Updates itself from inside the window</li>
     </ul>
   </description>
-  <launchable type="desktop-id">io.github.pstrand.Mailbox.desktop</launchable>
-  <url type="homepage">https://github.com/pstrand/mailbox</url>
-  <url type="bugtracker">https://github.com/pstrand/mailbox/issues</url>
+  <launchable type="desktop-id">com.thelastmailbox.flat.desktop</launchable>
+  <url type="homepage">https://github.com/apstrand/tlmb</url>
+  <url type="bugtracker">https://github.com/apstrand/tlmb/issues</url>
   <categories>
     <category>Network</category>
     <category>Email</category>
