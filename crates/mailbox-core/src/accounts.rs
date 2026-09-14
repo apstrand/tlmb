@@ -76,6 +76,14 @@ pub struct Added {
     pub credential: Option<String>,
 }
 
+struct Prepared {
+    id: String,
+    config: AccountConfig,
+    discovered: bool,
+    source: Option<crate::discover::Source>,
+    verified: bool,
+}
+
 /// The id and config `add` would write, without writing anything.
 ///
 /// Split out because the setup form in the web interface has to be able to
@@ -84,6 +92,11 @@ pub struct Added {
 /// form in cannot remove again without a terminal — which is exactly the
 /// person who has no terminal.
 pub fn prepare(spec: &NewAccount) -> Result<(String, AccountConfig, bool)> {
+    let prepared = prepare_details(spec)?;
+    Ok((prepared.id, prepared.config, prepared.discovered))
+}
+
+fn prepare_details(spec: &NewAccount) -> Result<Prepared> {
     let address = spec.address.trim().to_string();
     if address.is_empty() {
         return Err(Error::usage("an account needs an address"));
@@ -96,7 +109,21 @@ pub fn prepare(spec: &NewAccount) -> Result<(String, AccountConfig, bool)> {
         given => normalize_id(given)?,
     };
 
-    let hints = crate::providers::hints_for(&address);
+    // Discovery runs only for what the caller left open: someone who typed
+    // `--imap-host` has answered the question already.
+    let discovery = if spec.discover && spec.imap_host.is_none() {
+        Some(crate::discover::discover(
+            &address,
+            &crate::discover::Options::from_env(),
+        )?)
+    } else {
+        None
+    };
+    let found = discovery.as_ref().and_then(|d| d.found.clone());
+    let hints = match &found {
+        Some(found) => Some(crate::providers::ServerHints::from(found.hints.clone())),
+        None => crate::providers::hints_for(&address),
+    };
     let discovered = hints.is_some() && spec.imap_host.is_none();
     let source = found.as_ref().map(|f| f.source).or(if discovered {
         Some(crate::discover::Source::BuiltIn)
@@ -148,7 +175,13 @@ pub fn prepare(spec: &NewAccount) -> Result<(String, AccountConfig, bool)> {
         return Err(no_servers(&address, discovery.as_ref()));
     }
     validate(&cfg)?;
-    Ok((id, cfg, discovered))
+    Ok(Prepared {
+        id,
+        config: cfg,
+        discovered,
+        source,
+        verified,
+    })
 }
 
 /// What a successful [`verify`] found, for the caller to report.
@@ -222,7 +255,13 @@ pub fn verify(
 
 /// Adds an account to the config at `path`.
 pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
-    let (id, cfg, discovered) = prepare(spec)?;
+    let Prepared {
+        id,
+        config: cfg,
+        discovered,
+        source,
+        verified,
+    } = prepare_details(spec)?;
 
     // Loaded before anything else fails, so a broken config is reported as
     // itself rather than as a failure to add.
@@ -234,7 +273,6 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
     }
     let address = cfg.address.clone();
 
-    let stored_cfg = cfg.clone();
     config.accounts.insert(id.clone(), cfg);
     config.save(path)?;
 
@@ -268,13 +306,26 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
 /// read. The returned string is what the caller tells the user, and the
 /// difference matters to them: one of these outcomes survives a restart.
 fn remember_password(id: &str, cfg: &AccountConfig, password: &str) -> String {
-    crate::credentials::install(id, crate::imap::Credential::Password(password.to_string()));
     let store = crate::credentials::keychain_name();
-    if crate::credentials::store_password(id, cfg, password) {
-        format!("stored in {store}")
-    } else {
-        format!("installed for this session only — {store} did not take it")
+    match crate::credentials::store_password(id, cfg, password) {
+        crate::credentials::Stored::Keychain => format!("stored in {store}"),
+        crate::credentials::Stored::Process => {
+            format!("installed for this session only — this process only; {store} did not take it")
+        }
     }
+}
+
+/// The failure §9's one-line setup has to explain well: nothing was found.
+fn no_servers(address: &str, discovery: Option<&crate::discover::Discovery>) -> Error {
+    let domain = address.rsplit('@').next().unwrap_or(address);
+    let mut message =
+        format!("no server settings found for `{domain}` — give at least --imap-host");
+    if let Some(discovery) = discovery {
+        for step in &discovery.steps {
+            message.push_str(&format!("\n  {}: {}", step.target, step.outcome));
+        }
+    }
+    Error::usage(message)
 }
 
 /// Changes fields on an existing account. `None` leaves a field alone.

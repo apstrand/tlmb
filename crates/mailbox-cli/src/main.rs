@@ -110,6 +110,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Attach(args) => commands::attach(&ctx, args),
         Command::Snooze(args) => commands::snooze(&ctx, args),
         Command::Serve(args) => commands::serve(&ctx, args),
+        Command::Relay(args) => relay::relay(&ctx, args),
         Command::Site(args) => commands::site(&ctx, args),
         Command::Gui => gui::run(&ctx),
         Command::Send(args) => sending::send(&ctx, args),

@@ -204,20 +204,20 @@ pub fn discover(address: &str) -> Result<Discovered> {
     let guess_source = if from_mx { Source::Mx } else { Source::Guess };
 
     let (imap_host, imap_port, imap_security, imap_source) = match imap {
-        Some((host, port, security)) => (host, port, security, Source::Srv),
+        Some((host, port, security)) => (host, port, security.to_string(), Source::Srv),
         None => (
             format!("imap.{fallback_base}"),
             993,
-            "implicit",
+            "implicit".to_string(),
             guess_source,
         ),
     };
     let (smtp_host, smtp_port, smtp_security, smtp_source) = match smtp {
-        Some((host, port, security)) => (host, port, security, Source::Srv),
+        Some((host, port, security)) => (host, port, security.to_string(), Source::Srv),
         None => (
             format!("smtp.{fallback_base}"),
             587,
-            "starttls",
+            "starttls".to_string(),
             guess_source,
         ),
     };
@@ -230,6 +230,8 @@ pub fn discover(address: &str) -> Result<Discovered> {
             smtp_host,
             smtp_port,
             smtp_security,
+            imap_user: None,
+            smtp_user: None,
         },
         imap_source,
         smtp_source,

@@ -149,10 +149,6 @@ fn env_secret(name: &str) -> Option<String> {
 /// Named like [`crate::open`]'s `MAILBOX_OPENER` and §11's `MAILBOX_NOTIFIER`,
 /// and for the same reason: this reaches out of the process at something the
 /// user owns, so there has to be a way to say "not here".
-fn keychain_enabled() -> bool {
-    !matches!(std::env::var("MAILBOX_KEYCHAIN").as_deref(), Ok("none"))
-}
-
 /// An OAuth2 access token, refreshed when the cached one has expired (§9).
 ///
 /// The refresh token is a credential and comes from where credentials come
@@ -408,8 +404,8 @@ fn keychain_get(service: &str, account_id: &str) -> Option<String> {
     (!secret.is_empty()).then_some(secret)
 }
 
-/// Writes a refresh token to the platform keychain. `false` when there is none.
-fn keychain_store(service: &str, account_id: &str, secret: &str) -> bool {
+/// Writes a secret to the platform keychain. `false` when there is none.
+fn keychain_store(service: &str, label: &str, account_id: &str, secret: &str) -> bool {
     if !keychain_enabled() {
         return false;
     }
@@ -429,53 +425,8 @@ fn keychain_store(service: &str, account_id: &str, secret: &str) -> bool {
         ]);
     }
     secret_tool_store(
-        &format!("mailbox OAuth2 ({account_id})"),
+        &format!("mailbox {label} ({account_id})"),
         service,
-        account_id,
-        secret,
-    )
-}
-
-/// The keychain service name account passwords are filed under on Linux.
-///
-/// It has to match what [`keychain_lookup`] reads, which is the whole reason
-/// this is one constant rather than a literal at each end.
-const PASSWORD_SERVICE: &str = "mailbox";
-
-/// Files an account's password where [`resolve`] will find it again.
-///
-/// The durable half of [`install`]. Without it a password given to
-/// `accounts add` or to the web interface's setup form lives in this
-/// process's memory and nowhere else, so the account works until the program
-/// exits and is broken afterwards — which is a trap for anyone who cannot
-/// reach a terminal to fix it.
-///
-/// Returns whether it went in. `false` means no keychain (a headless box, a
-/// locked keyring, `MAILBOX_KEYCHAIN=none`) and is not an error: the caller
-/// says so, and §9's other routes — `credential_command`, `MAILBOX_PASSWORD_*`
-/// — are still open.
-pub fn store_password(account_id: &str, cfg: &crate::config::AccountConfig, secret: &str) -> bool {
-    if !keychain_enabled() || secret.is_empty() {
-        return false;
-    }
-    if cfg!(target_os = "macos") {
-        // The *internet* password form, keyed by host and login, because that
-        // is the form `keychain_lookup` reads — and the form the user sees in
-        // Keychain Access next to every other entry for that server.
-        return security(&[
-            "add-internet-password",
-            "-U",
-            "-s",
-            cfg.imap_host.as_deref().unwrap_or_default(),
-            "-a",
-            cfg.login_user(),
-            "-w",
-            secret,
-        ]);
-    }
-    secret_tool_store(
-        &format!("mailbox ({account_id})"),
-        PASSWORD_SERVICE,
         account_id,
         secret,
     )

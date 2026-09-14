@@ -479,7 +479,7 @@ impl Run<'_> {
         names: &[(String, &str)],
     ) -> Option<(String, u16, String)> {
         for (name, security) in names {
-            match crate::dns::srv(name, resolvers) {
+            match crate::dns::srv_with_resolvers(name, resolvers) {
                 Ok(records) if records.is_empty() => self.note(Source::Srv, name, "no records"),
                 Ok(records) => {
                     let best = &records[0];
@@ -586,7 +586,7 @@ impl Run<'_> {
         if resolvers.is_empty() {
             return Vec::new();
         }
-        match crate::dns::mx(&self.domain, &resolvers) {
+        match crate::dns::mx_with_resolvers(&self.domain, &resolvers) {
             Ok(records) if records.is_empty() => {
                 self.note(Source::Probe, &format!("MX {}", self.domain), "no records");
                 Vec::new()

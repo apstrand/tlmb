@@ -54,8 +54,17 @@ pub struct Mx {
 /// here"; it is dropped rather than reported, because a caller that wanted to
 /// know would have to special-case it anyway.
 pub fn srv(name: &str) -> Result<Vec<Srv>> {
+    parse_srv_records(query(name, TYPE_SRV)?)
+}
+
+/// Looks up `SRV` records using an explicit resolver list.
+pub fn srv_with_resolvers(name: &str, resolvers: &[SocketAddr]) -> Result<Vec<Srv>> {
+    parse_srv_records(query_with_resolvers(name, TYPE_SRV, resolvers)?)
+}
+
+fn parse_srv_records(records: Vec<Record>) -> Result<Vec<Srv>> {
     let mut out = Vec::new();
-    for record in query(name, TYPE_SRV)? {
+    for record in records {
         if record.len() < 7 {
             continue;
         }
@@ -79,8 +88,17 @@ pub fn srv(name: &str) -> Result<Vec<Srv>> {
 
 /// Looks up `MX` records for `domain`, most-preferred first.
 pub fn mx(domain: &str) -> Result<Vec<Mx>> {
+    parse_mx_records(query(domain, TYPE_MX)?)
+}
+
+/// Looks up `MX` records using an explicit resolver list.
+pub fn mx_with_resolvers(domain: &str, resolvers: &[SocketAddr]) -> Result<Vec<Mx>> {
+    parse_mx_records(query_with_resolvers(domain, TYPE_MX, resolvers)?)
+}
+
+fn parse_mx_records(records: Vec<Record>) -> Result<Vec<Mx>> {
     let mut out = Vec::new();
-    for record in query(domain, TYPE_MX)? {
+    for record in records {
         if record.len() < 3 {
             continue;
         }
@@ -116,7 +134,14 @@ impl Record {
 
 /// Sends one question to each configured nameserver until one answers.
 fn query(name: &str, rtype: u16) -> Result<Vec<Record>> {
-    let servers = nameservers()?;
+    let servers: Vec<SocketAddr> = nameservers()?
+        .into_iter()
+        .map(|server| SocketAddr::new(server, 53))
+        .collect();
+    query_with_resolvers(name, rtype, &servers)
+}
+
+fn query_with_resolvers(name: &str, rtype: u16, servers: &[SocketAddr]) -> Result<Vec<Record>> {
     if servers.is_empty() {
         return Err(Error::Network(
             "no nameserver is configured, so server settings cannot be looked up".into(),
@@ -124,7 +149,7 @@ fn query(name: &str, rtype: u16) -> Result<Vec<Record>> {
     }
     let question = encode_query(name, rtype)?;
     let mut last: Option<Error> = None;
-    for server in &servers {
+    for server in servers {
         match ask(*server, &question, name, rtype) {
             Ok(records) => return Ok(records),
             Err(e) => last = Some(e),
@@ -133,8 +158,7 @@ fn query(name: &str, rtype: u16) -> Result<Vec<Record>> {
     Err(last.unwrap_or_else(|| Error::Network("the nameserver did not answer".into())))
 }
 
-fn ask(server: IpAddr, question: &[u8], name: &str, rtype: u16) -> Result<Vec<Record>> {
-    let addr = SocketAddr::new(server, 53);
+fn ask(addr: SocketAddr, question: &[u8], name: &str, rtype: u16) -> Result<Vec<Record>> {
     let message = match ask_udp(addr, question) {
         // A truncated answer is the one case worth a second round trip: the
         // records are there, they just did not fit in a datagram.
@@ -365,6 +389,16 @@ fn be16(bytes: &[u8]) -> u16 {
 fn nameservers() -> Result<Vec<IpAddr>> {
     let text = std::fs::read_to_string("/etc/resolv.conf")?;
     Ok(parse_resolv_conf(&text))
+}
+
+/// The configured nameservers as socket addresses, for discovery callers
+/// that optionally replace them with a deterministic resolver list.
+pub fn system_resolvers() -> Vec<SocketAddr> {
+    nameservers()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|server| SocketAddr::new(server, 53))
+        .collect()
 }
 
 fn parse_resolv_conf(text: &str) -> Vec<IpAddr> {

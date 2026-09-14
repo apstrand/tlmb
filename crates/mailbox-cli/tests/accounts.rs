@@ -56,6 +56,9 @@ impl World {
             // Nothing here may put a popup on the desktop of
             // whoever ran the suite (§11).
             .env("MAILBOX_NOTIFIER", "none")
+            // Nor may it resolve or connect to whatever domain a fixture
+            // happens to name (§9 discovery).
+            .env("MAILBOX_DISCOVERY", "off")
             // And out of the developer's keyring: adding an account files its
             // password where the platform can find it again (§9, §14).
             .env("MAILBOX_KEYCHAIN", "none")

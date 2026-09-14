@@ -514,7 +514,10 @@ fn apply(ctx: &Ctx<'_>, payload: &Payload, mode: ApplyMode) -> Result<()> {
     for account in &payload.accounts {
         match &account.credential {
             Some(mailbox_core::pair::PairedCredential::Password { secret }) => {
-                if mailbox_core::credentials::store_password(&account.id, &account.config, secret) {
+                if matches!(
+                    mailbox_core::credentials::store_password(&account.id, &account.config, secret),
+                    mailbox_core::credentials::Stored::Keychain
+                ) {
                     stored.push(account.id.clone());
                 } else {
                     manual.push(account.id.clone());
