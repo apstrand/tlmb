@@ -1,0 +1,80 @@
+# Releases the Linux desktop app when a version tag is pushed.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag has to match the version in Cargo.toml, and the metainfo has to
+# have a <release> for it. packaging/flatpak/build.sh --release does the work:
+# the signed update repository on gh-pages, and a GitHub release with the
+# installer and the .flatpakref (README, "The Linux desktop app").
+#
+# Secrets:
+#   FLATPAK_GPG_PRIVATE_KEY   gpg --armor --export-secret-keys 772EE181…5DB1
+#   FLATPAK_GPG_PASSPHRASE    its passphrase
+#   MAILBOX_*_CLIENT_ID/SECRET  optional OAuth2 client credentials to compile in
+name: flatpak-release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Two releases at once would both fetch gh-pages and the second push would
+# drop the first one's build from the update history.
+concurrency:
+  group: flatpak-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push gh-pages, create the release
+  pages: write # turn Pages on for the first release
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      MAILBOX_FLATPAK_GITHUB: ${{ github.repository }}
+      MAILBOX_FLATPAK_SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+      MAILBOX_FLATPAK_PAGES_GIT: https://github.com/${{ github.repository }}.git
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag matches Cargo.toml
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Flatpak tooling
+        run: packaging/flatpak/ci-setup.sh
+
+      - name: Signing key
+        env:
+          MAILBOX_FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+          MAILBOX_FLATPAK_GPG_PASSPHRASE: ${{ secrets.FLATPAK_GPG_PASSPHRASE }}
+        run: |
+          home="$RUNNER_TEMP/gnupg"
+          fingerprint="$(packaging/flatpak/ci-import-key.sh "$home")"
+          {
+            echo "MAILBOX_FLATPAK_GPG_HOMEDIR=$home"
+            echo "MAILBOX_FLATPAK_GPG_KEY=$fingerprint"
+          } >> "$GITHUB_ENV"
+
+      # gh-pages is pushed over HTTPS with this job's token.
+      - name: Git credentials
+        run: gh auth setup-git
+
+      # Flatpak's tools expect a session bus, and a runner's job has none.
+      - name: Build and release
+        env:
+          MAILBOX_GOOGLE_CLIENT_ID: ${{ secrets.MAILBOX_GOOGLE_CLIENT_ID }}
+          MAILBOX_GOOGLE_CLIENT_SECRET: ${{ secrets.MAILBOX_GOOGLE_CLIENT_SECRET }}
+          MAILBOX_MICROSOFT_CLIENT_ID: ${{ secrets.MAILBOX_MICROSOFT_CLIENT_ID }}
+          MAILBOX_MICROSOFT_CLIENT_SECRET: ${{ secrets.MAILBOX_MICROSOFT_CLIENT_SECRET }}
+          MAILBOX_YAHOO_CLIENT_ID: ${{ secrets.MAILBOX_YAHOO_CLIENT_ID }}
+          MAILBOX_YAHOO_CLIENT_SECRET: ${{ secrets.MAILBOX_YAHOO_CLIENT_SECRET }}
+        run: dbus-run-session -- packaging/flatpak/build.sh --release

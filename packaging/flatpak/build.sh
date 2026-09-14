@@ -264,8 +264,9 @@ flatpak build-bundle \
     cd "$pages"
     git checkout --quiet --orphan "publish-$version"
     git add -A
-    git -c user.name="$(git -C "$root" config user.name)" \
-        -c user.email="$(git -C "$root" config user.email)" \
+    # A CI runner has no git identity of its own.
+    git -c user.name="$(git -C "$root" config user.name || echo "tlmb release")" \
+        -c user.email="$(git -C "$root" config user.email || echo "tlmb-release@users.noreply.github.com")" \
         commit --quiet -m "tlmb $version ($revision)"
 )
 
