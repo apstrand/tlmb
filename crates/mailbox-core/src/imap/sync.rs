@@ -83,7 +83,7 @@ pub fn sync_once(
     opts: &SyncOptions,
     clock: &Clock,
 ) -> Result<SyncReport> {
-    let started = std::time::Instant::now();
+    let started = web_time::Instant::now();
     // An L1 recording is of a pass made with particular options (§14.2), and
     // replaying it with different ones would ask for bytes the recording does
     // not contain. Recording them makes the replay ask the same questions.
