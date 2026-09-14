@@ -34,6 +34,11 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.0.2" date="2026-09-14">
+      <description>
+        <p>First test release.</p>
+      </description>
+    </release>
     <release version="0.0.1" date="2026-09-14">
       <description>
         <p>First test release.</p>
