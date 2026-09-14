@@ -1,0 +1,21 @@
+# Production example for a generated mailbox site and one fixed-destination
+# mailbox relay. Replace the host names and paths before installing.
+#
+# The relay is intentionally a separate hostname. Each relay process has one
+# fixed upstream destination, so run one instance per IMAP/SMTP endpoint (or
+# put a policy-aware relay in front of it).
+
+mail.example.com {
+	root * /srv/mailbox-site
+	encode gzip
+	header {
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "require-corp"
+		Content-Security-Policy "default-src 'self'; connect-src 'self' wss://relay.example.com; worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; frame-src blob:; base-uri 'none'; form-action 'none'"
+	}
+	file_server
+}
+
+relay.example.com {
+	reverse_proxy 127.0.0.1:9001
+}

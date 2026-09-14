@@ -162,13 +162,20 @@ def main():
     parser.add_argument("--listen", type=endpoint, default=("127.0.0.1", 9001))
     parser.add_argument("--target", type=endpoint, required=True)
     parser.add_argument("--allowed-host", action="append", default=[])
-    parser.add_argument("--allowed-port", action="append", type=int, default=list(ALLOWED_PORTS))
+    parser.add_argument(
+        "--allowed-port", action="append", type=int,
+        help="permitted destination port (repeatable; defaults to IMAP/SMTP ports)",
+    )
     parser.add_argument("--max-bytes", type=int, default=64 * 1024 * 1024)
     parser.add_argument("--idle-timeout", type=float, default=120.0)
     parser.add_argument("--max-connections", type=int, default=100)
     parser.add_argument("--tls-terminated", action="store_true", required=True,
                         help="acknowledge that a TLS/WSS reverse proxy fronts this listener")
     args = parser.parse_args()
+    if args.allowed_port is None:
+        args.allowed_port = list(ALLOWED_PORTS)
+    if any(not 1 <= port <= 65535 for port in args.allowed_port):
+        parser.error("allowed ports must be between 1 and 65535")
     if args.max_bytes <= 0 or args.idle_timeout <= 0 or args.max_connections <= 0:
         parser.error("limits must be positive")
     asyncio.run(run(args))
