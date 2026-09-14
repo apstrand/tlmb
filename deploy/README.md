@@ -21,6 +21,11 @@ upstream endpoint, or replace it with a policy-aware multi-tenant service.
    names and the static-site path. Caddy obtains certificates and forwards the
    WebSocket upgrade to `127.0.0.1:9001`.
 
+   If you use Nginx instead, install `deploy/nginx.conf`, replace the host
+   names, certificate paths, and static-site path, then validate with
+   `nginx -t` before reloading. The relay location must keep HTTP/1.1 upgrade
+   headers and a read timeout longer than the relay idle timeout.
+
 4. Verify the deployment from any machine:
 
    ```sh
