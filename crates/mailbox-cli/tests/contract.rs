@@ -271,6 +271,10 @@ const COVERAGE: &[(&str, Coverage)] = &[
         "serve",
         Coverage::NoDocument("runs a web server until interrupted"),
     ),
+    (
+        "site",
+        Coverage::NoDocument("writes a static hosted bundle, not a mailbox reply"),
+    ),
     ("gui", Coverage::NoDocument("opens a window")),
     ("tui", Coverage::NoDocument("takes over the terminal")),
     (
