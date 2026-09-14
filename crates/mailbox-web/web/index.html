@@ -207,6 +207,12 @@
 <footer class="bar status">
   <span id="status"></span>
   <span id="error" role="alert"></span>
+  <!-- Only the packaged desktop app can update itself (see mailbox-ui's
+       update.rs); everywhere else this stays hidden. -->
+  <span id="update" role="status" hidden>
+    <span id="update-text"></span>
+    <button type="button" id="update-action" hidden></button>
+  </span>
   <span id="host"></span>
 </footer>
 

@@ -1,0 +1,2 @@
+# build.sh: vendored crates, builder state, the repository, bundles.
+/.build/

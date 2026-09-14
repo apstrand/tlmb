@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Mailbox
+GenericName=Mail Client
+Comment=Read, search and write mail, offline first
+Exec=mailbox-desktop
+Icon=io.github.pstrand.Mailbox
+Terminal=false
+Categories=Network;Email;
+Keywords=mail;email;imap;smtp;inbox;
+StartupNotify=true
+StartupWMClass=io.github.pstrand.Mailbox

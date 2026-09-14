@@ -120,6 +120,11 @@ button.icon { padding: .35rem .55rem; }
 #error { color: var(--danger); }
 #host { margin-left: auto; }
 
+#update { margin-left: auto; display: flex; align-items: center; gap: .5rem; }
+#update:not([hidden]) + #host { margin-left: 0; }
+#update button { padding: .1rem .5rem; font-size: 12px; }
+#update.is-failed #update-text { color: var(--danger); }
+
 .spinner {
     width: .85rem;
     height: .85rem;
