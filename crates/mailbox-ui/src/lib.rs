@@ -102,7 +102,7 @@ fn open_window(url: &str, port: u16) -> Result<()> {
                 .initialization_script(SHELL_SCRIPT)
                 .data_directory(webview_dir)
                 .on_navigation(move |dest| {
-                    if is_app_url(&dest, port) {
+                    if is_app_url(dest, port) {
                         return true;
                     }
                     // A top-level jump off the mailbox is a link the reader

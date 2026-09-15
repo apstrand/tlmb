@@ -208,7 +208,10 @@ impl BrowserStore {
     }
 }
 
-fn decode_checkpoint(image: Option<&[u8]>) -> std::io::Result<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+/// A decoded checkpoint: the SQLite image and the encoded byte store.
+type Checkpoint = (Option<Vec<u8>>, Option<Vec<u8>>);
+
+fn decode_checkpoint(image: Option<&[u8]>) -> std::io::Result<Checkpoint> {
     let Some(image) = image.filter(|bytes| !bytes.is_empty()) else {
         return Ok((None, None));
     };
