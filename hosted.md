@@ -1,5 +1,5 @@
      ╭───────────────────────────────────────────────────────────────────────────────────────────╮
-     │ A hosted flavour: the core in the browser, nothing on the server                          │
+     │ A hosted flavour: the core in the browser, no mailbox data on the site host               │
      │                                                                                           │
      │ Context                                                                                   │
      │                                                                                           │
@@ -9,13 +9,13 @@
      │ someone else runs it for you — there the server holds every user's mail and               │
      │ every user's password.                                                                    │
      │                                                                                           │
-     │ The ask is a second flavour where the server holds nothing per user: the                  │
+     │ The ask is a second flavour where the site host holds no mailbox data per user:           │
      │ account settings, the credentials and the store live in the browser, with the             │
      │ existing core compiled to wasm so the experience is the same rather than a                │
      │ lesser copy of it. serve is the wrong entry point for that — it names a                   │
      │ server that, in this flavour, has no mailbox to serve. So this is a site                  │
      │ generator: a command that emits a static bundle you can host anywhere, plus               │
-     │ one small stateless component that exists only because of a browser limitation.           │
+     │ one small relay component that exists only because of a browser limitation.               │
      │                                                                                           │
      │ This is a large project. Stage 0 below is a spike whose only job is to answer             │
      │ whether the architecture is possible at all; everything after it is contingent            │
@@ -58,19 +58,19 @@
      │                                                                                           │
      │ A browser cannot open a TCP connection, so it cannot speak IMAP. Something has            │
      │ to bridge WebSocket to TCP. The important question is what that bridge gets to            │
-     │ see, and the answer can be nothing: rustls is already a dependency and                    │
-     │ needs only a byte stream, so TLS is terminated inside the wasm module and the             │
-     │ bridge carries ciphertext it cannot read. It never learns a password, never               │
-     │ parses IMAP, and stores nothing — it is a pipe.                                           │
+     │ see. Payload content can be hidden: rustls is already a dependency and needs              │
+     │ only a byte stream, so TLS is terminated inside the wasm module and the bridge            │
+     │ carries ciphertext it cannot read. It never learns a password or parses IMAP.             │
+     │ It still sees destinations, TLS metadata, timing and volume.                              │
      │                                                                                           │
-     │ That makes it a separate, optional, stateless component (mailbox relay),                  │
-     │ which is the same shape §11 already uses for the push notifier, except that               │
-     │ this one needs no credentials at all. A generated site is configured with a               │
-     │ relay URL; a site with none can still be opened and set up, but cannot sync.              │
+     │ That makes it a separate, optional component (mailbox relay), which is the same           │
+     │ shape §11 already uses for the push notifier, except that this one needs no mail           │
+     │ credentials. A fixed-route relay can be stateless; arbitrary providers require an         │
+     │ account and route broker. A site with no relay can be opened but cannot sync.             │
      │                                                                                           │
-     │ Without hard limits a relay is an open proxy, so it ships with: a destination             │
-     │ port allowlist (143/993/465/587), an optional destination host allowlist, a               │
-     │ per-connection byte cap, an idle timeout, and a concurrent-connection cap.                │
+     │ The safe default is fixed destination routes, initially IMAP/TLS on port 993, plus        │
+     │ per-connection byte, idle, lifetime and concurrency caps. The arbitrary-provider          │
+     │ design and its additional account and traffic controls are explored below.                │
      │                                                                                           │
      │ Stages                                                                                    │
      │                                                                                           │
@@ -137,7 +137,8 @@
      │ Stage 4 — mailbox relay                                                                   │
      │                                                                                           │
      │ The blind pipe described above, with its limits, plus its refusal to run                  │
-     │ without TLS in front of it.                                                               │
+     │ without TLS in front of it. Fixed provider routes are the default; arbitrary              │
+     │ providers add the account broker and TLS-aware gate described below.                      │
      │                                                                                           │
      │ Stage 5 — Tests                                                                           │
      │                                                                                           │
@@ -150,8 +151,8 @@
      │                                                                                           │
      │ Spec amendments                                                                           │
      │                                                                                           │
-     │ §3's platform table gains the hosted flavour and says plainly that the server             │
-     │ holds nothing. §16 gains a decision entry: the UI stays DOM (the existing                 │
+     │ §3's platform table gains the hosted flavour and says plainly that the site host          │
+     │ holds no mailbox data. §16 gains a decision entry: the UI stays DOM (the existing         │
      │ entry is about not drawing a canvas, and this does not reopen it), while the              │
      │ core compiles to wasm for this flavour only — with "reopen if" naming the                 │
      │ spike's three answers.                                                                    │
@@ -197,17 +198,158 @@ keeping the relay a blind, bounded pipe.
 An arbitrary-IMAP service cannot safely accept an unauthenticated `HOST:PORT`
 from the browser. Even though the relay cannot decrypt the TLS payload, it
 would still be an internet-wide TCP proxy and could be abused for scanning,
-spam, credential attacks, or connections to internal addresses. A generic
-service therefore needs destination validation before TCP (including DNS
-rebinding and private-IP rejection), authenticated tenants, quotas, abuse
-monitoring, revocation, isolated outbound egress, and connection/rate/byte/
-idle/lifetime limits.
+credential attacks, or connections to internal addresses. SMTP submission
+makes the consequences larger: the upstream still has to accept the user's
+SMTP credentials, so this is not an unauthenticated mail relay, but it can
+hide the source of password attacks and abusive authenticated sending.
 
-The viable options are: named static routes for a curated provider list;
-per-user relay instances provisioned after account verification; an
-authenticated broker that resolves and policy-checks destinations in a
-sandbox before issuing short-lived route tokens; or a server-side connector
-that terminates IMAP TLS. The last option supports arbitrary servers most
-easily, but the server sees credentials and mailbox traffic, changing the
-hosted privacy promise. If that trade-off is unacceptable, use a brokered
-authenticated design rather than a raw arbitrary TCP relay.
+There are two useful lines of defence. They complement one another, but
+neither turns an arbitrary ciphertext pipe into something intrinsically safe.
+
+## Relay accounts: a policy handle, not proof of good intent
+
+Making the relay an account service changes the economics and gives the
+operator somewhere to attach limits and revocation. A verified address is a
+small amount of friction; a passkey-bound account is harder to steal; payment
+adds cost to creating replacements and gives the operator a dispute trail.
+Payment is therefore useful even if the price only covers bandwidth. It is
+not identity proof, though: prepaid cards, compromised accounts, chargebacks,
+and a determined abusive customer still exist. The security argument must be
+"one accountable principal gets a small, stable capability", not "a customer
+would not abuse it".
+
+The useful assumption is the second one: a real mailbox user changes mail
+servers rarely. Model a relay account as one or a few registered
+destinations, rather than permission to name a destination on every
+connection:
+
+1. During setup, the user proposes `hostname:port`. The broker resolves it
+   itself, rejects every non-public address in every answer, applies the port
+   policy, and records the hostname and a pinned public address set. It repeats
+   those checks when DNS is refreshed; it never follows a client-supplied IP.
+2. A sensitive account action registers or changes that destination. Require
+   fresh authentication, notify the user, limit the number of destination
+   slots, and put changes behind a cooldown and a low rolling limit. Ordinary
+   reconnects to an existing destination stay cheap.
+3. The browser obtains a short-lived, single-destination connection ticket.
+   The signed ticket names the account, registered target, expiry and resource
+   limits. The TCP relay accepts the ticket and chooses the destination; the
+   WebSocket request never contains an arbitrary host or IP.
+4. Enforce quotas per account as well as per IP: concurrent connections,
+   connection attempts, bytes, sustained bandwidth, connection lifetime and
+   monthly transfer. Keep global and per-destination circuit breakers, since
+   many paid accounts can still attack one host.
+5. Keep enough operational history to revoke abusive accounts: destination
+   changes, resolved/pinned addresses, connection times, byte counts and
+   network outcomes. Do not log payload bytes. State the retention period and
+   make it part of the privacy description.
+
+This is an authenticated broker in front of a mostly stateless data plane.
+It need not provision one process per user; route tickets provide the same
+isolation more cheaply. It does, however, mean the relay service is no longer
+stateless. The precise promise becomes: the static-site host has no account or
+mailbox data; the relay has account, billing, route and usage metadata, but no
+mail credentials, message contents or browser store. Those roles may be run
+by different operators.
+
+Origin checks and an API token stored in JavaScript are not sufficient. An
+attacker can ignore the generated site and speak WebSocket directly. The
+relay must authenticate every connection itself, preferably with a
+short-lived ticket obtained using a device-bound key or passkey. IP limits
+remain useful for floods but cannot stand in for an account boundary.
+
+Accounts make a deliberately narrow arbitrary-provider offering plausible:
+for example, one IMAP target on port 993, one infrequently changed SMTP target
+on 465, and conservative quotas. They do not justify exposing a generic
+`CONNECT host:port` API. A paid account should still be unable to scan a
+subnet, rotate across thousands of public hosts, or reach a newly rebound
+private address.
+
+A natural product split follows from this. Anonymous or trial use gets only
+curated provider routes. An identified, possibly paid, relay account can
+register an arbitrary IMAP service under the low-churn policy. SMTP is a
+separate capability enabled later, with lower limits and its own abuse switch;
+paying for IMAP should not automatically grant it. Provider discovery can
+also reduce the setup attack surface: targets obtained from a domain's
+standard mail configuration or a known-provider catalogue can be admitted
+cheaply, while a manual hostname consumes the account's limited change
+budget. This is friction, not proof that the user owns a mailbox there—the
+blind relay cannot observe a successful login.
+
+## What the relay can understand without seeing mail
+
+"Encrypted" does not mean "unclassifiable". With TLS terminated in the wasm
+client, the relay can observe:
+
+- the relay account and registered logical route;
+- the destination hostname selected by the broker, its resolved IP and port;
+- connection success or failure, timings, duration, byte totals, direction
+  and rough transfer shape; and
+- the beginning of the TLS handshake, including the record format and,
+  normally, the ClientHello's SNI and offered TLS versions. Encrypted Client
+  Hello would hide SNI and should be rejected if matching SNI is part of the
+  policy.
+
+That is enough for a useful TLS-aware gate. Before forwarding application
+bytes, require a syntactically valid ClientHello within a small byte/time
+budget, require its SNI to equal the registered hostname, reject unexpected
+TLS versions, and pin the outbound connection to the address approved by the
+broker. Once the handshake has begun, apply byte, rate, idle and lifetime
+limits and look for operational anomalies: high target churn, bursts of short
+connections, repeated TCP/TLS failures, unusual fan-out across accounts, or
+traffic far outside normal mailbox synchronization envelopes.
+
+These checks materially reduce scanning and use as a generic cleartext TCP
+proxy. They can also reject accidental non-TLS connections. They do not reveal
+whether the encrypted operation is `LOGIN`, `FETCH`, `APPEND` or SMTP `DATA`;
+in TLS 1.3 even the server certificate is encrypted after ServerHello. The
+relay consequently cannot count failed IMAP logins, inspect recipients,
+distinguish a large attachment from bulk extraction, or prove that a client
+is mailbox rather than custom code. Traffic shape is a signal for throttling
+and review, not a protocol firewall.
+
+Ports 143 and 587 deserve special treatment. They normally begin with a
+plaintext IMAP/SMTP greeting and `STARTTLS`, so the current claim that the
+relay carries ciphertext from the first byte is only true for implicit-TLS
+ports 993 and 465. Supporting STARTTLS requires the wasm client to conduct
+that plaintext prelude. The relay can validate a very small state machine for
+the greeting, capability/EHLO and `STARTTLS`, then require a matching TLS
+ClientHello, but it must not accept arbitrary plaintext while waiting for the
+upgrade. The simpler first hosted service should allow only IMAP-over-TLS on
+993; add 465, 143 or 587 only when their need and parser are explicit.
+
+There is a hard boundary here: inspecting IMAP or SMTP commands requires
+access to the plaintext. The practical way to get it is for the relay to
+terminate TLS and establish a second TLS connection upstream. It can then
+enforce the protocol precisely, but it also sees reusable passwords or OAuth
+tokens, correspondents, subjects and message bodies. Selective TLS key
+disclosure or trusting that the published browser code is the code connecting
+does not remove this boundary; a hostile user controls their browser and can
+write another client.
+
+The viable service shapes are therefore:
+
+| Shape | Arbitrary providers | Relay state | What the relay sees | Main control |
+|---|---:|---:|---|---|
+| Curated named routes | No | configuration only | destination and traffic metadata | fixed destinations |
+| Account-bound route broker | Yes, narrowly | accounts, routes, billing, usage | destination and traffic metadata | stable capabilities, quotas, revocation |
+| TLS-aware account broker | Yes, narrowly | same as above | metadata plus ClientHello | stable capabilities plus TLS-shape checks |
+| TLS-terminating connector | Yes | accounts and connector state | credentials and mailbox traffic | full protocol policy |
+
+The recommended hosted shape is the third row, initially restricted to port
+993. It preserves the important content-confidentiality property while using
+accounts, stable destinations and observable TLS metadata as layered abuse
+controls. It should be described as a constrained, accountable relay, not a
+stateless or abuse-proof one. If operation shows that metadata and quotas are
+insufficient—especially before enabling SMTP—the honest choices are to keep a
+curated provider list or explicitly adopt the TLS-terminating connector and
+its different privacy promise.
+
+Before Stage 4 becomes a public service, the remaining product decisions are
+therefore measurable ones rather than architectural unknowns: what counts as
+an identified account, whether payment is required before a manual target,
+how many target slots and changes normal multi-account use actually needs,
+what metadata retention is acceptable, and whether SMTP is worth the much
+larger abuse surface. Start with tight values and relax them from observed
+legitimate use; do not start broad and depend on traffic classification to
+recover the boundary later.
