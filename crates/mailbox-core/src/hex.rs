@@ -17,8 +17,8 @@ pub fn decode(s: &str) -> Option<Vec<u8>> {
     }
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(s.len() / 2);
-    for pair in b.chunks_exact(2) {
-        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
+    for &[hi, lo] in b.as_chunks::<2>().0 {
+        out.push((nibble(hi)? << 4) | nibble(lo)?);
     }
     Some(out)
 }
