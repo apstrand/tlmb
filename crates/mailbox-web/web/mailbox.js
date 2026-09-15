@@ -676,7 +676,9 @@ function syncNow() {
     return change(async () => {
         const result = await post("/api/sync", {});
         const added = (result.synced ?? []).reduce((n, r) => n + r.messages_added, 0);
-        say(`synced — ${added} new message${added === 1 ? "" : "s"}`);
+        const errors = (result.errors ?? []).map((error) => `${error.account}: ${error.message}`);
+        say(`synced — ${added} new message${added === 1 ? "" : "s"}` +
+            (errors.length ? `; ${errors.join("; ")}` : ""));
     }, "synced");
 }
 
@@ -711,6 +713,20 @@ const SETUP_POLL_MS = 2000;
 
 /** Whether this server will take a password — loopback only. See `server.rs`. */
 const setupAllowed = pageConfig.dataset.setup === "1";
+el("add-account").hidden = !setupAllowed;
+el("add-account").addEventListener("click", () => {
+    el("setup-form").reset();
+    security = { imap: null, smtp: null };
+    providerKnown = false;
+    setupError("");
+    el("setup-status").textContent = "";
+    el("setup-cancel").hidden = false;
+    showSetup();
+});
+el("setup-cancel").addEventListener("click", () => {
+    el("setup-password").value = "";
+    start();
+});
 
 let setupTimer = 0;
 
@@ -732,6 +748,7 @@ async function start() {
     }
 
     if (!configured) {
+        el("setup-cancel").hidden = true;
         showSetup();
         return;
     }
@@ -925,6 +942,7 @@ function accountFromForm() {
     const user = value("setup-imap-user");
 
     return {
+        id: value("setup-id"),
         address: value("setup-address"),
         password: el("setup-password").value,
         // An empty field means the placeholder, so the two are resolved
@@ -944,6 +962,7 @@ function accountFromForm() {
 function setupBusy(busy, button, label) {
     el("setup-add").disabled = busy;
     el("setup-test").disabled = busy;
+    el("setup-cancel").disabled = busy;
     button.textContent = busy ? label : button.dataset.label;
 }
 

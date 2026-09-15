@@ -29,6 +29,7 @@
   </form>
   <button id="compose" class="text">Write</button>
   <button id="sync" class="text">Sync</button>
+  <button id="add-account" class="text" hidden>Add account</button>
   <span id="spinner" class="spinner" hidden aria-hidden="true"></span>
 </header>
 
@@ -61,6 +62,12 @@
         <label for="setup-password">Password</label>
         <input id="setup-password" name="password" type="password"
                autocomplete="current-password" required>
+      </div>
+
+      <div class="setup-field">
+        <label for="setup-id">Account name (optional)</label>
+        <input id="setup-id" type="text" spellcheck="false" autocapitalize="none"
+               placeholder="work">
       </div>
 
       <p id="setup-hint" class="setup-note">
@@ -129,6 +136,7 @@
              is a way to find out which field is wrong before committing to
              anything. -->
         <button type="button" id="setup-test">Test</button>
+        <button type="button" id="setup-cancel" hidden>Cancel</button>
         <button type="button" id="setup-servers-toggle">Hide servers</button>
       </div>
     </form>

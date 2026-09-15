@@ -39,7 +39,10 @@ def check_relay(url):
         raise RuntimeError("relay must be a wss:// URL")
     port = parsed.port or 443
     key = base64.b64encode(os.urandom(16)).decode()
-    request = (f"GET {parsed.path or '/'} HTTP/1.1\r\n"
+    request_target = parsed.path or "/"
+    if parsed.query:
+        request_target += "?" + parsed.query
+    request = (f"GET {request_target} HTTP/1.1\r\n"
                f"Host: {parsed.hostname}\r\nUpgrade: websocket\r\n"
                "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
                f"Sec-WebSocket-Key: {key}\r\n\r\n").encode()
@@ -57,9 +60,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--site", required=True, help="public https:// site URL")
     parser.add_argument("--relay", required=True, help="public wss:// relay URL")
+    parser.add_argument("--imap-host", help="configured destination to check on a shared root relay")
+    parser.add_argument("--imap-port", type=int, default=993)
     args = parser.parse_args()
     check_site(args.site.rstrip("/") + "/", args.relay)
-    check_relay(args.relay)
+    relay = args.relay
+    if args.imap_host:
+        parsed = urllib.parse.urlsplit(relay)
+        query = urllib.parse.parse_qs(parsed.query)
+        query.update(host=[args.imap_host], port=[str(args.imap_port)])
+        relay = urllib.parse.urlunsplit(parsed._replace(
+            query=urllib.parse.urlencode(query, doseq=True)
+        ))
+    check_relay(relay)
     print("hosted deployment checks passed")
 
 

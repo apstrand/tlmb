@@ -11,7 +11,7 @@ import asyncio
 import base64
 import hashlib
 import struct
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ALLOWED_PORTS = (143, 993, 465, 587)
@@ -35,6 +35,29 @@ def upstream(value):
     if not separator or not name or not name.isidentifier():
         raise argparse.ArgumentTypeError("expected NAME=HOST:PORT")
     return name, endpoint(destination)
+
+
+def select_target(request_target, targets):
+    """Select only configured destinations, including on a shared root URL."""
+    parsed = urlsplit(request_target)
+    route = parsed.path.rstrip("/") or "/"
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if route == "/" and ("host" in query or "port" in query):
+        if len(query.get("host", [])) != 1 or len(query.get("port", [])) != 1:
+            raise ValueError("relay destination needs one host and one port")
+        try:
+            port = int(query["port"][0])
+        except ValueError as error:
+            raise ValueError("invalid relay destination port") from error
+        host = query["host"][0].lower().rstrip(".")
+        for target in targets.values():
+            if (target[0].lower().rstrip("."), target[1]) == (host, port):
+                return target
+        raise ValueError("relay destination is not configured")
+    target = targets.get(route)
+    if target is None:
+        raise ValueError(f"unknown relay route {route!r}")
+    return target
 
 
 async def read_frame(reader, max_bytes):
@@ -107,10 +130,7 @@ async def handle(web_reader, web_writer, targets, policy, slots):
             request_line = request.decode("latin1").split("\r\n", 1)[0].split(" ", 2)
             if len(request_line) != 3 or request_line[0] != "GET":
                 raise ValueError("invalid WebSocket request line")
-            route = urlsplit(request_line[1]).path.rstrip("/") or "/"
-            target = targets.get(route)
-            if target is None:
-                raise ValueError(f"unknown relay route {route!r}")
+            target = select_target(request_line[1], targets)
             headers = {}
             for line in request.decode("latin1").split("\r\n")[1:]:
                 if ":" in line:

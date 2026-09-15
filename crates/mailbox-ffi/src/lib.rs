@@ -306,6 +306,17 @@ impl Mailbox {
         })
     }
 
+    /// Serializes each account independently for platform checkpoint storage.
+    pub fn database_snapshots(&self) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+        self.with_ws(|workspace| {
+            workspace
+                .sessions()
+                .iter()
+                .map(|session| Ok((session.account_id.clone(), session.store().serialize()?)))
+                .collect()
+        })
+    }
+
     pub fn sync(&self, full: bool) -> Result<Value> {
         let opts = SyncOptions {
             full,

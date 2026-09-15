@@ -1,5 +1,4 @@
 import {
-    clearCheckpoint,
     loadCheckpoint,
     loadCredential,
     loadSettings,
@@ -22,23 +21,21 @@ const siteConfig = fetch("config.json").then(async (response) => {
     return response.json();
 });
 
-function accountId(config) {
-    return Object.keys(config?.accounts ?? {})[0];
-}
-
 async function context() {
     const settings = await loadSettings();
     const config = settings.config ?? {};
-    const id = accountId(config);
-    return {
-        config,
-        id,
-        credential: id ? await loadCredential(id) : undefined,
-        checkpoint: id ? await loadCheckpoint(id) : undefined,
-    };
+    const credentials = Object.create(null);
+    const checkpoints = Object.create(null);
+    await Promise.all(Object.keys(config.accounts ?? {}).map(async (id) => {
+        const credential = await loadCredential(id);
+        if (credential !== undefined) credentials[id] = credential;
+        const checkpoint = await loadCheckpoint(id);
+        if (checkpoint !== undefined) checkpoints[id] = checkpoint;
+    }));
+    return { config, credentials, checkpoints };
 }
 
-async function workerCall(request, network) {
+async function workerCall(request, network, account) {
     const worker = new Worker("hosted-worker.js", { type: "module" });
     let socket;
     let interval;
@@ -117,7 +114,17 @@ async function workerCall(request, network) {
             const dataBuffer = new SharedArrayBuffer(64 * 1024);
             control = new Int32Array(controlBuffer);
             data = new Uint8Array(dataBuffer);
-            socket = new WebSocket(relay);
+            const relayUrl = new URL(relay);
+            if (relayUrl.pathname.replace(/\/+$/, "") === "") {
+                if (!account?.imap_host) throw new Error("Account has no IMAP host.");
+                const security = account.imap_security;
+                const port = account.imap_port ?? (
+                    ["starttls", "none", "plain"].includes(security) ? 143 : 993
+                );
+                relayUrl.searchParams.set("host", account.imap_host);
+                relayUrl.searchParams.set("port", String(port));
+            }
+            socket = new WebSocket(relayUrl.href);
             socket.binaryType = "arraybuffer";
             interval = setInterval(service, 1);
             socket.addEventListener("open", () => {
@@ -140,18 +147,49 @@ async function workerCall(request, network) {
 
 async function core(method, args = {}, { network = false } = {}) {
     const current = await context();
+    if (network && method === "sync") return syncAccounts(current, args);
+    return exec(current, method, args);
+}
+
+async function exec(current, method, args, network = false, account) {
     const response = await workerCall({
         operation: "exec",
         method,
         args: JSON.stringify(args),
         config: JSON.stringify(current.config),
-        credential: current.credential,
-        checkpoint: current.checkpoint,
-    }, network);
-    if (response.snapshot?.length && current.id) {
-        await saveCheckpoint(response.snapshot, current.id);
+        credentials: current.credentials,
+        checkpoints: current.checkpoints,
+    }, network, account);
+    for (const [id, snapshot] of Object.entries(response.snapshots ?? {})) {
+        await saveCheckpoint(snapshot, id);
     }
     return response.result;
+}
+
+async function syncAccounts(current, args) {
+    const result = { synced: [] };
+    let firstError;
+    for (const [id, account] of Object.entries(current.config.accounts ?? {})) {
+        try {
+            const reply = await exec({
+                config: { ...current.config, accounts: { [id]: account } },
+                credentials: { [id]: current.credentials[id] },
+                checkpoints: current.checkpoints[id] ? { [id]: current.checkpoints[id] } : {},
+            }, "sync", args, true, account);
+            result.synced.push(...(reply.synced ?? []));
+            if (reply.submitted) {
+                result.submitted ??= {};
+                for (const [key, count] of Object.entries(reply.submitted)) {
+                    result.submitted[key] = (result.submitted[key] ?? 0) + count;
+                }
+            }
+        } catch (error) {
+            (result.errors ??= []).push({ account: id, message: error.message });
+            firstError ??= new Error(`${id}: ${error.message}`);
+        }
+    }
+    if (!result.synced.length && firstError) throw firstError;
+    return result;
 }
 
 function body(options) {
@@ -167,7 +205,16 @@ function flagChanges(value) {
     ];
 }
 
-export async function api(path, options = {}) {
+// Serialize calls so a read cannot overwrite a checkpoint changed by sync or
+// another mutation while its Worker was running.
+let pending = Promise.resolve();
+export function api(path, options = {}) {
+    const result = pending.then(() => dispatch(path, options));
+    pending = result.catch(() => {});
+    return result;
+}
+
+async function dispatch(path, options) {
     const url = new URL(path, location.href);
     const route = url.pathname.replace(/^\/api\//, "");
     const value = body(options);
@@ -221,10 +268,15 @@ export async function api(path, options = {}) {
 }
 
 async function test(spec) {
+    const prepared = await workerCall({
+        operation: "prepare",
+        args: JSON.stringify(spec),
+    }, false);
+    const account = prepared.result.config.accounts[prepared.result.id];
     const response = await workerCall({
         operation: "test",
         args: JSON.stringify(spec),
-    }, true);
+    }, true, account);
     return response.result;
 }
 
@@ -236,9 +288,15 @@ async function add(spec) {
     }, false);
     const account = prepared.result;
     const old = await context();
-    if (old.id && old.id !== account.id) await clearCheckpoint(old.id);
-    await saveSettings({ config: account.config });
+    const config = {
+        ...old.config,
+        accounts: { ...old.config.accounts, ...account.config.accounts },
+    };
+    if (Object.hasOwn(old.config.accounts ?? {}, account.id)) {
+        throw new Error(`Account '${account.id}' already exists; choose a different account ID.`);
+    }
     await saveCredential(account.id, spec.password);
+    await saveSettings({ config });
     return {
         id: account.id,
         address: spec.address,

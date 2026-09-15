@@ -13,8 +13,17 @@ python crates/mailbox-wasm/mailbox-relay.py \
   --tls-terminated
 ```
 
-The generated site should use `wss://relay.example.com/google` (or `/own`).
-There is no arbitrary host or port parameter in the WebSocket protocol.
+Use `wss://relay.example.com/` for a site serving multiple providers. The browser
+adds the prepared account's IMAP host and port to account-test and sync requests.
+The relay matches these against its configured upstreams and rejects any
+destination outside that list. Named URLs such as `/google` or `/own` still
+select a single fixed upstream for compatibility.
+
+One browser can retain several accounts. Use **Add account** in the mailbox
+toolbar; each account keeps its own credential and OPFS checkpoint. Listings
+use the core's unified mailbox, and sync connects each account separately.
+Use a distinct optional account name when two addresses would otherwise
+produce the same account ID.
 
 1. Build the wasm package and generate the site with the public relay URL:
 
@@ -23,6 +32,10 @@ There is no arbitrary host or port parameter in the WebSocket protocol.
    cargo run -p mailbox-cli -- site --out /srv/mailbox-site \
      --relay wss://relay.example.com/
    ```
+
+   The `wasm-bindgen` tool version must match the Rust dependency. To use a
+   separately installed matching tool, set `WASM_BINDGEN=/path/to/wasm-bindgen`
+   when running the build or deployment script.
 
 2. Install `mailbox-relay.service`, change its `ExecStart` to the desired
    `--upstream NAME=HOST:PORT` entries and `--allowed-host` values, create the
@@ -42,9 +55,19 @@ There is no arbitrary host or port parameter in the WebSocket protocol.
    ```sh
    python crates/mailbox-wasm/deploy-check.py \
      --site https://mail.example.com/ \
-     --relay wss://relay.example.com/
+     --relay wss://relay.example.com/ --imap-host imap.example.com
    ```
 
 The check validates HTTPS, COOP/COEP, the generated config, and the WSS
 upgrade. It does not log in to the upstream mailbox. After it passes, open the
 site, enter the IMAP/SMTP servers, and use the account Test button.
+
+For the Wonko deployment, `push_to_wonko.sh` defaults to the shared root URL:
+
+```sh
+./deploy/push_to_wonko.sh
+```
+
+The service routes are `/zarq` for `mail.zarquon.se:993`, `/nena` for
+`mail.nena.se:993`, and `/u2615` for `mail.2615.io:993`. The shared root URL
+supports all three destinations according to the account being connected.

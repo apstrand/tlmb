@@ -1,9 +1,9 @@
-# Production example for a generated mailbox site and one fixed-destination
+# Production example for a generated mailbox site and an allow-listed
 # mailbox relay. Replace the host names and paths before installing.
 #
-# The relay is intentionally a separate hostname. Each relay process has one
-# fixed upstream destination, so run one instance per IMAP/SMTP endpoint (or
-# put a policy-aware relay in front of it).
+# The relay is intentionally a separate hostname. Configure fixed destinations
+# with --upstream NAME=HOST:PORT. Use the root relay URL for account-based
+# selection, or /NAME to restrict a site to one destination.
 
 mail.example.com {
 	root * /srv/mailbox-site

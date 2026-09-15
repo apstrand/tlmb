@@ -1,6 +1,7 @@
 //! Stage 0 of the hosted flavour: prove that the existing core can cross the
 //! browser boundary before committing to persistence or a complete transport.
 
+use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -256,7 +257,7 @@ fn decode_checkpoint(image: Option<&[u8]>) -> std::io::Result<Checkpoint> {
 #[wasm_bindgen]
 pub struct HostedMailbox {
     inner: mailbox_ffi::Mailbox,
-    storage: Option<Arc<MemoryStorage>>,
+    storage: BTreeMap<String, Arc<MemoryStorage>>,
 }
 
 #[wasm_bindgen]
@@ -273,53 +274,60 @@ impl HostedMailbox {
             serde_json::from_str(config_json).map_err(js_error)?;
         if config.accounts.len() > 1 {
             return Err(JsError::new(
-                "hosted multi-account checkpointing is not implemented yet",
+                "Use openAccounts to restore multiple accounts.",
             ));
         }
-
-        let (workspace, storage) = if let Some((account_id, _)) = config.accounts.first_key_value()
-        {
-            let account_id = account_id.clone();
-            if let Some(password) = credential.filter(|value| !value.is_empty()) {
-                mailbox_core::credentials::install(
-                    &account_id,
-                    mailbox_core::imap::Credential::Password(password),
-                );
+        let mut credentials = BTreeMap::new();
+        let mut checkpoints = BTreeMap::new();
+        if let Some(id) = config.accounts.keys().next() {
+            if let Some(password) = credential {
+                credentials.insert(id.clone(), password);
             }
-            let (database, files) = decode_checkpoint(checkpoint.as_deref()).map_err(js_error)?;
-            let storage = Arc::new(MemoryStorage::decode(files.as_deref()).map_err(js_error)?);
-            let tracer = Tracer::disabled();
-            let clock = Clock::from_env();
-            let store = Store::open_serialized_with_storage(
-                database.as_deref(),
-                storage.clone(),
-                &account_id,
-                tracer.clone(),
-                clock.clone(),
+            if let Some(image) = checkpoint {
+                checkpoints.insert(id.clone(), image);
+            }
+        }
+        Self::restore_accounts(config, credentials, checkpoints).map_err(js_error)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = openAccounts)]
+    pub fn open_accounts(
+        config_json: &str,
+        credentials_json: &str,
+        checkpoints: js_sys::Object,
+    ) -> Result<HostedMailbox, JsError> {
+        console_error_panic_hook::set_once();
+        let config = serde_json::from_str(config_json).map_err(js_error)?;
+        let credentials = serde_json::from_str(credentials_json).map_err(js_error)?;
+        let mut images = BTreeMap::new();
+        for key in js_sys::Object::keys(&checkpoints).iter() {
+            let id = key
+                .as_string()
+                .ok_or_else(|| JsError::new("invalid checkpoint account"))?;
+            let value = js_sys::Reflect::get(&checkpoints, &key)
+                .map_err(|_| JsError::new("cannot read account checkpoint"))?;
+            let bytes = value
+                .dyn_into::<js_sys::Uint8Array>()
+                .map_err(|_| JsError::new("checkpoint must be a Uint8Array"))?;
+            images.insert(id, bytes.to_vec());
+        }
+        Self::restore_accounts(config, credentials, images).map_err(js_error)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn snapshots(&self) -> Result<js_sys::Object, JsError> {
+        let images = self.checkpoint_images().map_err(js_error)?;
+        let result = js_sys::Object::create(JsValue::NULL.unchecked_ref());
+        for (id, bytes) in images {
+            js_sys::Reflect::set(
+                &result,
+                &JsValue::from_str(&id),
+                &js_sys::Uint8Array::from(bytes.as_slice()),
             )
-            .map_err(js_error)?;
-            let session = mailbox_core::session::Session::from_store(
-                config.clone(),
-                account_id,
-                store,
-                tracer,
-                clock,
-            )
-            .map_err(js_error)?;
-            (
-                mailbox_core::Workspace::from_sessions(config, vec![session]),
-                Some(storage),
-            )
-        } else {
-            (
-                mailbox_core::Workspace::from_sessions(config, Vec::new()),
-                None,
-            )
-        };
-        Ok(HostedMailbox {
-            inner: mailbox_ffi::Mailbox::from_workspace(workspace),
-            storage,
-        })
+            .map_err(|_| JsError::new("cannot write account checkpoint"))?;
+        }
+        Ok(result)
     }
 
     pub fn exec(&self, method: &str, args_json: &str) -> Result<String, JsError> {
@@ -332,20 +340,196 @@ impl HostedMailbox {
     }
 
     pub fn snapshot(&self) -> Result<Vec<u8>, JsError> {
-        let Some(storage) = &self.storage else {
-            return Ok(Vec::new());
-        };
-        let database = self.inner.database_snapshot().map_err(js_error)?;
-        encode_checkpoint(&database, &storage.encode().map_err(js_error)?)
+        if self.storage.len() > 1 {
+            return Err(JsError::new("Use snapshots for multiple accounts."));
+        }
+        Ok(self
+            .checkpoint_images()
+            .map_err(js_error)?
+            .into_values()
+            .next()
+            .unwrap_or_default())
     }
 }
 
-fn encode_checkpoint(database: &[u8], files: &[u8]) -> Result<Vec<u8>, JsError> {
-    let mut checkpoint = b"MBCHECK1".to_vec();
-    checkpoint.extend_from_slice(&(database.len() as u64).to_le_bytes());
-    checkpoint.extend_from_slice(database);
-    checkpoint.extend_from_slice(files);
-    Ok(checkpoint)
+impl HostedMailbox {
+    fn restore_accounts(
+        config: mailbox_core::config::Config,
+        credentials: BTreeMap<String, String>,
+        checkpoints: BTreeMap<String, Vec<u8>>,
+    ) -> mailbox_core::error::Result<Self> {
+        let mut sessions = Vec::new();
+        let mut stores = BTreeMap::new();
+        for account_id in config.accounts.keys() {
+            if let Some(password) = credentials
+                .get(account_id)
+                .filter(|value| !value.is_empty())
+            {
+                mailbox_core::credentials::install(
+                    account_id,
+                    mailbox_core::imap::Credential::Password(password.clone()),
+                );
+            }
+            let (database, files) =
+                decode_checkpoint(checkpoints.get(account_id).map(Vec::as_slice))?;
+            let storage = Arc::new(MemoryStorage::decode(files.as_deref())?);
+            let tracer = Tracer::disabled();
+            let clock = Clock::from_env();
+            let store = Store::open_serialized_with_storage(
+                database.as_deref(),
+                storage.clone(),
+                account_id,
+                tracer.clone(),
+                clock.clone(),
+            )?;
+            let session = mailbox_core::session::Session::from_store(
+                config.clone(),
+                account_id.clone(),
+                store,
+                tracer,
+                clock,
+            )?;
+            sessions.push(session);
+            stores.insert(account_id.clone(), storage);
+        }
+        Ok(HostedMailbox {
+            inner: mailbox_ffi::Mailbox::from_workspace(mailbox_core::Workspace::from_sessions(
+                config, sessions,
+            )),
+            storage: stores,
+        })
+    }
+
+    fn checkpoint_images(&self) -> mailbox_core::error::Result<BTreeMap<String, Vec<u8>>> {
+        self.inner
+            .database_snapshots()?
+            .into_iter()
+            .map(|(id, database)| {
+                let storage = self.storage.get(&id).expect("every session has storage");
+                let mut image = b"MBCHECK1".to_vec();
+                image.extend_from_slice(&(database.len() as u64).to_le_bytes());
+                image.extend_from_slice(&database);
+                image.extend_from_slice(&storage.encode()?);
+                Ok((id, image))
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod hosted_tests {
+    use super::*;
+    use mailbox_core::config::{AccountConfig, Config};
+    use mailbox_core::fixture::Fixture;
+
+    #[test]
+    fn multiple_account_checkpoints_restore_unified_mail_and_route_mutations() {
+        let mut config = Config::default();
+        let mut images = BTreeMap::new();
+        let mut message_ids = BTreeMap::new();
+        for id in ["home", "work"] {
+            config.accounts.insert(
+                id.to_string(),
+                AccountConfig {
+                    address: format!("{id}@example.com"),
+                    imap_host: Some(format!("imap.{id}.example")),
+                    ..Default::default()
+                },
+            );
+            let mut mailbox =
+                HostedMailbox::restore_accounts(config.clone(), BTreeMap::new(), images.clone())
+                    .unwrap();
+            // Seed only the newly added account; the first remains restored.
+            let storage = mailbox.storage.get(id).unwrap().clone();
+            let mut store = Store::open_serialized_with_storage(
+                None,
+                storage.clone(),
+                id,
+                Tracer::disabled(),
+                Clock::fixed(0),
+            )
+            .unwrap();
+            let fixture = Fixture::parse(&format!(
+                r#"
+[[folder]]
+path = "INBOX"
+special_use = "inbox"
+[[message]]
+name = "mail"
+folder = "INBOX"
+from = "sender@example.com"
+to = ["{id}@example.com"]
+subject = "Mail for {id}"
+date = "2026-08-01T10:00:00Z"
+message_id = "<mail@example.com>"
+body = "Body for {id}"
+"#
+            ))
+            .unwrap();
+            message_ids.insert(
+                id.to_string(),
+                fixture.seed_store(&mut store).unwrap()["mail"].clone(),
+            );
+            let session = mailbox_core::session::Session::from_store(
+                config.clone(),
+                id,
+                store,
+                Tracer::disabled(),
+                Clock::fixed(0),
+            )
+            .unwrap();
+            mailbox.inner = mailbox_ffi::Mailbox::from_workspace(
+                mailbox_core::Workspace::from_sessions(config.clone(), vec![session]),
+            );
+            images.extend(mailbox.checkpoint_images().unwrap());
+        }
+        assert_ne!(message_ids["home"], message_ids["work"]);
+        let mailbox =
+            HostedMailbox::restore_accounts(config.clone(), BTreeMap::new(), images).unwrap();
+        let list: serde_json::Value =
+            serde_json::from_str(&mailbox.inner.exec("ls", "{}").unwrap()).unwrap();
+        assert_eq!(list["messages"].as_array().unwrap().len(), 2);
+        mailbox
+            .inner
+            .exec(
+                "flag",
+                &serde_json::json!({
+                    "ids": [message_ids["work"]], "changes": ["+seen"]
+                })
+                .to_string(),
+            )
+            .unwrap();
+        let images = mailbox.checkpoint_images().unwrap();
+        assert_eq!(images.len(), 2);
+        let restored = HostedMailbox::restore_accounts(config, BTreeMap::new(), images).unwrap();
+        let list: serde_json::Value =
+            serde_json::from_str(&restored.inner.exec("ls", "{}").unwrap()).unwrap();
+        for message in list["messages"].as_array().unwrap() {
+            let seen = message["flags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flag| flag == "seen");
+            assert_eq!(seen, message["account"] == "work");
+            let shown: serde_json::Value = serde_json::from_str(
+                &restored
+                    .inner
+                    .exec(
+                        "show",
+                        &serde_json::json!({
+                            "id": message["id"], "format": "text"
+                        })
+                        .to_string(),
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(shown.to_string().contains(&format!(
+                "Body for {}",
+                message["account"].as_str().unwrap()
+            )));
+        }
+    }
 }
 
 #[wasm_bindgen(js_name = prepareAccount)]

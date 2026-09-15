@@ -28,19 +28,22 @@ self.addEventListener("message", async (event) => {
             return;
         }
 
-        const mailbox = new HostedMailbox(
+        const mailbox = HostedMailbox.openAccounts(
             request.config,
-            request.credential,
-            request.checkpoint,
+            JSON.stringify(request.credentials ?? {}),
+            request.checkpoints ?? {},
         );
-        const reply = JSON.parse(mailbox.exec(request.method, request.args));
-        const { schema: _schema, command: _command, ...result } = reply;
-        const snapshot = mailbox.snapshot().slice();
-        mailbox.free();
-        self.postMessage(
-            { ok: true, result, snapshot },
-            snapshot.length ? [snapshot.buffer] : [],
-        );
+        try {
+            const reply = JSON.parse(mailbox.exec(request.method, request.args));
+            const { schema: _schema, command: _command, ...result } = reply;
+            const snapshots = mailbox.snapshots();
+            self.postMessage(
+                { ok: true, result, snapshots },
+                Object.values(snapshots).map((snapshot) => snapshot.buffer),
+            );
+        } finally {
+            mailbox.free();
+        }
     } catch (error) {
         self.postMessage({ ok: false, error: readableError(error) });
     }

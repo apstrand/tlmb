@@ -8,7 +8,14 @@ Type=simple
 User=mailbox-relay
 Group=mailbox-relay
 WorkingDirectory=/opt/mailbox
-ExecStart=/usr/bin/python3 /opt/mailbox/crates/mailbox-wasm/mailbox-relay.py --listen 127.0.0.1:9001 --target imap.example.com:993 --allowed-host imap.example.com --tls-terminated
+ExecStart=/usr/bin/python3 /home/peter/web/relay/mailbox-relay.py --listen 127.0.0.1:9001 \
+  --upstream zarq=mail.zarquon.se:993 \
+  --upstream nena=mail.nena.se:993 \
+  --upstream u2615=mail.2615.io:993 \
+  --allowed-host mail.zarquon.se \
+  --allowed-host mail.nena.se \
+  --allowed-host mail.2615.io \
+  --tls-terminated
 Restart=on-failure
 RestartSec=2s
 NoNewPrivileges=true
