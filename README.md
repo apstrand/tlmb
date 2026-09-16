@@ -37,8 +37,23 @@ For the native iOS app, see [ios/README.md](ios/README.md).
 
 ## Add an account
 
-The app can discover mail server settings from your email address. To use a
-password stored in a password manager, provide a command that prints it:
+The app can discover mail server settings from your email address. In a
+terminal, adding a password-based account prompts for its password and masks
+the input with `*`:
+
+```sh
+mailbox accounts add you@example.org
+```
+
+The password is saved in the OS keychain when one is available. To replace it
+later, use the same masked prompt:
+
+```sh
+mailbox accounts edit you --password
+```
+
+To use a password stored in a password manager instead, provide a command that
+prints it:
 
 ```sh
 mailbox accounts add you@example.org \
@@ -48,7 +63,7 @@ mailbox sync
 ```
 
 Here, `pass` is an example; use the command for your password manager. If your
-provider requires an app password, use that password. Alternatively,
+provider requires an app password, use that password. For scripts,
 `--password-stdin` reads a password from standard input and saves it in the OS
 keychain when available. Without a supported keychain, it lasts only for that
 command; use `--credential-command` for subsequent runs.
@@ -100,6 +115,38 @@ mailbox compose
 mailbox sync
 mailbox status
 ```
+
+List an account's folders and the roles reported by its server with
+`mailbox folders --account work --remote`. A server that supports writable
+IMAP SPECIAL-USE metadata can change an existing folder's role:
+
+```sh
+mailbox folders use "Saved Mail" archive --account work
+mailbox folders use "Old Trash" none --account work
+```
+
+The command changes the server first, then refreshes every folder role in the
+local store. Valid roles are `all`, `archive`, `drafts`, `flagged`, `important`,
+`junk`, `sent`, and `trash`; `none` clears a role.
+
+`SPECIAL-USE` advertisement alone makes roles readable, not writable. Dovecot
+usually defines them in its server-side namespace configuration, for example
+`mailbox Trash { special_use = \\Trash }`. Change that configuration and reload
+Dovecot, then run `mailbox sync`; an ordinary IMAP login cannot override it.
+`folders use` works only when the server makes `/private/specialuse` writable;
+advertising IMAP `METADATA` does not guarantee that particular attribute can
+be changed.
+
+If the server marks several folders with the same role, choose which one the
+client uses for commands such as `rm`, `archive`, and `spam`:
+
+```sh
+mailbox folders prefer trash "Trash" --account work
+```
+
+This preference is local to the account and survives sync. Use
+`mailbox folders prefer trash none --account work` to return to the default
+ordering.
 
 `show 1` opens the first message from the last listing. `compose` opens your
 `$EDITOR` and queues the message; `sync` sends queued mail and updates the local

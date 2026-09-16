@@ -24,6 +24,10 @@ path = "Trash"
 special_use = "trash"
 
 [[folder]]
+path = "Deleted Messages"
+special_use = "trash"
+
+[[folder]]
 path = "Junk"
 special_use = "junk"
 
@@ -64,6 +68,43 @@ flags = ["\\Seen", "\\Flagged"]
 html = "<h1>Digest</h1><p>Hello <b>world</b>.</p>"
 body = "Digest\n\nHello world."
 "#;
+
+#[test]
+fn changing_folder_use_has_a_network_free_dry_run() {
+    let cli = Cli::new();
+    let run = cli.run(&["--json", "--dry-run", "folders", "use", "Archive", "trash"]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+    assert_eq!(run.json()["would_update"], "Archive");
+    assert_eq!(run.json()["special_use"], "trash");
+}
+
+#[test]
+fn preferred_folder_resolves_duplicate_special_use_roles() {
+    let cli = Cli::new();
+    let id = cli.id("inv42@example.com");
+
+    let before = cli.run(&["--json", "--dry-run", "rm", &id]);
+    assert_eq!(before.status, 0, "{}", before.stderr);
+    assert_eq!(before.json()["target"], "Deleted Messages");
+
+    let preferred = cli.run(&["--json", "folders", "prefer", "trash", "Trash"]);
+    assert_eq!(preferred.status, 0, "{}", preferred.stderr);
+    assert_eq!(preferred.json()["preferred_folder"], "Trash");
+
+    let after = cli.run(&["--json", "--dry-run", "rm", &id]);
+    assert_eq!(after.status, 0, "{}", after.stderr);
+    assert_eq!(after.json()["target"], "Trash");
+
+    let listed = cli.ok(&["folders"]);
+    let trash: Vec<_> = listed["folders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|folder| folder["special_use"] == "trash")
+        .collect();
+    assert_eq!(trash[0]["path"], "Trash");
+    assert_eq!(trash[1]["path"], "Deleted Messages");
+}
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 

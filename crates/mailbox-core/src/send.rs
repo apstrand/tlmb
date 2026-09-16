@@ -218,8 +218,13 @@ impl Session {
         // only when there is something to file.
         let mut uploaded = 0;
         if !self.store().outbox_awaiting_upload()?.is_empty() {
+            let preferred_sent = self.special_folder("sent").ok();
             if let Ok(mut client) = self.connect() {
-                uploaded = crate::smtp::upload_sent(&mut client, self.store_mut())?;
+                uploaded = crate::smtp::upload_sent(
+                    &mut client,
+                    self.store_mut(),
+                    preferred_sent.as_deref(),
+                )?;
                 let _ = client.logout();
             }
         }

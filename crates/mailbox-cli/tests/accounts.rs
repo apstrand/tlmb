@@ -193,6 +193,16 @@ fn an_empty_stdin_is_an_error_rather_than_an_empty_password() {
 }
 
 #[test]
+fn an_explicit_password_prompt_requires_a_terminal() {
+    let w = World::new();
+    let run = w.run(&["--json", "accounts", "add", "peter@gmail.com", "--password"]);
+    assert_eq!(run.status, 2, "{}", run.stdout);
+    assert!(run.stderr.contains("needs a terminal"), "{}", run.stderr);
+    assert!(run.stderr.contains("--password-stdin"), "{}", run.stderr);
+    assert!(w.config_text().is_empty());
+}
+
+#[test]
 fn a_dry_run_adds_nothing() {
     let w = World::new();
     let run = w.run(&["--json", "--dry-run", "accounts", "add", "peter@gmail.com"]);
@@ -250,6 +260,31 @@ fn editing_changes_a_setting_in_place() {
 
     let listed = w.run(&["--json", "accounts", "list"]).json();
     assert_eq!(listed["accounts"][0]["login_user"], "peter.strand");
+}
+
+#[test]
+fn editing_can_replace_the_password_from_stdin() {
+    let w = World::new();
+    w.run(&["accounts", "add", "peter@gmail.com"]);
+
+    let run = w.run_with_stdin(
+        &["--json", "accounts", "edit", "peter", "--password-stdin"],
+        "new-password\n",
+    );
+    assert_eq!(run.status, 0, "{}", run.stderr);
+    assert!(!w.config_text().contains("new-password"));
+    assert!(!run.stdout.contains("new-password"));
+    assert!(!run.stderr.contains("new-password"));
+}
+
+#[test]
+fn editing_with_password_requests_a_terminal_prompt() {
+    let w = World::new();
+    w.run(&["accounts", "add", "peter@gmail.com"]);
+
+    let run = w.run(&["--json", "accounts", "edit", "peter", "--password"]);
+    assert_eq!(run.status, 2, "{}", run.stdout);
+    assert!(run.stderr.contains("needs a terminal"), "{}", run.stderr);
 }
 
 #[test]

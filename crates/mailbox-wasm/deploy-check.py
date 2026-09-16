@@ -9,6 +9,7 @@ import socket
 import ssl
 import urllib.parse
 import urllib.request
+import urllib.error
 
 
 def fetch(url):
@@ -28,7 +29,7 @@ def check_site(url, relay):
     if status != 200:
         raise RuntimeError(f"site returned HTTP {status}")
     for name, expected in (("cross-origin-opener-policy", "same-origin"),
-                           ("cross-origin-embedder-policy", "require-corp")):
+                           ("cross-origin-embedder-policy", "credentialless")):
         if headers.get(name, "").lower() != expected:
             raise RuntimeError(f"missing {name}: expected {expected!r}")
 
@@ -56,6 +57,22 @@ def check_relay(url):
         raise RuntimeError(f"relay did not upgrade WebSocket ({first})")
 
 
+def check_image_proxy(url):
+    parsed = urllib.parse.urlsplit(url)
+    scheme = "https" if parsed.scheme == "wss" else "http"
+    probe = urllib.parse.urlunsplit((scheme, parsed.netloc, "/_image", "", ""))
+    try:
+        fetch(probe)
+    except urllib.error.HTTPError as error:
+        status, headers = error.code, error.headers
+    else:
+        raise RuntimeError("relay image endpoint accepted a request without a URL")
+    if status != 400:
+        raise RuntimeError(f"relay image endpoint returned HTTP {status}, expected 400")
+    if headers.get("cross-origin-resource-policy", "").lower() != "cross-origin":
+        raise RuntimeError("relay image endpoint is missing cross-origin resource policy")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--site", required=True, help="public https:// site URL")
@@ -73,6 +90,7 @@ def main():
             query=urllib.parse.urlencode(query, doseq=True)
         ))
     check_relay(relay)
+    check_image_proxy(relay)
     print("hosted deployment checks passed")
 
 

@@ -18,6 +18,7 @@ const token = pageConfig.dataset.token;
 const hostedBackend = pageConfig.dataset.backend === "hosted"
     ? await import("./hosted.js")
     : null;
+if (hostedBackend) await hostedBackend.ready;
 
 const el = (id) => document.getElementById(id);
 const listEl = el("list");
@@ -26,6 +27,11 @@ const readerEl = el("reader");
 const state = {
     query: "",
     messages: [],
+    listLimit: 100,
+    activeFolder: { path: "INBOX" },
+    partial: false,
+    unloadedFolders: false,
+    folderRecords: [],
     selected: null,
     /// The listing request whose answer is still wanted. Type three characters
     /// quickly and the answers can arrive in any order; painting a stale one is
@@ -79,19 +85,21 @@ function say(message) {
 async function reload() {
     const seq = ++state.listSeq;
     try {
-        const params = new URLSearchParams({ q: state.query, limit: "200" });
+        const params = new URLSearchParams({ q: state.query, limit: String(state.listLimit) });
         const listing = await api(`/api/ls?${params}`);
         if (seq !== state.listSeq) return; // A newer question has been asked.
         el("error").textContent = "";
 
         const previous = state.selected?.id;
-        state.messages = listing.messages ?? [];
+        state.messages = (listing.messages ?? []).filter((message) => !pendingMoves.has(message.id));
+        state.partial = Boolean(listing.partial);
+        el("list-coverage").hidden = !(state.partial || state.unloadedFolders);
         drawList();
 
         const same = state.messages.findIndex((m) => m.id === previous);
         // Keep the cursor on the same message where one exists, so a refresh
         // does not move the selection out from under someone mid-read.
-        if (state.messages.length) select(same >= 0 ? same : 0, { pane: false });
+        if (state.messages.length) select(same >= 0 ? same : 0, { pane: false, cachedOnly: true });
         else clearReader();
     } catch (e) {
         if (seq === state.listSeq) fail(e);
@@ -174,7 +182,7 @@ function shortDate(rfc3339) {
 
 // ---- the reading pane ----
 
-async function select(index, { pane = true } = {}) {
+async function select(index, { pane = true, cachedOnly = false } = {}) {
     if (index < 0 || index >= state.messages.length) return;
     const message = state.messages[index];
     state.selected = message;
@@ -191,10 +199,16 @@ async function select(index, { pane = true } = {}) {
     try {
         // The sanitized HTML of §9. A document rather than flattened text is
         // the whole reason this frontend builds DOM.
-        const shown = await api(`/api/show?id=${encodeURIComponent(message.id)}&format=html`);
+        const path = `/api/show?id=${encodeURIComponent(message.id)}&format=html`;
+        let shown = await api(path + (hostedBackend ? "&cached=1" : ""));
         if (seq !== state.openSeq) return;
         drawReader(shown.message);
-        startReadDwell(message, seq);
+        if (hostedBackend && !cachedOnly && !shown.message?.body) {
+            shown = await api(path);
+            if (seq !== state.openSeq) return;
+            drawReader(shown.message);
+        }
+        if (!hostedBackend || !cachedOnly || shown.message?.body) startReadDwell(message, seq);
     } catch (e) {
         if (seq === state.openSeq) fail(e);
     }
@@ -410,8 +424,35 @@ async function change(run, what) {
 const flag = (id, spec) =>
     change(() => post("/api/flag", { ids: [id], ...spec }), "changed");
 
-const moveTo = (id, folder) =>
-    change(() => post("/api/move", { ids: [id], folder }), `moved to ${folder}`);
+const pendingMoves = new Set();
+async function moveTo(id, folder) {
+    const index = state.messages.findIndex((message) => message.id === id);
+    const message = state.messages[index];
+    const request = post("/api/move", { ids: [id], folder,
+        account: message?.account, source_folder: message?.folder,
+        unread: message ? !message.flags.includes("seen") : false });
+    const alreadyTrashed = message && state.folderRecords.some((record) =>
+        record.account === message.account && record.path === message.folder && record.special_use === "trash");
+    if (hostedBackend && message && folder === "trash" && !alreadyTrashed) {
+        pendingMoves.add(id);
+        clearTimeout(state.readTimer);
+        state.openSeq += 1;
+        state.messages.splice(index, 1);
+        drawList();
+        clearReader();
+        if (state.messages.length) select(Math.min(index, state.messages.length - 1), { pane: false, cachedOnly: true });
+    }
+    try {
+        await request;
+        pendingMoves.delete(id);
+        say(`moved to ${folder}`);
+        await Promise.all([reload(), loadFolders()]);
+    } catch (error) {
+        pendingMoves.delete(id);
+        await reload();
+        fail(error);
+    }
+}
 
 const snooze = (id, until) =>
     change(async () => {
@@ -426,36 +467,45 @@ const snooze = (id, until) =>
 async function loadFolders() {
     try {
         const { folders } = await api("/api/folders");
+        state.folderRecords = folders;
         const nav = el("folders");
         // The first button *is* the inbox, so listing the inbox folder beside
         // it would be the same place named twice.
         const rest = folders.filter((f) => f.special_use !== "inbox");
         nav.replaceChildren(
-            folderButton("Inbox", "", inboxUnread(folders)),
+            folderButton("Inbox", "", folders.filter((folder) => folder.special_use === "inbox")
+                .reduce((total, folder) => total + folder.total, 0),
+                folders.filter((folder) => folder.special_use === "inbox")
+                    .reduce((total, folder) => total + folder.unread, 0), { path: "INBOX" }),
             ...rest.map((f) =>
-                folderButton(f.name, `in:${f.path.includes(" ") ? `"${f.path}"` : f.path}`, f.unread)),
+                folderButton(f.name, `account:${f.account} in:${f.path.includes(" ") ? `"${f.path}"` : f.path}`,
+                    f.total, f.unread, { account: f.account, path: f.path })),
         );
+        state.unloadedFolders = folders.some((folder) => folder.total > (folder.downloaded ?? folder.total));
+        el("list-coverage").hidden = !(state.partial || state.unloadedFolders);
+        el("load-more").hidden = !hostedBackend || !state.activeFolder || !folders.some((folder) =>
+            (!state.activeFolder.account || folder.account === state.activeFolder.account) &&
+            folder.path.toUpperCase() === state.activeFolder.path.toUpperCase() &&
+            folder.total > (folder.downloaded ?? folder.total));
     } catch (e) {
         fail(e);
     }
 }
 
-function inboxUnread(folders) {
-    return folders
-        .filter((f) => f.special_use === "inbox")
-        .reduce((n, f) => n + f.unread, 0);
-}
-
-function folderButton(label, query, unread = 0) {
+function folderButton(label, query, total = 0, unread = 0, scope) {
     const button = document.createElement("button");
     button.className = "folder" + (state.query === query ? " is-current" : "");
     button.dataset.query = query;
     button.append(span("name", label));
-    if (unread) button.append(span("count", String(unread)));
+    button.append(span("count", String(total)));
+    button.title = `${scope?.account ? scope.account + ": " : ""}${total} messages, ${unread} unread`;
     button.addEventListener("click", () => {
         el("search").value = query;
+        state.activeFolder = scope;
+        state.listLimit = 100;
         run(query);
         showPane("list");
+        if (hostedBackend && scope) syncNow({ account: scope.account, folders: [scope.path] });
     });
     return button;
 }
@@ -668,21 +718,62 @@ function run(query) {
 
 el("search-form").addEventListener("submit", (event) => {
     event.preventDefault();
+    state.activeFolder = null;
+    el("load-more").hidden = true;
     run(el("search").value.trim());
     el("search").blur();
 });
 
-function syncNow() {
-    return change(async () => {
-        const result = await post("/api/sync", {});
-        const added = (result.synced ?? []).reduce((n, r) => n + r.messages_added, 0);
-        const errors = (result.errors ?? []).map((error) => `${error.account}: ${error.message}`);
-        say(`synced — ${added} new message${added === 1 ? "" : "s"}` +
-            (errors.length ? `; ${errors.join("; ")}` : ""));
-    }, "synced");
+el("load-more").addEventListener("click", async () => {
+    const scope = state.activeFolder;
+    if (!scope || syncTask) return;
+    state.listLimit += 100;
+    el("load-more").disabled = true;
+    try { await syncNow({ account: scope.account, folders: [scope.path] }); }
+    finally { el("load-more").disabled = false; }
+});
+
+let syncTask;
+let syncController;
+function syncNow(args = {}) {
+    if (syncTask) {
+        return args.account ? syncTask.then(() => syncNow(args)) : syncTask;
+    }
+    syncController = new AbortController();
+    el("sync").textContent = hostedBackend ? "Stop sync" : "Syncing…";
+    el("sync").disabled = !hostedBackend;
+    syncTask = (async () => {
+        state.inFlight += 1;
+        el("spinner").hidden = false;
+        try {
+            const result = hostedBackend
+                ? await hostedBackend.syncProgressively(args, async ({ account, folder, result }) => {
+                    const added = result.synced.reduce((n, r) => n + r.messages_added, 0);
+                    say(`loading ${account} / ${folder} — ${added} new messages`);
+                    await Promise.all([reload(), loadFolders()]);
+                }, syncController.signal)
+                : await post("/api/sync", {});
+            const added = (result.synced ?? []).reduce((n, r) => n + r.messages_added, 0);
+            const errors = (result.errors ?? []).map((error) => `${error.account}: ${error.message}`);
+            say(`${result.stopped ? "sync paused" : "synced"} — ${added} new message${added === 1 ? "" : "s"}` +
+                (errors.length ? `; ${errors.join("; ")}` : ""));
+            await Promise.all([reload(), loadFolders()]);
+        } catch (error) {
+            fail(error);
+        } finally {
+            state.inFlight -= 1;
+            el("spinner").hidden = state.inFlight === 0;
+            el("sync").textContent = "Sync";
+            el("sync").disabled = false;
+        }
+    })().finally(() => { syncTask = undefined; });
+    return syncTask;
 }
 
-el("sync").addEventListener("click", () => syncNow());
+el("sync").addEventListener("click", () => {
+    if (hostedBackend && syncTask) syncController.abort();
+    else syncNow();
+});
 
 el("host").textContent = hostedBackend
     ? "browser store"
@@ -1022,7 +1113,7 @@ async function addAccount() {
         say(`added ${added.address} — ${added.credential ?? "no credential"}`);
         // The mailbox is open and empty until something fetches; nobody should
         // have to know to press Sync on their first minute.
-        syncNow();
+        syncNow({ account: added.id });
     } catch (e) {
         setupError(e);
         // Whatever the server objected to, the answer is in these fields.

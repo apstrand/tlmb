@@ -119,7 +119,11 @@ fn send_one(
 /// Skipped where the server files sent mail itself: Gmail does this for
 /// anything submitted through its own SMTP, and appending would leave the user
 /// with two of everything in a folder they did not ask us to touch.
-pub fn upload_sent(client: &mut Client, store: &mut Store) -> Result<u32> {
+pub fn upload_sent(
+    client: &mut Client,
+    store: &mut Store,
+    preferred_folder: Option<&str>,
+) -> Result<u32> {
     let pending = store.outbox_awaiting_upload()?;
     if pending.is_empty() {
         return Ok(0);
@@ -134,12 +138,15 @@ pub fn upload_sent(client: &mut Client, store: &mut Store) -> Result<u32> {
         return Ok(0);
     }
 
-    let Some(sent) = store
-        .folders()?
-        .into_iter()
-        .find(|f| f.special_use.as_deref() == Some("sent"))
-        .map(|f| f.path)
-    else {
+    let sent = match preferred_folder {
+        Some(path) => Some(path.to_string()),
+        None => store
+            .folders()?
+            .into_iter()
+            .find(|f| f.special_use.as_deref() == Some("sent"))
+            .map(|f| f.path),
+    };
+    let Some(sent) = sent else {
         // No Sent folder is not an error worth failing a send over — the mail
         // went out. It is worth not retrying forever, though.
         for entry in &pending {

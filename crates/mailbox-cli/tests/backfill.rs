@@ -20,6 +20,39 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Comfortably more than one chunk, so the walk takes several passes.
 const TOTAL: u32 = 5_000;
 
+#[test]
+fn small_platform_batches_checkpoint_newest_mail_and_finish_over_later_passes() {
+    use mailbox_core::imap::{sync::SyncOptions, Credential};
+    use mailbox_core::session::{Session, SessionOptions};
+    use mailbox_core::{Clock, Tracer};
+
+    let w = World::new(250);
+    mailbox_core::credentials::install("test", Credential::Password("testpass".into()));
+    let mut session = Session::open(
+        &SessionOptions {
+            config_path: Some(w.config.clone()),
+            state_dir: Some(w.dir.join("state")),
+            account: Some("test".into()),
+            ..Default::default()
+        },
+        Tracer::disabled(),
+        Clock::fixed(0),
+    )
+    .unwrap();
+    let opts = SyncOptions {
+        max_headers: 100,
+        max_prefetch: 0,
+        ..Default::default()
+    };
+    for (added, remaining) in [(100, 150), (100, 50), (50, 0)] {
+        let result = session.sync(&opts).unwrap();
+        assert_eq!(result.synced[0].messages_added, added);
+        assert_eq!(result.synced[0].bodies_fetched, 0);
+        assert_eq!(session.coverage().unwrap().remaining, remaining);
+        assert_eq!(session.coverage().unwrap().complete, remaining == 0);
+    }
+}
+
 struct World {
     dir: PathBuf,
     config: PathBuf,

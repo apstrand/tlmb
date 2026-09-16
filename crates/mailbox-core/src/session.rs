@@ -253,9 +253,9 @@ impl Session {
     }
 
     pub fn folders(&self) -> Result<FolderList> {
-        Ok(FolderList {
-            folders: self.store.folders()?,
-        })
+        let mut folders = self.store.folders()?;
+        self.apply_folder_preferences(&mut folders);
+        Ok(FolderList { folders })
     }
 
     /// What the *server* holds, with counts, without syncing (§6.1).
@@ -279,24 +279,48 @@ impl Session {
             (a.record.rank(), &a.record.path).cmp(&(b.record.rank(), &b.record.path))
         });
 
-        Ok(FolderList {
-            folders: listed
-                .into_iter()
-                .map(|f| Folder {
-                    account: self.account_id.clone(),
-                    path: f.record.path,
-                    name: f.record.name,
-                    special_use: f.record.special_use,
-                    // A server that would not give a count reports zero rather
-                    // than a missing field: the contract's counts are not
-                    // optional, and a folder that cannot hold mail genuinely
-                    // holds none.
-                    total: f.total.unwrap_or(0),
-                    unread: f.unread.unwrap_or(0),
-                    selectable: f.record.selectable,
-                })
-                .collect(),
-        })
+        let mut folders = listed
+            .into_iter()
+            .map(|f| Folder {
+                account: self.account_id.clone(),
+                path: f.record.path,
+                name: f.record.name,
+                special_use: f.record.special_use,
+                // A server that would not give a count reports zero rather
+                // than a missing field: the contract's counts are not
+                // optional, and a folder that cannot hold mail genuinely
+                // holds none.
+                total: f.total.unwrap_or(0),
+                unread: f.unread.unwrap_or(0),
+                selectable: f.record.selectable,
+            })
+            .collect();
+        self.apply_folder_preferences(&mut folders);
+        Ok(FolderList { folders })
+    }
+
+    /// Changes a folder's role on the server and immediately mirrors all
+    /// server-reported roles locally. A server may move a unique role, such as
+    /// `sent`, off another folder as a side effect, so refreshing only the
+    /// named folder would leave the local view inconsistent.
+    pub fn set_folder_use(&mut self, path: &str, use_name: Option<&str>) -> Result<Folder> {
+        let mut client = self.connect()?;
+        client.set_special_use(path, use_name)?;
+        let listed = client.list_folders();
+        let _ = client.logout();
+        let listed = listed?;
+
+        if !listed.iter().any(|folder| folder.path == path) {
+            return Err(Error::not_found("folder", path));
+        }
+        for folder in listed {
+            self.store.upsert_folder(&folder)?;
+        }
+        self.store
+            .folders()?
+            .into_iter()
+            .find(|folder| folder.path == path)
+            .ok_or_else(|| Error::not_found("folder", path))
     }
 
     /// Raises desktop notifications for mail that has just arrived (§11).
@@ -535,14 +559,38 @@ impl Session {
     /// Trash, Archive, and Junk — which is not the same string everywhere, and
     /// is not the user's problem.
     pub fn special_folder(&self, use_name: &str) -> Result<String> {
-        self.store
-            .folders()?
+        self.folders()?
+            .folders
             .into_iter()
             .find(|f| f.special_use.as_deref() == Some(use_name))
             .map(|f| f.path)
             .ok_or_else(|| {
                 Error::not_found("folder", format!("{use_name} (this account has none)"))
             })
+    }
+
+    fn apply_folder_preferences(&self, folders: &mut Vec<Folder>) {
+        let Some(account) = self.config.accounts.get(&self.account_id) else {
+            return;
+        };
+        for (use_name, preferred_path) in &account.folder_use {
+            let Some(preferred) = folders.iter().position(|folder| {
+                folder.path == *preferred_path
+                    && folder.special_use.as_deref() == Some(use_name.as_str())
+            }) else {
+                continue;
+            };
+            let Some(first) = folders
+                .iter()
+                .position(|folder| folder.special_use.as_deref() == Some(use_name.as_str()))
+            else {
+                continue;
+            };
+            if preferred != first {
+                let folder = folders.remove(preferred);
+                folders.insert(first, folder);
+            }
+        }
     }
 
     fn resolve_all(&self, refs: &[IdRef]) -> Result<Vec<String>> {
@@ -659,7 +707,10 @@ impl Session {
         let report = sync_once(&mut client, &mut self.store, opts, &clock);
 
         // File any Sent copies while the connection is already open (§5.5).
-        let uploaded = crate::smtp::upload_sent(&mut client, &mut self.store).unwrap_or(0);
+        let preferred_sent = self.special_folder("sent").ok();
+        let uploaded =
+            crate::smtp::upload_sent(&mut client, &mut self.store, preferred_sent.as_deref())
+                .unwrap_or(0);
         if uploaded > 0 {
             submitted.get_or_insert_with(Default::default).uploaded += uploaded;
         }

@@ -259,7 +259,7 @@ mailbox [global flags] <command> [args]
   flag <id>… <flags>      +seen -flagged +tag:invoices …
   mv <id>… <folder>       move; cp, rm, archive, spam are sugar over it
   attach <id> [part]      list or extract attachments
-  folders                 list folders with counts
+  folders                 list folders; `use` edits roles, `prefer` resolves duplicates
   accounts                add / list / remove / test accounts
   sync                    force a sync pass; --full, --folder, --since
   watch                   stream events as NDJSON until interrupted

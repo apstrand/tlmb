@@ -530,6 +530,9 @@ pub struct ShowArgs {
 
 #[derive(Debug, Args)]
 pub struct FoldersArgs {
+    #[command(subcommand)]
+    pub action: Option<FoldersAction>,
+
     /// Ask the server instead of reading the local store.
     ///
     /// Shows what is up there and how big it is without syncing anything —
@@ -537,6 +540,28 @@ pub struct FoldersArgs {
     /// that has never synced.
     #[arg(long, short = 'r')]
     pub remote: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FoldersAction {
+    /// Choose which folder to use when several have the same role.
+    Prefer {
+        /// `all`, `archive`, `drafts`, `flagged`, `important`, `inbox`, `junk`,
+        /// `sent`, or `trash`.
+        #[arg(value_name = "USE")]
+        use_name: String,
+        /// Exact folder path, or `none` to clear the local preference.
+        folder: String,
+    },
+    /// Assign or clear an IMAP special-use role, then refresh it locally.
+    Use {
+        /// The folder path exactly as `mailbox folders` prints it.
+        folder: String,
+        /// `all`, `archive`, `drafts`, `flagged`, `important`, `junk`, `sent`,
+        /// `trash`, or `none` to clear the role.
+        #[arg(value_name = "USE")]
+        use_name: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -635,6 +660,16 @@ pub struct AccountSettings {
     /// test it — and says so.
     #[arg(long)]
     pub password_stdin: bool,
+
+    /// Prompt for a password on the terminal, masking each character with `*`.
+    ///
+    /// `accounts add` does this automatically when no other credential source
+    /// is supplied. Use this flag with `accounts edit` to replace a password.
+    #[arg(
+        long,
+        conflicts_with_all = ["password_stdin", "credential_command", "oauth"]
+    )]
+    pub password: bool,
 
     /// Authenticate with OAuth2: `google`, `microsoft`, or `yahoo`.
     #[arg(long, value_name = "PROVIDER")]

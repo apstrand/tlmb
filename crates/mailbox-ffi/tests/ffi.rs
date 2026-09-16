@@ -108,6 +108,41 @@ fn payload(json: &str) -> Value {
 }
 
 #[test]
+fn deleting_is_local_and_updates_folder_counts_without_an_imap_connection() {
+    let (_tmp, mb, id) = seeded();
+    mb.exec(
+        "move",
+        &serde_json::json!({ "ids": [id], "folder": "trash" }).to_string(),
+    )
+    .unwrap();
+    let folders = mb.folders().unwrap().folders;
+    assert_eq!(
+        folders
+            .iter()
+            .find(|folder| folder.path == "INBOX")
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        folders
+            .iter()
+            .find(|folder| folder.path == "Trash")
+            .unwrap()
+            .total,
+        1
+    );
+    let listing = payload(&mb.exec("ls", "{}").unwrap());
+    assert!(listing["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|message| message["id"] != id));
+    let status = payload(&mb.exec("status", "{}").unwrap());
+    assert_eq!(status["accounts"][0]["queued_ops"], 1);
+}
+
+#[test]
 fn empty_mailbox_lists_nothing() {
     let tmp = TempDir::new();
     let config = tmp.path().join("config.toml");

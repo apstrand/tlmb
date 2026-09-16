@@ -372,6 +372,24 @@ pub fn edit(path: &Path, id: &str, spec: &NewAccount) -> Result<AccountConfig> {
     Ok(updated)
 }
 
+/// Selects which folder wins when the server assigns one special-use role to
+/// multiple folders. This is a client preference, so it belongs in the account
+/// config and survives a refresh of the server's folder metadata.
+pub fn prefer_folder(path: &Path, id: &str, use_name: &str, folder: Option<&str>) -> Result<()> {
+    let mut config = Config::load(path)?;
+    let cfg = config
+        .accounts
+        .get_mut(id)
+        .ok_or_else(|| Error::not_found("account", id))?;
+    if let Some(folder) = folder {
+        cfg.folder_use
+            .insert(use_name.to_string(), folder.to_string());
+    } else {
+        cfg.folder_use.remove(use_name);
+    }
+    config.save(path)
+}
+
 /// Removes an account from the config, and forgets its credential.
 ///
 /// The *store* is left alone. Deleting a mailbox's local cache because someone

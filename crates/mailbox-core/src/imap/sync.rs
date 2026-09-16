@@ -59,6 +59,14 @@ pub struct SyncOptions {
     /// A ceiling on eager body fetches per folder per pass, so a first sync of
     /// a large mailbox does not become a full download.
     pub max_prefetch: usize,
+    /// Header batch size for newest-first backfill. Smaller batches let a
+    /// browser checkpoint and display progress between passes.
+    #[serde(default = "default_max_headers")]
+    pub max_headers: usize,
+}
+
+fn default_max_headers() -> usize {
+    BACKFILL_CHUNK
 }
 
 impl Default for SyncOptions {
@@ -69,6 +77,7 @@ impl Default for SyncOptions {
             since: None,
             prefetch_days: Some(30),
             max_prefetch: 500,
+            max_headers: BACKFILL_CHUNK,
         }
     }
 }
@@ -370,16 +379,12 @@ fn sync_folder(
     // full listing established about how far back the store reaches.
     let mut backfill_uid = prev.backfill_uid;
     let mut complete = prev.complete;
-    let backfilling = listed_everything && new_uids.len() > BACKFILL_CHUNK;
+    let max_headers = opts.max_headers.max(1);
+    let backfilling = listed_everything && new_uids.len() > max_headers;
     if !new_uids.is_empty() {
         let uids: Vec<u32> = if backfilling {
             // A `BTreeSet` is ascending, so the newest are at the end.
-            new_uids
-                .iter()
-                .rev()
-                .take(BACKFILL_CHUNK)
-                .copied()
-                .collect()
+            new_uids.iter().rev().take(max_headers).copied().collect()
         } else {
             new_uids.iter().copied().collect()
         };

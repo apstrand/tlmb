@@ -178,6 +178,8 @@ nav#folders {
 
 #list-pane { border-right: 1px solid var(--line); }
 
+#list-coverage { margin: .5rem .7rem; color: var(--text-dim); font-size: .85rem; }
+
 ol#list { margin: 0; padding: 0; list-style: none; }
 ol#list:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 

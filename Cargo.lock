@@ -2528,6 +2528,7 @@ version = "0.1.4"
 dependencies = [
  "base64 0.23.1",
  "clap",
+ "crossterm 0.29.0",
  "jsonschema",
  "mailbox-api",
  "mailbox-core",

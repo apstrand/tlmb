@@ -22,6 +22,21 @@ select a single fixed upstream for compatibility.
 One browser can retain several accounts. Use **Add account** in the mailbox
 toolbar; each account keeps its own credential and OPFS checkpoint. Listings
 use the core's unified mailbox, and sync connects each account separately.
+Browser sync fetches only the newest 100 inbox headers and server counts for
+all folders. Opening another folder fetches one recent header batch; **Load more
+headers** fetches another batch in the current folder. Bodies load when opened.
+Folder badges show total messages, with unread counts in their tooltips.
+The list indicates when older mail has not been downloaded. Deletes update
+locally and queue a move to Trash for the next sync.
+
+Remote message images load through the relay's bounded `/_image` endpoint only
+after the reader chooses **Load images**. The endpoint is needed for image hosts
+that send `Cross-Origin-Resource-Policy: same-origin`; it accepts only public
+HTTP(S) destinations on ports 80 and 443, follows the same checks after every
+redirect, requires an image response, and caps each body at 10 MiB by default.
+The frame's CSP still blocks every remote image until the explicit choice.
+Tracking URLs can still tell their sender that the message was read, although
+the image host sees the relay's network address rather than the browser's.
 Use a distinct optional account name when two addresses would otherwise
 produce the same account ID.
 

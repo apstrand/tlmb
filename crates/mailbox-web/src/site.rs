@@ -54,10 +54,13 @@ pub fn generate(options: &Options) -> Result<Report> {
     let headers = concat!(
         "/*\n",
         "  Cross-Origin-Opener-Policy: same-origin\n",
-        "  Cross-Origin-Embedder-Policy: require-corp\n",
+        "  Cross-Origin-Embedder-Policy: credentialless\n",
         "  Content-Security-Policy: default-src 'self'; connect-src 'self' ws: wss:; ",
         "worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'; ",
-        "style-src 'self'; img-src 'self' data: blob:; frame-src blob:; ",
+        // Hosted message bodies are blob frames. A blob inherits this policy,
+        // so the outer policy must permit the remote schemes before the
+        // frame's stricter per-message policy can make Load images opt-in.
+        "style-src 'self'; img-src 'self' https: http: data: blob:; frame-src blob:; ",
         "base-uri 'none'; form-action 'none'\n",
     );
     let index = super::assets::index("", true, "hosted");
@@ -117,7 +120,8 @@ mod tests {
         assert_eq!(config["relay"], "wss://relay.example/");
         let headers = std::fs::read_to_string(out.join("_headers")).unwrap();
         assert!(headers.contains("Cross-Origin-Opener-Policy: same-origin"));
-        assert!(headers.contains("Cross-Origin-Embedder-Policy: require-corp"));
+        assert!(headers.contains("Cross-Origin-Embedder-Policy: credentialless"));
+        assert!(headers.contains("img-src 'self' https: http: data: blob:"));
         assert_eq!(
             std::fs::read(out.join("pkg/mailbox_wasm_bg.wasm")).unwrap(),
             b"wasm"

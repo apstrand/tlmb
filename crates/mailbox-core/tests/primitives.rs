@@ -524,3 +524,127 @@ fn special_use_falls_back_to_the_name() {
     assert_eq!(guess_special_use("Projects/2026"), None);
     assert_eq!(guess_special_use("Archived Invoices"), None);
 }
+
+#[test]
+fn special_use_metadata_is_set_with_the_standard_imap_entry() {
+    use mailbox_core::imap::transcript::{Event, Transcript};
+    use mailbox_core::imap::Client;
+    use mailbox_core::Tracer;
+
+    let sent = |line: &str| Event::Sent {
+        bytes: format!("{line}\r\n").into_bytes(),
+    };
+    let received = |line: &str| Event::Received {
+        bytes: format!("{line}\r\n").into_bytes(),
+    };
+    let transcript = Transcript {
+        recorded_at: "2026-09-16T00:00:00Z".into(),
+        server: "test".into(),
+        scenario: "set and clear special use".into(),
+        capabilities: vec!["METADATA".into(), "SPECIAL-USE".into()],
+        qresync: false,
+        start_tag: 0,
+        sync_options: None,
+        events: vec![
+            sent(r#"a0001 SETMETADATA "Saved Drafts" (/private/specialuse "\\Trash")"#),
+            received("a0001 OK set"),
+            sent(r#"a0002 SETMETADATA "Saved Drafts" (/private/specialuse NIL)"#),
+            received("a0002 OK cleared"),
+        ],
+    };
+    let (mut client, divergence) = Client::replay(transcript, Tracer::disabled()).unwrap();
+    client
+        .set_special_use("Saved Drafts", Some("trash"))
+        .unwrap();
+    client.set_special_use("Saved Drafts", None).unwrap();
+    assert_eq!(*divergence.lock().unwrap(), None);
+}
+
+#[test]
+fn read_only_special_use_explains_dovecot_configuration() {
+    use mailbox_core::imap::transcript::Transcript;
+    use mailbox_core::imap::Client;
+    use mailbox_core::Tracer;
+
+    let transcript = Transcript {
+        recorded_at: "2026-09-16T00:00:00Z".into(),
+        server: "Dovecot".into(),
+        scenario: "read-only special use".into(),
+        capabilities: vec!["SPECIAL-USE".into()],
+        qresync: false,
+        start_tag: 0,
+        sync_options: None,
+        events: vec![],
+    };
+    let (mut client, _) = Client::replay(transcript, Tracer::disabled()).unwrap();
+    let error = client
+        .set_special_use("Trash", Some("trash"))
+        .expect_err("METADATA is required to edit a role");
+    assert!(error.to_string().contains("for listing"), "{error}");
+    assert!(error.to_string().contains("Dovecot"), "{error}");
+    assert!(error.to_string().contains("special_use"), "{error}");
+}
+
+#[test]
+fn rejected_special_use_change_explains_dovecot_and_local_preference() {
+    use mailbox_core::imap::transcript::{Event, Transcript};
+    use mailbox_core::imap::Client;
+    use mailbox_core::Tracer;
+
+    let transcript = Transcript {
+        recorded_at: "2026-09-16T00:00:00Z".into(),
+        server: "Dovecot".into(),
+        scenario: "immutable special use metadata".into(),
+        capabilities: vec!["METADATA".into(), "SPECIAL-USE".into()],
+        qresync: false,
+        start_tag: 0,
+        sync_options: None,
+        events: vec![
+            Event::Sent {
+                bytes: b"a0001 SETMETADATA \"Trash\" (/private/specialuse \"\\\\Trash\")\r\n"
+                    .to_vec(),
+            },
+            Event::Received {
+                bytes: b"a0001 NO [CANNOT] The /private/specialuse attribute cannot be changed\r\n"
+                    .to_vec(),
+            },
+        ],
+    };
+    let (mut client, divergence) = Client::replay(transcript, Tracer::disabled()).unwrap();
+    let error = client
+        .set_special_use("Trash", Some("trash"))
+        .expect_err("Dovecot rejects configured special-use metadata changes");
+    assert_eq!(*divergence.lock().unwrap(), None);
+    assert!(error.to_string().contains("read-only"), "{error}");
+    assert!(error.to_string().contains("Dovecot"), "{error}");
+    assert!(error.to_string().contains("folders prefer"), "{error}");
+}
+
+#[test]
+fn an_authoritative_empty_special_use_is_not_replaced_by_a_name_guess() {
+    use mailbox_core::imap::transcript::{Event, Transcript};
+    use mailbox_core::imap::Client;
+    use mailbox_core::Tracer;
+
+    let transcript = Transcript {
+        recorded_at: "2026-09-16T00:00:00Z".into(),
+        server: "test".into(),
+        scenario: "cleared Trash role".into(),
+        capabilities: vec!["LIST-EXTENDED".into(), "SPECIAL-USE".into()],
+        qresync: false,
+        start_tag: 0,
+        sync_options: None,
+        events: vec![
+            Event::Sent {
+                bytes: b"a0001 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n".to_vec(),
+            },
+            Event::Received {
+                bytes: b"* LIST () \"/\" \"Trash\"\r\na0001 OK listed\r\n".to_vec(),
+            },
+        ],
+    };
+    let (mut client, divergence) = Client::replay(transcript, Tracer::disabled()).unwrap();
+    let folders = client.list_folders().unwrap();
+    assert_eq!(folders[0].special_use, None);
+    assert_eq!(*divergence.lock().unwrap(), None);
+}

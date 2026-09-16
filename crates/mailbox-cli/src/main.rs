@@ -183,6 +183,10 @@ fn needs_write(cmd: &Command) -> bool {
                 | Some(cli::AccountsAction::Remove { .. })
                 | Some(cli::AccountsAction::Login(_))
         ),
+        Command::Folders(args) => matches!(
+            args.action,
+            Some(cli::FoldersAction::Use { .. } | cli::FoldersAction::Prefer { .. })
+        ),
         // Receiving a pairing rewrites the config, and may create a store.
         Command::Pair(_) => true,
         // `show` and `attach` fetch a body they do not have (§5.1), which is a

@@ -237,6 +237,58 @@ impl Client {
         Ok(out)
     }
 
+    /// Changes an existing mailbox's SPECIAL-USE metadata (RFC 6154 §4).
+    pub fn set_special_use(&mut self, path: &str, use_name: Option<&str>) -> Result<()> {
+        if self.has("SPECIAL-USE") && !self.has("METADATA") {
+            return Err(Error::usage(
+                "this server advertises SPECIAL-USE for listing, but not METADATA for editing; \
+                 Dovecot normally sets these roles in its namespace mailbox `special_use` \
+                 configuration — change and reload the server configuration, then run `mailbox sync`",
+            ));
+        }
+        if !self.has("METADATA") || !self.has("SPECIAL-USE") {
+            return Err(Error::usage(
+                "this IMAP server does not support editing SPECIAL-USE metadata",
+            ));
+        }
+        let value = match use_name {
+            None => "NIL".to_string(),
+            Some(name) => {
+                let attribute = match name {
+                    "all" => "\\All",
+                    "archive" => "\\Archive",
+                    "drafts" => "\\Drafts",
+                    "flagged" => "\\Flagged",
+                    "important" => "\\Important",
+                    "junk" => "\\Junk",
+                    "sent" => "\\Sent",
+                    "trash" => "\\Trash",
+                    other => return Err(Error::usage(format!("unknown folder use `{other}`"))),
+                };
+                connection::quote_astring(attribute)
+            }
+        };
+        let command = format!(
+            "SETMETADATA {} (/private/specialuse {value})",
+            self.encode_mailbox(path)
+        );
+        match self.conn.command(&command)?.require_ok("SETMETADATA") {
+            Ok(_) => Ok(()),
+            Err(Error::Rejected { message, .. })
+                if message.to_ascii_lowercase().contains("specialuse")
+                    && message.to_ascii_lowercase().contains("cannot be changed") =>
+            {
+                Err(Error::usage(
+                    "this server exposes SPECIAL-USE metadata as read-only; Dovecot normally \
+                     controls it with namespace mailbox `special_use` configuration — change \
+                     and reload the server configuration, then run `mailbox sync`. To choose \
+                     among folders that already have the same role, use `mailbox folders prefer`",
+                ))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Turns one `LIST` response into a folder record: the name decoded from
     /// modified UTF-7, the leaf split on the server's own delimiter, and the
     /// special-use resolved.
@@ -257,7 +309,7 @@ impl Client {
             _ => path.clone(),
         };
         FolderRecord {
-            special_use: special_use(name_attributes, &path),
+            special_use: special_use(name_attributes, &path, self.has("SPECIAL-USE")),
             selectable: is_selectable(name_attributes),
             path,
             name: leaf,
@@ -861,7 +913,14 @@ pub fn is_selectable(attrs: &[NameAttribute<'static>]) -> bool {
 
 /// The special-use name for a folder: from the server's annotation where it
 /// gave one, from the name where it did not.
-fn special_use(attrs: &[NameAttribute<'static>], path: &str) -> Option<String> {
+fn special_use(
+    attrs: &[NameAttribute<'static>],
+    path: &str,
+    server_is_authoritative: bool,
+) -> Option<String> {
+    if path.eq_ignore_ascii_case("INBOX") {
+        return Some("inbox".to_string());
+    }
     for a in attrs {
         let name = match a {
             NameAttribute::All => "all",
@@ -871,11 +930,18 @@ fn special_use(attrs: &[NameAttribute<'static>], path: &str) -> Option<String> {
             NameAttribute::Junk => "junk",
             NameAttribute::Sent => "sent",
             NameAttribute::Trash => "trash",
+            NameAttribute::Extension(name) if name.eq_ignore_ascii_case("\\Important") => {
+                "important"
+            }
             _ => continue,
         };
         return Some(name.to_string());
     }
-    guess_special_use(path)
+    if server_is_authoritative {
+        None
+    } else {
+        guess_special_use(path)
+    }
 }
 
 /// The pre-RFC-6154 heuristic. Deliberately conservative: a wrong guess here

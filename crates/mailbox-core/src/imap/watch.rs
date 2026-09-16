@@ -156,11 +156,8 @@ fn wait(workspace: &mut Workspace, opts: &WatchOptions) -> Result<Wake> {
     // The inbox: where the mail someone is waiting for arrives, and the folder
     // every server has.
     let inbox = session
-        .store()
-        .folders()?
-        .into_iter()
-        .find(|f| f.special_use.as_deref() == Some("inbox"))
-        .map(|f| f.path)
+        .special_folder("inbox")
+        .ok()
         .unwrap_or_else(|| "INBOX".to_string());
 
     client.select(&inbox)?;

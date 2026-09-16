@@ -36,7 +36,13 @@ self.addEventListener("message", async (event) => {
         try {
             const reply = JSON.parse(mailbox.exec(request.method, request.args));
             const { schema: _schema, command: _command, ...result } = reply;
-            const snapshots = mailbox.snapshots();
+            if (request.method === "sync") {
+                result.coverage = JSON.parse(mailbox.exec("status", "{}"))
+                    .accounts[0]?.coverage;
+            }
+            // Read requests use message IDs, so their transient listing history
+            // need not rewrite every account's database and body archive.
+            const snapshots = request.persist ? mailbox.snapshots() : {};
             self.postMessage(
                 { ok: true, result, snapshots },
                 Object.values(snapshots).map((snapshot) => snapshot.buffer),

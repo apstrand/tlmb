@@ -149,8 +149,9 @@ pub struct Folder {
     pub path: String,
     /// The last path segment, decoded from modified UTF-7.
     pub name: String,
-    /// `inbox`, `sent`, `drafts`, `trash`, `junk`, `archive`, `all` — from
-    /// `SPECIAL-USE` where advertised, else guessed from the name.
+    /// `inbox`, `sent`, `drafts`, `trash`, `junk`, `archive`, `all`, `flagged`,
+    /// or `important` — from `SPECIAL-USE` where advertised, else guessed from
+    /// the name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub special_use: Option<String>,
     pub total: u32,

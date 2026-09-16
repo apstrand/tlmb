@@ -3,8 +3,9 @@
 import asyncio
 import importlib.util
 from pathlib import Path
+import socket
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 spec = importlib.util.spec_from_file_location(
     "mailbox_relay", Path(__file__).with_name("mailbox-relay.py")
@@ -37,6 +38,16 @@ class RoutingTests(unittest.TestCase):
             with self.subTest(request=request), self.assertRaises(ValueError):
                 relay.select_target(request, TARGETS)
 
+    def test_image_route_accepts_one_encoded_url(self):
+        self.assertEqual(
+            relay.image_url("/_image?url=https%3A%2F%2Fimages.example%2Fa.png%3Fx%3D1"),
+            "https://images.example/a.png?x=1",
+        )
+        self.assertIsNone(relay.image_url("/?host=imap.one.example&port=993"))
+        for request in ("/_image", "/_image?url=", "/_image?url=a&url=b"):
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                relay.image_url(request)
+
 
 class HandshakeTests(unittest.IsolatedAsyncioTestCase):
     async def test_root_handshake_connects_only_to_matching_upstream(self):
@@ -57,6 +68,34 @@ class HandshakeTests(unittest.IsolatedAsyncioTestCase):
                                    {"idle_timeout": 1, "max_bytes": 1024}, asyncio.Semaphore(1))
                 connect.assert_awaited_once_with(host, port)
             self.assertTrue(writer.write.call_args.args[0].startswith(b"HTTP/1.1 101"))
+
+    async def test_image_response_is_bounded_and_cross_origin_embeddable(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(("GET /_image?url=https%3A%2F%2Fimages.example%2Fa.png HTTP/1.1\r\n"
+                          "Host: relay.example\r\n\r\n").encode())
+        reader.feed_eof()
+        from unittest.mock import AsyncMock, Mock
+        writer = Mock(drain=AsyncMock(), wait_closed=AsyncMock())
+        with patch.object(relay, "fetch_image", new=AsyncMock(
+            return_value=("image/png", b"png")
+        )) as fetch:
+            await relay.handle(reader, writer, TARGETS, {
+                "idle_timeout": 1, "max_bytes": 1024, "max_image_bytes": 512,
+            }, asyncio.Semaphore(1))
+        fetch.assert_awaited_once_with("https://images.example/a.png", 512, 1)
+        response = writer.write.call_args.args[0]
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertIn(b"Cross-Origin-Resource-Policy: cross-origin", response)
+        self.assertTrue(response.endswith(b"png"))
+
+
+class ImageSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_private_image_addresses_are_rejected(self):
+        private = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
+        with patch.object(relay.asyncio.get_running_loop(), "getaddrinfo",
+                          new=AsyncMock(return_value=private)):
+            with self.assertRaisesRegex(ValueError, "non-public"):
+                await relay.public_address("localhost", 443)
 
 
 if __name__ == "__main__":

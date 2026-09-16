@@ -166,8 +166,10 @@
   </nav>
 
   <section id="list-pane" aria-label="Messages">
+    <p id="list-coverage" hidden>Only downloaded mail is shown. Open a folder or load more to include older messages.</p>
     <ol id="list" role="listbox" aria-label="Messages" tabindex="0"></ol>
     <p id="list-empty" class="empty" hidden>No messages</p>
+    <button id="load-more" class="text" hidden>Load more headers</button>
   </section>
 
   <article id="reader" aria-label="Message" aria-live="polite">

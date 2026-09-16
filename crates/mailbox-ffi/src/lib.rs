@@ -170,6 +170,7 @@ impl Mailbox {
         let spec = FlagSpec::parse(&changes.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
         let refs: Vec<IdRef> = ids.iter().cloned().map(IdRef::Id).collect();
         let written = self.with_ws_mut(|ws| ws.write_each(&refs, |s, ids| s.flag(ids, &spec)))?;
+        self.refresh_local_counts()?;
         Ok(json!({ "changed": written.iter().filter(|w| w.changed).count() }))
     }
 
@@ -186,7 +187,17 @@ impl Mailbox {
         let written = self.with_ws_mut(|workspace| {
             workspace.write_each(&refs, |session, ids| session.move_to(ids, folder))
         })?;
+        self.refresh_local_counts()?;
         Ok(json!({ "changed": written.iter().filter(|item| item.changed).count() }))
+    }
+
+    fn refresh_local_counts(&self) -> Result<()> {
+        self.with_ws_mut(|workspace| {
+            for session in workspace.sessions_mut() {
+                session.store_mut().refresh_folder_counts()?;
+            }
+            Ok(())
+        })
     }
 
     fn move_special(&self, ids: &[String], special: &str) -> Result<Value> {
@@ -322,7 +333,11 @@ impl Mailbox {
             full,
             ..Default::default()
         };
-        let result = self.with_ws_mut(|ws| ws.sync(&opts))?;
+        self.sync_with_options(&opts)
+    }
+
+    pub fn sync_with_options(&self, opts: &SyncOptions) -> Result<Value> {
+        let result = self.with_ws_mut(|ws| ws.sync(opts))?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -541,6 +556,10 @@ impl Mailbox {
                 Ok(("mv", self.move_to(&a.ids, &a.folder)?))
             }
             "folders" => Ok(("folders", serde_json::to_value(self.folders()?)?)),
+            "remote_folders" => Ok((
+                "folders",
+                serde_json::to_value(self.with_ws(|workspace| workspace.remote_folders())?)?,
+            )),
             "accounts" => Ok(("accounts", serde_json::to_value(self.accounts()?)?)),
             "identities" => Ok(("identities", self.identities()?)),
             "status" => Ok(("status", self.status()?)),
@@ -552,7 +571,18 @@ impl Mailbox {
             "outbox" => Ok(("outbox", self.outbox()?)),
             "sync" => {
                 let a: SyncArgs = serde_from_value(args)?;
-                Ok(("sync", self.sync(a.full.unwrap_or(false))?))
+                let mut opts = SyncOptions {
+                    full: a.full.unwrap_or(false),
+                    folders: a.folders,
+                    ..Default::default()
+                };
+                if let Some(limit) = a.max_headers {
+                    opts.max_headers = limit.max(1);
+                }
+                if let Some(limit) = a.max_prefetch {
+                    opts.max_prefetch = limit;
+                }
+                Ok(("sync", self.sync_with_options(&opts)?))
             }
             "ensure_body" => {
                 let a: IdArgs = serde_from_value(args)?;
@@ -686,6 +716,9 @@ struct SnoozeArgs {
 #[derive(Debug, Deserialize)]
 struct SyncArgs {
     full: Option<bool>,
+    folders: Option<Vec<String>>,
+    max_headers: Option<usize>,
+    max_prefetch: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]

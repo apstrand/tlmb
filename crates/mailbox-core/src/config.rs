@@ -219,6 +219,12 @@ pub struct AccountConfig {
     /// `none` | `recent` | `full` (§5.1).
     #[serde(default = "default_offline")]
     pub offline: String,
+
+    /// Local choices when a server assigns the same special-use role to more
+    /// than one folder. Keys are normalized role names, values are exact
+    /// server folder paths.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub folder_use: BTreeMap<String, String>,
 }
 
 /// Written out rather than derived, so that `AccountConfig::default()` and a
@@ -251,6 +257,7 @@ impl Default for AccountConfig {
             oauth_scope: None,
             require_tls: default_true(),
             offline: default_offline(),
+            folder_use: BTreeMap::new(),
         }
     }
 }

@@ -12,11 +12,12 @@ use mailbox_core::store::read::{ListOptions, Sort};
 use mailbox_core::store::Written;
 use mailbox_core::Tracer;
 use mailbox_core::Workspace;
+use std::io::{IsTerminal, Write};
 
 use crate::cli::{
     AccountsAction, AccountsArgs, AttachArgs, DebugAction, DebugArgs, FixtureAction, FlagArgs,
-    FoldersArgs, Format, GlobalFlags, LsArgs, MoveArgs, NotifyArgs, SchemaArgs, SearchArgs,
-    ShowArgs, SyncArgs, TargetArgs,
+    FoldersAction, FoldersArgs, Format, GlobalFlags, LsArgs, MoveArgs, NotifyArgs, SchemaArgs,
+    SearchArgs, ShowArgs, SyncArgs, TargetArgs,
 };
 use crate::format;
 use crate::output::{maybe_page, Out, GREEN, YELLOW};
@@ -677,6 +678,124 @@ fn render_show_human(ctx: &Ctx<'_>, result: &ShowResult, args: &ShowArgs) {
 }
 
 pub fn folders(ctx: &Ctx<'_>, args: &FoldersArgs) -> Result<()> {
+    if let Some(FoldersAction::Prefer { use_name, folder }) = &args.action {
+        if args.remote {
+            return Err(Error::usage(
+                "`folders prefer` is a local account setting; --remote is only for listing",
+            ));
+        }
+        ctx.confirm("folders prefer")?;
+        let normalized_use = use_name.to_ascii_lowercase();
+        let use_name = match normalized_use.as_str() {
+            name @ ("all" | "archive" | "drafts" | "flagged" | "important" | "inbox" | "junk"
+            | "sent" | "trash") => name,
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown folder use `{other}`; expected all, archive, drafts, flagged, \
+                     important, inbox, junk, sent, or trash"
+                )))
+            }
+        };
+        let preferred = (folder != "none").then_some(folder.as_str());
+        let session = ctx.session()?;
+        let account = session.account_id.clone();
+        if let Some(preferred) = preferred {
+            let matches = session.folders()?.folders.into_iter().any(|candidate| {
+                candidate.path == preferred && candidate.special_use.as_deref() == Some(use_name)
+            });
+            if !matches {
+                return Err(Error::usage(format!(
+                    "folder `{preferred}` is not marked use={use_name} on account `{account}`"
+                )));
+            }
+        }
+        let payload = serde_json::json!({
+            "account": account.clone(),
+            "special_use": use_name,
+            "preferred_folder": preferred,
+        });
+        if ctx.global.dry_run {
+            if ctx.out.is_structured() {
+                ctx.out.reply("folders prefer", &payload)?;
+            } else if let Some(preferred) = preferred {
+                ctx.out
+                    .print(format!("would prefer {preferred} for use={use_name}"));
+            } else {
+                ctx.out
+                    .print(format!("would clear the preference for use={use_name}"));
+            }
+            return Ok(());
+        }
+        mailbox_core::accounts::prefer_folder(&config_path(ctx), &account, use_name, preferred)?;
+        if ctx.out.is_structured() {
+            ctx.out.reply("folders prefer", &payload)?;
+        } else if let Some(preferred) = preferred {
+            ctx.out.print(format!(
+                "{} {} — preferred for use={}",
+                ctx.out.paint("updated", GREEN),
+                preferred,
+                use_name
+            ));
+        } else {
+            ctx.out.print(format!(
+                "{} use={} preference cleared",
+                ctx.out.paint("updated", GREEN),
+                use_name
+            ));
+        }
+        return Ok(());
+    }
+
+    if let Some(FoldersAction::Use { folder, use_name }) = &args.action {
+        if args.remote {
+            return Err(Error::usage(
+                "`folders use` always updates the server; --remote is only for listing",
+            ));
+        }
+        ctx.confirm("folders use")?;
+        let normalized_use = use_name.to_ascii_lowercase();
+        let use_name = match normalized_use.as_str() {
+            "none" => None,
+            name @ ("all" | "archive" | "drafts" | "flagged" | "important" | "junk" | "sent"
+            | "trash") => Some(name),
+            other => {
+                return Err(Error::usage(format!(
+                    "unknown folder use `{other}`; expected all, archive, drafts, flagged, \
+                     important, junk, sent, trash, or none"
+                )))
+            }
+        };
+        if ctx.global.dry_run {
+            let payload = serde_json::json!({
+                "would_update": folder,
+                "special_use": use_name,
+            });
+            if ctx.out.is_structured() {
+                ctx.out.reply("folders use", &payload)?;
+            } else {
+                ctx.out.print(format!(
+                    "would update {} — use: {}",
+                    folder,
+                    use_name.unwrap_or("none")
+                ));
+            }
+            return Ok(());
+        }
+        let mut session = ctx.session()?;
+        let updated = session.set_folder_use(folder, use_name)?;
+        if ctx.out.is_structured() {
+            ctx.out.reply("folders use", &updated)?;
+        } else {
+            ctx.out.print(format!(
+                "{} {} — use: {}",
+                ctx.out.paint("updated", GREEN),
+                updated.path,
+                updated.special_use.as_deref().unwrap_or("none")
+            ));
+        }
+        return Ok(());
+    }
+
     let session = ctx.workspace()?;
     // `--remote` asks the server. It reads nothing from the store and writes
     // nothing to it, so it is not gated by agent mode.
@@ -749,7 +868,22 @@ fn account_spec(
     ctx: &Ctx<'_>,
     settings: &crate::cli::AccountSettings,
     address: &str,
+    prompt_by_default: bool,
 ) -> Result<mailbox_core::accounts::NewAccount> {
+    let password = if settings.password_stdin {
+        Some(read_password(ctx)?)
+    } else if settings.password
+        || (prompt_by_default
+            && settings.credential_command.is_none()
+            && settings.oauth.is_none()
+            && !ctx.out.is_structured()
+            && !ctx.agent_mode
+            && std::io::stdin().is_terminal())
+    {
+        Some(prompt_password()?)
+    } else {
+        None
+    };
     Ok(mailbox_core::accounts::NewAccount {
         id: String::new(),
         address: address.to_string(),
@@ -763,11 +897,7 @@ fn account_spec(
         smtp_port: settings.smtp_port,
         smtp_security: settings.smtp_security.clone(),
         smtp_user: settings.smtp_user.clone().or_else(|| settings.user.clone()),
-        password: if settings.password_stdin {
-            Some(read_password(ctx)?)
-        } else {
-            None
-        },
+        password,
         credential_command: settings.credential_command.clone(),
         require_tls: if settings.insecure { Some(false) } else { None },
         oauth_provider: settings.oauth.clone(),
@@ -795,10 +925,77 @@ fn read_password(ctx: &Ctx<'_>) -> Result<String> {
     Ok(password)
 }
 
+/// Reads a password from a terminal while showing one `*` per character.
+///
+/// Raw mode prevents the terminal driver from echoing the actual input. The
+/// guard restores it on every return path, including Ctrl-C and read errors.
+fn prompt_password() -> Result<String> {
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use crossterm::terminal::enable_raw_mode;
+
+    if !std::io::stdin().is_terminal() {
+        return Err(Error::usage(
+            "--password needs a terminal; use --password-stdin or --credential-command",
+        ));
+    }
+
+    struct RawMode;
+    impl Drop for RawMode {
+        fn drop(&mut self) {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+    }
+
+    eprint!("password: ");
+    std::io::stderr().flush()?;
+    enable_raw_mode().map_err(|e| Error::usage(format!("cannot mask password input: {e}")))?;
+    let raw_mode = RawMode;
+    let mut password = String::new();
+    loop {
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+        match key.code {
+            KeyCode::Enter => break,
+            KeyCode::Backspace => {
+                if password.pop().is_some() {
+                    eprint!("\x08 \x08");
+                    std::io::stderr().flush()?;
+                }
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                drop(raw_mode);
+                eprintln!();
+                return Err(Error::usage("password entry cancelled"));
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                password.push(c);
+                eprint!("*");
+                std::io::stderr().flush()?;
+            }
+            KeyCode::Esc => {
+                drop(raw_mode);
+                eprintln!();
+                return Err(Error::usage("password entry cancelled"));
+            }
+            _ => {}
+        }
+    }
+    drop(raw_mode);
+    eprintln!();
+    if password.is_empty() {
+        return Err(Error::usage("password cannot be empty"));
+    }
+    Ok(password)
+}
+
 fn accounts_add(ctx: &Ctx<'_>, args: &crate::cli::AddAccountArgs) -> Result<()> {
     ctx.confirm("accounts add")?;
     let path = config_path(ctx);
-    let mut spec = account_spec(ctx, &args.settings, &args.address)?;
+    let mut spec = account_spec(ctx, &args.settings, &args.address, !ctx.global.dry_run)?;
     spec.id = args.id.clone().unwrap_or_default();
     spec.discover = !args.no_discover;
 
@@ -936,7 +1133,12 @@ fn accounts_discover(ctx: &Ctx<'_>, args: &crate::cli::DiscoverArgs) -> Result<(
 fn accounts_edit(ctx: &Ctx<'_>, args: &crate::cli::EditAccountArgs) -> Result<()> {
     ctx.confirm("accounts edit")?;
     let path = config_path(ctx);
-    let mut spec = account_spec(ctx, &args.settings, args.address.as_deref().unwrap_or(""))?;
+    let mut spec = account_spec(
+        ctx,
+        &args.settings,
+        args.address.as_deref().unwrap_or(""),
+        false,
+    )?;
     spec.id = args.id.clone();
     let updated = mailbox_core::accounts::edit(&path, &args.id, &spec)?;
 
@@ -1264,6 +1466,7 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
         since,
         prefetch_days: None,
         max_prefetch: 500,
+        ..Default::default()
     };
 
     if args.watch {

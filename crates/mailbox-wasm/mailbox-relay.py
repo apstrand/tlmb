@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""Bounded WebSocket-to-TCP relay for the hosted mailbox site.
+"""Bounded network relay for the hosted mailbox site.
 
-TLS is terminated in the browser. This process only forwards ciphertext and
-must be placed behind a TLS/WSS reverse proxy. ``--tls-terminated`` is an
-explicit deployment acknowledgement that prevents accidental plain exposure.
+Mailbox TLS is terminated in the browser; its WebSocket route only forwards
+ciphertext. The ``/_image`` route fetches explicitly revealed remote message
+images while rejecting non-public destinations. This process must be placed
+behind a TLS/WSS reverse proxy. ``--tls-terminated`` is an explicit deployment
+acknowledgement that prevents accidental plain exposure.
 """
 
 import argparse
 import asyncio
 import base64
 import hashlib
+import ipaddress
+import socket
+import ssl
 import struct
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ALLOWED_PORTS = (143, 993, 465, 587)
+IMAGE_ROUTE = "/_image"
+MAX_HTTP_HEADERS = 64 * 1024
+MAX_REDIRECTS = 4
 
 
 def endpoint(value):
@@ -58,6 +66,141 @@ def select_target(request_target, targets):
     if target is None:
         raise ValueError(f"unknown relay route {route!r}")
     return target
+
+
+def image_url(request_target):
+    parsed = urlsplit(request_target)
+    if parsed.path != IMAGE_ROUTE:
+        return None
+    values = parse_qs(parsed.query, keep_blank_values=True).get("url", [])
+    if len(values) != 1 or not values[0]:
+        raise ValueError("image request needs one URL")
+    return values[0]
+
+
+async def public_address(host, port):
+    try:
+        addresses = await asyncio.get_running_loop().getaddrinfo(
+            host, port, type=socket.SOCK_STREAM
+        )
+    except socket.gaierror as error:
+        raise ValueError("image host could not be resolved") from error
+    if not addresses:
+        raise ValueError("image host could not be resolved")
+    ips = {item[4][0].split("%", 1)[0] for item in addresses}
+    if any(not ipaddress.ip_address(ip).is_global for ip in ips):
+        raise ValueError("image URL resolves to a non-public address")
+    return addresses[0][4][0]
+
+
+async def read_image_body(reader, headers, limit, timeout):
+    body = bytearray()
+
+    async def append(chunk):
+        body.extend(chunk)
+        if len(body) > limit:
+            raise ValueError("image exceeds relay byte cap")
+
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        while True:
+            line = await asyncio.wait_for(reader.readline(), timeout)
+            if len(line) > 128:
+                raise ValueError("invalid chunk header")
+            try:
+                length = int(line.split(b";", 1)[0].strip(), 16)
+            except ValueError as error:
+                raise ValueError("invalid chunk header") from error
+            if length == 0:
+                while await asyncio.wait_for(reader.readline(), timeout) not in (b"\r\n", b"\n", b""):
+                    pass
+                break
+            await append(await asyncio.wait_for(reader.readexactly(length), timeout))
+            if await asyncio.wait_for(reader.readexactly(2), timeout) != b"\r\n":
+                raise ValueError("invalid chunk ending")
+    elif "content-length" in headers:
+        try:
+            length = int(headers["content-length"])
+        except ValueError as error:
+            raise ValueError("invalid image content length") from error
+        if length < 0 or length > limit:
+            raise ValueError("image exceeds relay byte cap")
+        await append(await asyncio.wait_for(reader.readexactly(length), timeout))
+    else:
+        while True:
+            chunk = await asyncio.wait_for(reader.read(64 * 1024), timeout)
+            if not chunk:
+                break
+            await append(chunk)
+    return bytes(body)
+
+
+async def fetch_image(url, limit, timeout):
+    for redirects in range(MAX_REDIRECTS + 1):
+        parsed = urlsplit(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("image URL must use HTTP or HTTPS")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if port not in (80, 443):
+            raise ValueError("image URL uses a disallowed port")
+        address = await public_address(parsed.hostname, port)
+        context = ssl.create_default_context() if parsed.scheme == "https" else None
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(
+            address, port, ssl=context,
+            server_hostname=parsed.hostname if context else None,
+        ), timeout)
+        try:
+            path = parsed.path or "/"
+            if parsed.query:
+                path += "?" + parsed.query
+            default_port = 443 if parsed.scheme == "https" else 80
+            host = parsed.hostname if port == default_port else f"{parsed.hostname}:{port}"
+            writer.write((
+                f"GET {path} HTTP/1.1\r\nHost: {host}\r\n"
+                "User-Agent: The-Last-Mailbox-Image-Relay/1\r\n"
+                "Accept: image/*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
+            ).encode("ascii"))
+            await asyncio.wait_for(writer.drain(), timeout)
+            raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout)
+            if len(raw) > MAX_HTTP_HEADERS:
+                raise ValueError("image response headers are too large")
+            lines = raw.decode("latin1").split("\r\n")
+            status_parts = lines[0].split(" ", 2)
+            if len(status_parts) < 2 or not status_parts[1].isdigit():
+                raise ValueError("invalid image response")
+            status = int(status_parts[1])
+            headers = {}
+            for line in lines[1:]:
+                if ":" in line:
+                    name, value = line.split(":", 1)
+                    headers[name.lower()] = value.strip()
+            if status in (301, 302, 303, 307, 308):
+                location = headers.get("location")
+                if not location or redirects == MAX_REDIRECTS:
+                    raise ValueError("too many image redirects")
+                url = urljoin(url, location)
+                continue
+            if status != 200:
+                raise ValueError(f"image server returned HTTP {status}")
+            content_type = headers.get("content-type", "").split(";", 1)[0].lower()
+            if not content_type.startswith("image/"):
+                raise ValueError("image URL did not return an image")
+            return content_type, await read_image_body(reader, headers, limit, timeout)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    raise ValueError("too many image redirects")
+
+
+def http_response(status, reason, body=b"", content_type="text/plain; charset=utf-8",
+                  cache_control="private, max-age=86400"):
+    return (
+        f"HTTP/1.1 {status} {reason}\r\n"
+        f"Content-Type: {content_type}\r\nContent-Length: {len(body)}\r\n"
+        "Cross-Origin-Resource-Policy: cross-origin\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+        f"Cache-Control: {cache_control}\r\nConnection: close\r\n\r\n"
+    ).encode() + body
 
 
 async def read_frame(reader, max_bytes):
@@ -129,13 +272,27 @@ async def handle(web_reader, web_writer, targets, policy, slots):
             )
             request_line = request.decode("latin1").split("\r\n", 1)[0].split(" ", 2)
             if len(request_line) != 3 or request_line[0] != "GET":
-                raise ValueError("invalid WebSocket request line")
-            target = select_target(request_line[1], targets)
+                raise ValueError("invalid relay request line")
             headers = {}
             for line in request.decode("latin1").split("\r\n")[1:]:
                 if ":" in line:
                     name, value = line.split(":", 1)
                     headers[name.lower()] = value.strip()
+            requested_image = image_url(request_line[1])
+            if requested_image is not None:
+                try:
+                    content_type, body = await fetch_image(
+                        requested_image, policy["max_image_bytes"], policy["idle_timeout"]
+                    )
+                    web_writer.write(http_response(200, "OK", body, content_type))
+                except ValueError as error:
+                    body = str(error).encode()
+                    web_writer.write(http_response(
+                        400, "Bad Request", body, cache_control="no-store"
+                    ))
+                await web_writer.drain()
+                return
+            target = select_target(request_line[1], targets)
             key = headers.get("sec-websocket-key")
             if not key or headers.get("upgrade", "").lower() != "websocket":
                 raise ValueError("not a WebSocket upgrade")
@@ -188,7 +345,8 @@ async def run(args):
             raise SystemExit(f"target port {target_port} is not in --allowed-port")
         if args.allowed_host and target_host not in args.allowed_host:
             raise SystemExit(f"target host {target_host!r} is not in --allowed-host")
-    policy = {"max_bytes": args.max_bytes, "idle_timeout": args.idle_timeout}
+    policy = {"max_bytes": args.max_bytes, "max_image_bytes": args.max_image_bytes,
+              "idle_timeout": args.idle_timeout}
     slots = asyncio.Semaphore(args.max_connections)
     server = await asyncio.start_server(
         lambda reader, writer: handle(reader, writer, targets, policy, slots),
@@ -216,6 +374,7 @@ def main():
         help="permitted destination port (repeatable; defaults to IMAP/SMTP ports)",
     )
     parser.add_argument("--max-bytes", type=int, default=64 * 1024 * 1024)
+    parser.add_argument("--max-image-bytes", type=int, default=10 * 1024 * 1024)
     parser.add_argument("--idle-timeout", type=float, default=120.0)
     parser.add_argument("--max-connections", type=int, default=100)
     parser.add_argument("--tls-terminated", action="store_true", required=True,
@@ -225,7 +384,8 @@ def main():
         args.allowed_port = list(ALLOWED_PORTS)
     if any(not 1 <= port <= 65535 for port in args.allowed_port):
         parser.error("allowed ports must be between 1 and 65535")
-    if args.max_bytes <= 0 or args.idle_timeout <= 0 or args.max_connections <= 0:
+    if (args.max_bytes <= 0 or args.max_image_bytes <= 0 or
+            args.idle_timeout <= 0 or args.max_connections <= 0):
         parser.error("limits must be positive")
     asyncio.run(run(args))
 

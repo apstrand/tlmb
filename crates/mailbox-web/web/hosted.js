@@ -20,6 +20,20 @@ const siteConfig = fetch("config.json").then(async (response) => {
     if (!response.ok) throw new Error("hosted config.json is missing");
     return response.json();
 });
+let imageProxy;
+export const ready = siteConfig.then(({ relay }) => {
+    if (!relay) return;
+    imageProxy = new URL("/_image", relay);
+    imageProxy.protocol = imageProxy.protocol === "wss:" ? "https:" : "http:";
+});
+
+export function hostedImageUrl(source) {
+    const parsed = new URL(source);
+    if (!imageProxy || !["http:", "https:"].includes(parsed.protocol)) return source;
+    const proxied = new URL(imageProxy);
+    proxied.searchParams.set("url", parsed.href);
+    return proxied.href;
+}
 
 async function context() {
     const settings = await loadSettings();
@@ -35,7 +49,9 @@ async function context() {
     return { config, credentials, checkpoints };
 }
 
-async function workerCall(request, network, account) {
+let cancelNetworkRead;
+let readGeneration = 0;
+async function workerCall(request, network, account, cancellable = false) {
     const worker = new Worker("hosted-worker.js", { type: "module" });
     let socket;
     let interval;
@@ -84,8 +100,11 @@ async function workerCall(request, network, account) {
             clearInterval(interval);
             socket?.close();
             worker.terminate();
+            if (cancelNetworkRead === cancel) cancelNetworkRead = undefined;
             error ? reject(error) : resolve(value);
         };
+        const cancel = () => finish(new Error("Message loading interrupted by an edit."));
+        if (cancellable) cancelNetworkRead = cancel;
         worker.addEventListener("message", (event) => {
             if (event.data.ok) finish(null, event.data);
             else finish(new Error(event.data.error));
@@ -104,6 +123,7 @@ async function workerCall(request, network, account) {
             return;
         }
         siteConfig.then(({ relay }) => {
+            if (settled) return;
             if (!relay) {
                 finish(new Error(
                     "This site was generated without a relay URL, so it cannot sync.",
@@ -151,7 +171,7 @@ async function core(method, args = {}, { network = false } = {}) {
     return exec(current, method, args);
 }
 
-async function exec(current, method, args, network = false, account) {
+async function exec(current, method, args, network = false, account, cancellable = false) {
     const response = await workerCall({
         operation: "exec",
         method,
@@ -159,7 +179,8 @@ async function exec(current, method, args, network = false, account) {
         config: JSON.stringify(current.config),
         credentials: current.credentials,
         checkpoints: current.checkpoints,
-    }, network, account);
+        persist: ["sync", "ensure_body", "flag", "move", "snooze", "send"].includes(method),
+    }, network, account, cancellable);
     for (const [id, snapshot] of Object.entries(response.snapshots ?? {})) {
         await saveCheckpoint(snapshot, id);
     }
@@ -170,6 +191,7 @@ async function syncAccounts(current, args) {
     const result = { synced: [] };
     let firstError;
     for (const [id, account] of Object.entries(current.config.accounts ?? {})) {
+        if (args.account && args.account !== id) continue;
         try {
             const reply = await exec({
                 config: { ...current.config, accounts: { [id]: account } },
@@ -177,6 +199,7 @@ async function syncAccounts(current, args) {
                 checkpoints: current.checkpoints[id] ? { [id]: current.checkpoints[id] } : {},
             }, "sync", args, true, account);
             result.synced.push(...(reply.synced ?? []));
+            if (args.account) result.coverage = reply.coverage;
             if (reply.submitted) {
                 result.submitted ??= {};
                 for (const [key, count] of Object.entries(reply.submitted)) {
@@ -189,6 +212,50 @@ async function syncAccounts(current, args) {
         }
     }
     if (!result.synced.length && firstError) throw firstError;
+    if (args.account && !Object.hasOwn(current.config.accounts ?? {}, args.account)) {
+        throw new Error(`Unknown account '${args.account}'.`);
+    }
+    return result;
+}
+
+// Fetch one recent header batch for the requested folders. Counts for the
+// others do not require selecting them or downloading their messages.
+export async function syncProgressively(args = {}, onProgress = async () => {}, signal) {
+    const { accounts } = await api("/api/accounts");
+    const selected = accounts.filter((account) => !args.account || args.account === account.id);
+    const jobs = selected.flatMap((account) => (args.folders ?? ["INBOX"])
+        .map((folder) => ({ account: account.id, folder })));
+    const result = { synced: [], errors: [] };
+    while (jobs.length && !signal?.aborted) {
+        const job = jobs.shift();
+        let reply;
+        try {
+            reply = await api("/api/sync", { method: "POST", body: JSON.stringify({
+                ...args, full: false, account: job.account, folders: [job.folder],
+                max_headers: args.max_headers ?? 100, max_prefetch: 0,
+            }) });
+        } catch (error) {
+            result.errors.push({ account: job.account, message: `${job.folder}: ${error.message}` });
+            continue;
+        }
+        result.synced.push(...reply.synced);
+        result.errors.push(...(reply.errors ?? []));
+        for (const report of reply.synced) {
+            for (const error of report.errors ?? []) {
+                result.errors.push({ account: job.account, message: `${error.folder}: ${error.error}` });
+            }
+        }
+        await onProgress({ account: job.account, folder: job.folder, result });
+        if (!args.folders && !signal?.aborted) {
+            try {
+                await api("/api/folders/refresh", { method: "POST", body: JSON.stringify({ account: job.account }) });
+                await onProgress({ account: job.account, folder: job.folder, result });
+            } catch (error) {
+                result.errors.push({ account: job.account, message: `Folder counts: ${error.message}` });
+            }
+        }
+    }
+    result.stopped = Boolean(signal?.aborted);
     return result;
 }
 
@@ -209,12 +276,17 @@ function flagChanges(value) {
 // another mutation while its Worker was running.
 let pending = Promise.resolve();
 export function api(path, options = {}) {
-    const result = pending.then(() => dispatch(path, options));
+    if (options.method === "POST" && /\/api\/(move|flag|snooze|send)$/.test(path)) {
+        readGeneration += 1;
+        cancelNetworkRead?.();
+    }
+    const generation = readGeneration;
+    const result = pending.then(() => dispatch(path, options, generation));
     pending = result.catch(() => {});
     return result;
 }
 
-async function dispatch(path, options) {
+async function dispatch(path, options, generation) {
     const url = new URL(path, location.href);
     const route = url.pathname.replace(/^\/api\//, "");
     const value = body(options);
@@ -229,12 +301,13 @@ async function dispatch(path, options) {
             query: url.searchParams.get("q") || "",
             limit: Number(url.searchParams.get("limit") || 50),
         });
-        case "GET show": return core("show", {
+        case "GET show": return show({
             id: url.searchParams.get("id"),
             format: url.searchParams.get("format") || "md",
             thread: url.searchParams.get("thread") === "1",
-        });
-        case "GET folders": return core("folders");
+            cached: url.searchParams.get("cached") === "1",
+        }, generation);
+        case "GET folders": return folders();
         case "GET identities": return core("identities");
         case "GET status": return core("status");
         case "GET outbox": return core("outbox");
@@ -257,14 +330,79 @@ async function dispatch(path, options) {
             ids: value.ids,
             changes: flagChanges(value),
         });
-        case "POST move": return core("move", value);
+        case "POST move": return move(value);
         case "POST snooze": return core("snooze", value);
         case "POST send": return core("send", value);
         case "POST sync": return core("sync", value, { network: true });
+        case "POST folders/refresh": return refreshFolderCounts(value.account);
         case "POST accounts/test": return test(value);
         case "POST accounts": return add(value);
         default: throw new Error(`hosted backend has no ${options.method ?? "GET"} ${route}`);
     }
+}
+
+async function show(args, generation) {
+    const result = await core("show", args);
+    const message = result.message;
+    if (args.cached || !message || message.body || generation !== readGeneration || globalThis.navigator?.onLine === false) return result;
+    // Headers arrive first. Fetch only the opened message's body, using the
+    // owning account's relay, without waiting for background prefetch.
+    try {
+        const current = await context();
+        const account = current.config.accounts?.[message.account];
+        if (!account || generation !== readGeneration) return result;
+        await exec({ ...current, config: {
+            ...current.config, accounts: { [message.account]: account },
+        } }, "ensure_body", { id: args.id }, true, account, true);
+        return core("show", args);
+    } catch {
+        // Cached headers remain readable when the connection is unavailable.
+        return result;
+    }
+}
+
+async function folders() {
+    const local = (await core("folders")).folders;
+    const settings = await loadSettings();
+    return { folders: local.map((folder) => {
+        const remote = settings.remoteFolders?.[folder.account]?.find((item) => item.path === folder.path);
+        return { ...folder, ...(remote ?? {}), downloaded: folder.total };
+    }) };
+}
+
+async function refreshFolderCounts(id) {
+    const current = await context();
+    const account = current.config.accounts?.[id];
+    if (!account) throw new Error(`Unknown account '${id}'.`);
+    const result = await exec({ ...current, config: {
+        ...current.config, accounts: { [id]: account },
+    } }, "remote_folders", {}, true, account, true);
+    const settings = await loadSettings();
+    await saveSettings({ ...settings, remoteFolders: {
+        ...settings.remoteFolders, [id]: result.folders,
+    } });
+    return result;
+}
+
+async function move(value) {
+    const result = await core("move", value);
+    // Keep cached server counts responsive until the queued move is replayed.
+    if (result.changed && value.ids?.length === 1 && value.account && value.source_folder) {
+        const settings = await loadSettings();
+        const remote = settings.remoteFolders?.[value.account];
+        if (remote) {
+            const target = remote.find((folder) => folder.path === value.folder || folder.special_use === value.folder);
+            if (target && target.path !== value.source_folder) {
+                const updated = remote.map((folder) => {
+                    const delta = folder.path === value.source_folder ? -1 : folder.path === target.path ? 1 : 0;
+                    return { ...folder, total: Math.max(0, folder.total + delta),
+                        unread: Math.max(0, folder.unread + (value.unread ? delta : 0)) };
+                });
+                await saveSettings({ ...settings, remoteFolders: { ...settings.remoteFolders, [value.account]: updated } });
+            }
+        }
+    }
+    return result;
 }
 
 async function test(spec) {
@@ -296,7 +434,7 @@ async function add(spec) {
         throw new Error(`Account '${account.id}' already exists; choose a different account ID.`);
     }
     await saveCredential(account.id, spec.password);
-    await saveSettings({ config });
+    await saveSettings({ ...await loadSettings(), config });
     return {
         id: account.id,
         address: spec.address,
@@ -306,12 +444,25 @@ async function add(spec) {
 }
 
 export function hostedBodyUrl(message, images) {
-    let html = message.body?.content ?? "";
-    if (images) html = html.replaceAll("data-blocked-src=", "src=");
+    let html = message.body?.content ?? "<p>Message body has not been downloaded. Connect and reopen this message to load it.</p>";
+    if (images) {
+        const template = document.createElement("template");
+        template.innerHTML = html;
+        for (const image of template.content.querySelectorAll("img[data-blocked-src]")) {
+            const source = image.getAttribute("data-blocked-src");
+            try {
+                image.setAttribute("src", hostedImageUrl(source));
+            } catch {
+                // Leave malformed remote references blocked.
+            }
+            image.removeAttribute("data-blocked-src");
+        }
+        html = template.innerHTML;
+    }
     const policy = images
         ? "default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'"
         : "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
-    const document = `<!doctype html><meta charset="utf-8">` +
+    const bodyDocument = `<!doctype html><meta charset="utf-8">` +
         `<meta http-equiv="Content-Security-Policy" content="${policy}">` + html;
-    return URL.createObjectURL(new Blob([document], { type: "text/html" }));
+    return URL.createObjectURL(new Blob([bodyDocument], { type: "text/html" }));
 }
