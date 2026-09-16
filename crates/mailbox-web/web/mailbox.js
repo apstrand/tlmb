@@ -238,6 +238,10 @@ function startReadDwell(message, seq) {
                     row.classList.remove("unread");
                 }
             }
+            // The folder counts are unread counts, so one of them just went
+            // down. The nav, unlike the listing, can be redrawn from under
+            // someone without moving what they are reading.
+            await loadFolders();
         } catch (e) {
             fail(e);
         }
@@ -422,7 +426,11 @@ async function change(run, what) {
 }
 
 const flag = (id, spec) =>
-    change(() => post("/api/flag", { ids: [id], ...spec }), "changed");
+    change(async () => {
+        await post("/api/flag", { ids: [id], ...spec });
+        // `seen` is what the folder counts count.
+        if ([...spec.add ?? [], ...spec.remove ?? []].includes("seen")) await loadFolders();
+    }, "changed");
 
 const pendingMoves = new Set();
 async function moveTo(id, folder) {
@@ -497,8 +505,12 @@ function folderButton(label, query, total = 0, unread = 0, scope) {
     button.className = "folder" + (state.query === query ? " is-current" : "");
     button.dataset.query = query;
     button.append(span("name", label));
-    button.append(span("count", String(total)));
-    button.title = `${scope?.account ? scope.account + ": " : ""}${total} messages, ${unread} unread`;
+    // §7: the count is the number that asks to be acted on — unread, and
+    // nothing at all when there is none. The size of the folder is the rarer
+    // question, so it waits in the hover beside it.
+    button.append(span("count", unread > 0 ? String(unread) : ""));
+    if (unread > 0) button.classList.add("has-unread");
+    button.title = `${scope?.account ? scope.account + ": " : ""}${unread} unread, ${total} message${total === 1 ? "" : "s"}`;
     button.addEventListener("click", () => {
         el("search").value = query;
         state.activeFolder = scope;
