@@ -7,7 +7,10 @@
 #   mailbox-e2e sync         rsync this checkout and the mailbox binary in
 #   mailbox-e2e seed NAME    fill the guest store (inbox, html-images, large, …)
 #   mailbox-e2e run UI [NAME]
-#                            tui | web | gui | compose | isolation | all
+#                            tui | web | gui | folders | compose | isolation | all
+#   mailbox-e2e check UI [NAME]
+#                            the whole thing in one line: start the VM if it is
+#                            off, sync, run with video, collect logs and shots
 #   mailbox-e2e shot NAME    guest grim (or virsh screenshot) into out/shots/
 #   mailbox-e2e record       start/stop a video of the compositor
 #   mailbox-e2e key KEYS     virtual keyboard (KEY_ENTER, KEY_LEFTMETA, …)
@@ -455,6 +458,58 @@ cmd_seed() {
     bash \$HOME/mailbox/tests/e2e/guest/seed.sh $(printf '%q' "$name") ${2:-}"
 }
 
+# Everything the guest wrote to /tmp while running, next to the pictures. A
+# failed run is the one where these matter, so they are collected either way.
+collect_logs() {
+  local dest=$1
+  mkdir -p "$dest/logs"
+  vm_ssh "rm -rf \$HOME/mailbox-e2e-logs && mkdir -p \$HOME/mailbox-e2e-logs && \
+    cp /tmp/mailbox-e2e-*.log \$HOME/mailbox-e2e-logs/ 2>/dev/null; \
+    journalctl --user -n 200 --no-pager >\$HOME/mailbox-e2e-logs/user-journal.log 2>/dev/null; \
+    true"
+  scp -q -i "$KEY" "${SSH_OPTS[@]}" -r "$GUEST_USER@$IP:mailbox-e2e-logs/." \
+    "$dest/logs/" 2>/dev/null || true
+}
+
+# What a reader of the evidence directory wants first: did it pass, and which
+# file shows it.
+write_summary() {
+  local dest=$1 ui=$2 scenario=$3 result=$4
+  {
+    echo "mailbox-e2e $ui / $scenario — $result"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  $(git -C "$ROOT" log -1 --format='%h %s' 2>/dev/null)"
+    echo
+    (cd "$dest" && find . -type f -printf '%10s  %p\n' | sort -k2) 2>/dev/null
+  } >"$dest/summary.txt"
+}
+
+cmd_check() {
+  local ui=${1:-folders} scenario=${2:-inbox} result=passed
+  domain_exists || die "no VM named $VM — run: mailbox-e2e create && mailbox-e2e provision"
+  if ! domain_running; then
+    say "$VM is off; starting it"
+    vsh start "$VM" >/dev/null
+    unset IP
+    rm -f "$KEY_DIR"/cm-*
+  fi
+  wait_for_ssh
+  MAILBOX_E2E_VIDEO=${MAILBOX_E2E_VIDEO:-1} cmd_run "$ui" "$scenario" || result=FAILED
+  [[ -n ${LAST_DEST:-} ]] || die "no evidence directory"
+  write_summary "$LAST_DEST" "$ui" "$scenario" "$result"
+  echo
+  say "$ui / $scenario: $result"
+  echo "  evidence  $LAST_DEST"
+  local video shots logs
+  video=$(find "$LAST_DEST" -name '*.mp4' | head -1)
+  shots=$(find "$LAST_DEST" -name '*.png' | wc -l)
+  logs=$(find "$LAST_DEST/logs" -type f 2>/dev/null | wc -l)
+  [[ -n $video ]] && echo "  video     $video"
+  echo "  shots     $shots png"
+  echo "  logs      $logs files in $LAST_DEST/logs"
+  echo "  summary   $LAST_DEST/summary.txt"
+  [[ $result == passed ]] || return 1
+}
+
 cmd_run() {
   local ui=${1:-all}
   local scenario=${2:-inbox}
@@ -465,16 +520,26 @@ cmd_run() {
   cmd_sync
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   dest="$OUT_DIR/$stamp"
+  LAST_DEST=$dest
   mkdir -p "$dest"
   vm_ssh "rm -rf \$HOME/mailbox-e2e-out && mkdir -p \$HOME/mailbox-e2e-out"
 
+  # A failed scenario must still hand back its evidence — that is what it is
+  # for — so the status is remembered rather than thrown, and `run` reports it
+  # once at the end. Without this a failing guest script looked like a pass:
+  # the scp after it succeeded, and its status was the function's.
+  RUN_FAILURES=()
   run_one() {
-    local u=$1 s=$2
+    local u=$1 s=$2 status=0
     say "Running $u / $s"
     vm_ssh "mkdir -p \$HOME/mailbox-e2e-out && \
       EVIDENCE=\$HOME/mailbox-e2e-out MAILBOX_E2E_ROOT=\$HOME/mailbox PATH=\$HOME/bin:\$PATH \
-      bash \$HOME/mailbox/tests/e2e/guest/run.sh $(printf '%q' "$u") $(printf '%q' "$s")"
+      MAILBOX_E2E_VIDEO=${MAILBOX_E2E_VIDEO:-0} \
+      bash \$HOME/mailbox/tests/e2e/guest/run.sh $(printf '%q' "$u") $(printf '%q' "$s")" \
+      || status=$?
     scp -q -i "$KEY" "${SSH_OPTS[@]}" -r "$GUEST_USER@$IP:mailbox-e2e-out/." "$dest/" || true
+    ((status == 0)) || RUN_FAILURES+=("$u/$s")
+    return 0
   }
 
   case "$ui" in
@@ -485,20 +550,26 @@ cmd_run() {
     run_one web html-images
     run_one gui inbox
     run_one gui html-images
+    run_one folders inbox
     run_one compose inbox
     run_one isolation html-images
     run_one tui large
     ;;
-  tui | web | gui | compose | isolation)
+  tui | web | gui | folders | compose | isolation)
     run_one "$ui" "$scenario"
     ;;
   *)
-    die "usage: mailbox-e2e run tui|web|gui|compose|isolation|all [scenario]"
+    die "usage: mailbox-e2e run tui|web|gui|folders|compose|isolation|all [scenario]"
     ;;
   esac
 
+  collect_logs "$dest"
   say "Evidence in $dest"
   ls -la "$dest" || true
+  if ((${#RUN_FAILURES[@]} > 0)); then
+    say "failed: ${RUN_FAILURES[*]}"
+    return 1
+  fi
 }
 
 cmd_shot() {
@@ -674,6 +745,7 @@ isolate) shift; cmd_isolate "$@" ;;
 sync) shift; cmd_sync "$@" ;;
 seed) shift; cmd_seed "$@" ;;
 run) shift; cmd_run "$@" ;;
+check) shift; cmd_check "$@" ;;
 shot) shift; cmd_shot "$@" ;;
 record) shift; cmd_record "$@" ;;
 key) shift; cmd_key "$@" ;;

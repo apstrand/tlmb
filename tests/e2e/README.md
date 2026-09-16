@@ -13,6 +13,32 @@ the CLI/JSON contract; a VM is too slow and too machine-specific to fail a
 build. `MAILBOX_E2E=1 cargo test -p mailbox-cli --test e2e_vm` runs the
 suite when a guest is already provisioned.
 
+## One command
+
+With a guest already provisioned, this is the whole loop — it starts the VM if
+it is off, syncs the checkout and the binary, seeds, records, runs, and leaves
+video, screenshots and logs in one directory:
+
+```sh
+tests/e2e/mailbox-e2e check folders        # or tui | web | gui | compose | …
+tests/e2e/mailbox-e2e check tui large
+```
+
+It prints where the evidence went and exits non-zero if a check failed:
+
+```
+● folders / inbox: passed
+  evidence  tests/e2e/out/20260916T211354Z
+  video     tests/e2e/out/20260916T211354Z/folders-inbox.mp4
+  shots     9 png
+  logs      6 files in tests/e2e/out/20260916T211354Z/logs
+  summary   tests/e2e/out/20260916T211354Z/summary.txt
+```
+
+`run` is the same thing without the VM lifecycle, the video, or the summary —
+use it when the guest is already up and you want the fastest loop.
+`MAILBOX_E2E_VIDEO=0 … check` skips the recording.
+
 ## Isolation
 
 Three belts:
@@ -53,7 +79,8 @@ misconfigures the account. Provision masks NTP wait: an isolated boot has
 no WAN, and Arch's `systemd-time-wait-sync` would otherwise block sshd forever.
 
 Evidence lands in `tests/e2e/out/<timestamp>/`: PNG screenshots, TUI pane
-dumps, videos if you `record`.
+dumps, guest logs under `logs/`, and — from `check`, or `run` with
+`MAILBOX_E2E_VIDEO=1` — an `.mp4` of the compositor while the UI was driven.
 
 ## Commands
 
@@ -64,7 +91,8 @@ dumps, videos if you `record`.
 | `isolate` | Nic onto `mailbox-e2e` (no WAN). VM must be off |
 | `sync` | rsync the checkout and copy `target/{release,debug}/mailbox` |
 | `seed NAME` | `inbox`, `html-images`, `attachments`, `thread`, `large`, `imap` |
-| `run UI [NAME]` | `tui`, `web`, `gui`, `compose`, `isolation`, or `all` |
+| `run UI [NAME]` | `tui`, `web`, `gui`, `folders`, `compose`, `isolation`, or `all` |
+| `check UI [NAME]` | The lot in one line: start, sync, record, run, collect |
 | `shot NAME` | Guest grim, else `virsh screenshot` |
 | `record start\|stop` | wf-recorder in the guest (compositor) |
 | `key KEYS` | `virsh send-key` — compositor shortcuts |
@@ -92,6 +120,20 @@ headless Sway. Nothing from `run all` appears on that login screen. After
 | `imap` | Same as inbox, but APPENDed to Dovecot and synced |
 | `compose` | `mailbox send` into the loopback SMTP sink |
 | `isolation` | Probe + tcpdump while HTML mail is on screen |
+
+`folders` is the one that clicks. The others photograph a mailbox; this one
+drives the served page through Chromium's debugger (`guest/cdp.py`, stdlib
+only — the guest has no pip after `isolate`) and checks §7 behaviour a
+screenshot cannot show:
+
+- the folder list counts **unread**, not messages, with both numbers in the
+  hover, and the count follows a message being read and marked unread again;
+- on a phone-shaped viewport the panes are a stack — folders → list → reader —
+  that the back arrow walks up, which is how the folder list is reached at all.
+
+Every click is a real mouse event at the control's rendered position, because
+the bug it was written for was an arrow that was visible and did nothing.
+Checks land in `folders-checks.json` beside the screenshots.
 
 ## Settings
 
