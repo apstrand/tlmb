@@ -29,6 +29,14 @@ Folder badges show total messages, with unread counts in their tooltips.
 The list indicates when older mail has not been downloaded. Deletes update
 locally and queue a move to Trash for the next sync.
 
+**Discover servers** uses the relay's bounded `/_discover` endpoint. The relay
+tries the domain's HTTPS autoconfiguration, Mozilla ISPDB, Exchange
+Autodiscover, DNS SRV records, and finally MX-based conventional names. It
+accepts only public HTTPS destinations, caps downloaded configuration documents
+at 1 MiB, and returns no credentials.
+Discovery does not expand the relay's IMAP allow-list: the resulting IMAP host
+and port must still match one of the configured `--upstream` destinations.
+
 Remote message images load through the relay's bounded `/_image` endpoint only
 after the reader chooses **Load images**. The endpoint is needed for image hosts
 that send `Cross-Origin-Resource-Policy: same-origin`; it accepts only public
@@ -37,8 +45,9 @@ redirect, requires an image response, and caps each body at 10 MiB by default.
 The frame's CSP still blocks every remote image until the explicit choice.
 Tracking URLs can still tell their sender that the message was read, although
 the image host sees the relay's network address rather than the browser's.
-Use a distinct optional account name when two addresses would otherwise
-produce the same account ID.
+When two addresses have the same local part, the first keeps the short account
+ID and the next automatically uses its complete email address. The optional
+account-name field can still override either ID.
 
 1. Build the wasm package and generate the site with the public relay URL:
 
@@ -73,9 +82,10 @@ produce the same account ID.
      --relay wss://relay.example.com/ --imap-host imap.example.com
    ```
 
-The check validates HTTPS, COOP/COEP, the generated config, and the WSS
-upgrade. It does not log in to the upstream mailbox. After it passes, open the
-site, enter the IMAP/SMTP servers, and use the account Test button.
+The check validates HTTPS, COOP/COEP, the generated config, the WSS upgrade,
+and the image and discovery endpoints. It does not log in to the upstream
+mailbox. After it passes, open the site and use **Discover servers** or enter
+the settings manually, then use the account Test button.
 
 For the Wonko deployment, `push_to_wonko.sh` defaults to the shared root URL:
 

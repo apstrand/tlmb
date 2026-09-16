@@ -137,7 +137,9 @@ pub fn resolve(account_id: &str, cfg: &crate::config::AccountConfig) -> Result<C
 
 /// The account id as it appears in an environment variable name.
 pub fn env_key(account_id: &str) -> String {
-    account_id.to_ascii_uppercase().replace(['-', '.'], "_")
+    account_id
+        .to_ascii_uppercase()
+        .replace(['-', '.', '+', '@'], "_")
 }
 
 fn env_secret(name: &str) -> Option<String> {

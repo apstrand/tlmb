@@ -3,8 +3,9 @@
 
 Mailbox TLS is terminated in the browser; its WebSocket route only forwards
 ciphertext. The ``/_image`` route fetches explicitly revealed remote message
-images while rejecting non-public destinations. This process must be placed
-behind a TLS/WSS reverse proxy. ``--tls-terminated`` is an explicit deployment
+images, and ``/_discover`` performs bounded mail-server autoconfiguration.
+Both reject non-public HTTP destinations. This process must be placed behind a
+TLS/WSS reverse proxy. ``--tls-terminated`` is an explicit deployment
 acknowledgement that prevents accidental plain exposure.
 """
 
@@ -13,14 +14,18 @@ import asyncio
 import base64
 import hashlib
 import ipaddress
+import json
+import os
 import socket
 import ssl
 import struct
-from urllib.parse import parse_qs, urljoin, urlsplit
+import xml.etree.ElementTree as ET
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 ALLOWED_PORTS = (143, 993, 465, 587)
 IMAGE_ROUTE = "/_image"
+DISCOVER_ROUTE = "/_discover"
 MAX_HTTP_HEADERS = 64 * 1024
 MAX_REDIRECTS = 4
 
@@ -78,6 +83,16 @@ def image_url(request_target):
     return values[0]
 
 
+def discovery_address(request_target):
+    parsed = urlsplit(request_target)
+    if parsed.path != DISCOVER_ROUTE:
+        return None
+    values = parse_qs(parsed.query, keep_blank_values=True).get("address", [])
+    if len(values) != 1 or not values[0]:
+        raise ValueError("discovery request needs one email address")
+    return values[0]
+
+
 async def public_address(host, port):
     try:
         addresses = await asyncio.get_running_loop().getaddrinfo(
@@ -93,13 +108,13 @@ async def public_address(host, port):
     return addresses[0][4][0]
 
 
-async def read_image_body(reader, headers, limit, timeout):
+async def read_http_body(reader, headers, limit, timeout):
     body = bytearray()
 
     async def append(chunk):
         body.extend(chunk)
         if len(body) > limit:
-            raise ValueError("image exceeds relay byte cap")
+            raise ValueError("HTTP response exceeds relay byte cap")
 
     if "chunked" in headers.get("transfer-encoding", "").lower():
         while True:
@@ -121,9 +136,9 @@ async def read_image_body(reader, headers, limit, timeout):
         try:
             length = int(headers["content-length"])
         except ValueError as error:
-            raise ValueError("invalid image content length") from error
+            raise ValueError("invalid HTTP content length") from error
         if length < 0 or length > limit:
-            raise ValueError("image exceeds relay byte cap")
+            raise ValueError("HTTP response exceeds relay byte cap")
         await append(await asyncio.wait_for(reader.readexactly(length), timeout))
     else:
         while True:
@@ -184,11 +199,385 @@ async def fetch_image(url, limit, timeout):
             content_type = headers.get("content-type", "").split(";", 1)[0].lower()
             if not content_type.startswith("image/"):
                 raise ValueError("image URL did not return an image")
-            return content_type, await read_image_body(reader, headers, limit, timeout)
+            return content_type, await read_http_body(reader, headers, limit, timeout)
         finally:
             writer.close()
             await writer.wait_closed()
     raise ValueError("too many image redirects")
+
+
+async def fetch_document(url, limit, timeout, request_body=None):
+    """Fetch one bounded public HTTPS document for autoconfiguration."""
+    for redirects in range(MAX_REDIRECTS + 1):
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("autoconfiguration URL must use HTTPS")
+        port = parsed.port or 443
+        if port != 443:
+            raise ValueError("autoconfiguration URL uses a disallowed port")
+        address = await public_address(parsed.hostname, port)
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(
+            address, port, ssl=ssl.create_default_context(),
+            server_hostname=parsed.hostname,
+        ), timeout)
+        try:
+            path = parsed.path or "/"
+            if parsed.query:
+                path += "?" + parsed.query
+            method = "POST" if request_body is not None else "GET"
+            content_headers = ""
+            if request_body is not None:
+                content_headers = (
+                    "Content-Type: application/xml; charset=utf-8\r\n"
+                    f"Content-Length: {len(request_body)}\r\n"
+                )
+            writer.write((
+                f"{method} {path} HTTP/1.1\r\nHost: {parsed.hostname}\r\n"
+                "User-Agent: The-Last-Mailbox-Discovery/1\r\n"
+                "Accept: application/xml,text/xml;q=0.9,*/*;q=0.1\r\n"
+                f"Accept-Encoding: identity\r\n{content_headers}Connection: close\r\n\r\n"
+            ).encode("ascii") + (request_body or b""))
+            await asyncio.wait_for(writer.drain(), timeout)
+            raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout)
+            if len(raw) > MAX_HTTP_HEADERS:
+                raise ValueError("autoconfiguration response headers are too large")
+            lines = raw.decode("latin1").split("\r\n")
+            status_parts = lines[0].split(" ", 2)
+            if len(status_parts) < 2 or not status_parts[1].isdigit():
+                raise ValueError("invalid autoconfiguration response")
+            status = int(status_parts[1])
+            headers = {}
+            for line in lines[1:]:
+                if ":" in line:
+                    name, value = line.split(":", 1)
+                    headers[name.lower()] = value.strip()
+            if status in (301, 302, 303, 307, 308):
+                location = headers.get("location")
+                if not location or redirects == MAX_REDIRECTS:
+                    raise ValueError("too many autoconfiguration redirects")
+                url = urljoin(url, location)
+                continue
+            body = await read_http_body(reader, headers, limit, timeout)
+            return status, body
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    raise ValueError("too many autoconfiguration redirects")
+
+
+def xml_text(node, name):
+    for child in node:
+        if child.tag.rsplit("}", 1)[-1] == name and child.text:
+            return child.text.strip()
+    return ""
+
+
+def expand_username(value, address, domain):
+    local = address.rsplit("@", 1)[0]
+    return (value.replace("%EMAILADDRESS%", address)
+                 .replace("%EMAILLOCALPART%", local)
+                 .replace("%EMAILDOMAIN%", domain))
+
+
+def parse_autoconfig(body, address, source):
+    """Return the setup-form JSON fields from a Thunderbird config document."""
+    if b"<!DOCTYPE" in body.upper() or b"<!ENTITY" in body.upper():
+        return None
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError:
+        return None
+    domain = address.rsplit("@", 1)[1]
+
+    def servers(kind, wanted):
+        found = []
+        for node in root.iter():
+            if node.tag.rsplit("}", 1)[-1] != kind:
+                continue
+            if node.attrib.get("type", "").lower() != wanted:
+                continue
+            host = xml_text(node, "hostname").lower().rstrip(".")
+            try:
+                port = int(xml_text(node, "port"))
+            except ValueError:
+                continue
+            socket_type = xml_text(node, "socketType").upper()
+            security = {"SSL": "implicit", "SSL/TLS": "implicit",
+                        "STARTTLS": "starttls"}.get(socket_type)
+            try:
+                encode_dns_name(host)
+            except (UnicodeError, ValueError):
+                continue
+            if not host or not security or not 1 <= port <= 65535:
+                continue
+            user = expand_username(xml_text(node, "username"), address, domain)
+            found.append((security != "implicit", host, port, security, user))
+        return min(found) if found else None
+
+    incoming = servers("incomingServer", "imap")
+    if incoming is None:
+        return None
+    outgoing = servers("outgoingServer", "smtp")
+    _, imap_host, imap_port, imap_security, imap_user = incoming
+    if outgoing:
+        _, smtp_host, smtp_port, smtp_security, smtp_user = outgoing
+    else:
+        smtp_host, smtp_port, smtp_security, smtp_user = imap_host, 587, "starttls", imap_user
+    return {
+        "known": True,
+        "imap_host": imap_host, "imap_port": imap_port,
+        "imap_security": imap_security, "imap_user": imap_user or None,
+        "smtp_host": smtp_host, "smtp_port": smtp_port,
+        "smtp_security": smtp_security, "smtp_user": smtp_user or None,
+        "imap_source": source, "smtp_source": source, "authoritative": True,
+    }
+
+
+def parse_autodiscover(body):
+    if b"<!DOCTYPE" in body.upper() or b"<!ENTITY" in body.upper():
+        return None
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError:
+        return None
+    found = {}
+    for node in root.iter():
+        if node.tag.rsplit("}", 1)[-1] != "Protocol":
+            continue
+        kind = xml_text(node, "Type").upper()
+        if kind not in ("IMAP", "SMTP") or kind in found:
+            continue
+        host = xml_text(node, "Server").lower().rstrip(".")
+        try:
+            encode_dns_name(host)
+            port = int(xml_text(node, "Port") or (993 if kind == "IMAP" else 587))
+        except (UnicodeError, ValueError):
+            continue
+        if not 1 <= port <= 65535:
+            continue
+        encryption = xml_text(node, "Encryption").upper()
+        ssl_on = xml_text(node, "SSL").lower() != "off"
+        security = "starttls" if encryption == "TLS" else "implicit" if ssl_on else "none"
+        found[kind] = (host, port, security)
+    if "IMAP" not in found:
+        return None
+    imap_host, imap_port, imap_security = found["IMAP"]
+    smtp_host, smtp_port, smtp_security = found.get(
+        "SMTP", (imap_host, 587, "starttls")
+    )
+    return {
+        "known": True,
+        "imap_host": imap_host, "imap_port": imap_port, "imap_security": imap_security,
+        "smtp_host": smtp_host, "smtp_port": smtp_port, "smtp_security": smtp_security,
+        "imap_source": "autodiscover", "smtp_source": "autodiscover",
+        "authoritative": True,
+    }
+
+
+def encode_dns_name(name):
+    labels = name.rstrip(".").encode("idna").split(b".")
+    if not labels or any(not label or len(label) > 63 for label in labels):
+        raise ValueError("invalid DNS name")
+    return b"".join(bytes([len(label)]) + label for label in labels) + b"\0"
+
+
+def decode_dns_name(packet, offset, depth=0):
+    if depth > 20:
+        raise ValueError("DNS compression loop")
+    labels = []
+    end = None
+    while True:
+        if offset >= len(packet):
+            raise ValueError("truncated DNS name")
+        length = packet[offset]
+        if length & 0xC0 == 0xC0:
+            if offset + 1 >= len(packet):
+                raise ValueError("truncated DNS pointer")
+            pointer = ((length & 0x3F) << 8) | packet[offset + 1]
+            pointed, _ = decode_dns_name(packet, pointer, depth + 1)
+            labels.extend(pointed.split(".") if pointed else [])
+            end = end or offset + 2
+            break
+        offset += 1
+        if length == 0:
+            end = end or offset
+            break
+        if offset + length > len(packet):
+            raise ValueError("truncated DNS label")
+        labels.append(packet[offset:offset + length].decode("ascii"))
+        offset += length
+    return ".".join(labels), end
+
+
+def parse_dns_records(packet, transaction, qtype):
+    if len(packet) < 12:
+        raise ValueError("truncated DNS response")
+    ident, flags, questions, answers, _, _ = struct.unpack("!HHHHHH", packet[:12])
+    if ident != transaction or not flags & 0x8000:
+        raise ValueError("invalid DNS response")
+    if flags & 0x000F:
+        return []
+    offset = 12
+    for _ in range(questions):
+        _, offset = decode_dns_name(packet, offset)
+        offset += 4
+    records = []
+    for _ in range(answers):
+        _, offset = decode_dns_name(packet, offset)
+        if offset + 10 > len(packet):
+            raise ValueError("truncated DNS answer")
+        record_type, record_class, _, length = struct.unpack("!HHIH", packet[offset:offset + 10])
+        offset += 10
+        end = offset + length
+        if end > len(packet):
+            raise ValueError("truncated DNS record")
+        if record_class == 1 and record_type == qtype:
+            if qtype == 33 and length >= 7:
+                priority, weight, port = struct.unpack("!HHH", packet[offset:offset + 6])
+                target, _ = decode_dns_name(packet, offset + 6)
+                if target:
+                    records.append((priority, -weight, target.rstrip("."), port))
+            elif qtype == 15 and length >= 3:
+                preference = struct.unpack("!H", packet[offset:offset + 2])[0]
+                exchange, _ = decode_dns_name(packet, offset + 2)
+                if exchange:
+                    records.append((preference, exchange.rstrip(".")))
+        offset = end
+    return sorted(records)
+
+
+def system_resolvers():
+    found = []
+    try:
+        with open("/etc/resolv.conf", encoding="ascii") as config:
+            for line in config:
+                fields = line.split()
+                if len(fields) >= 2 and fields[0] == "nameserver":
+                    try:
+                        found.append(str(ipaddress.ip_address(fields[1].split("%", 1)[0])))
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    return found
+
+
+def dns_query_sync(name, qtype, timeout):
+    transaction = struct.unpack("!H", os.urandom(2))[0]
+    query = struct.pack("!HHHHHH", transaction, 0x0100, 1, 0, 0, 0)
+    query += encode_dns_name(name) + struct.pack("!HH", qtype, 1)
+    for resolver in system_resolvers():
+        family = socket.AF_INET6 if ":" in resolver else socket.AF_INET
+        with socket.socket(family, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(timeout)
+            try:
+                sock.connect((resolver, 53))
+                sock.send(query)
+                packet = sock.recv(65535)
+                return parse_dns_records(packet, transaction, qtype)
+            except (OSError, ValueError):
+                continue
+    return []
+
+
+async def dns_records(name, qtype, timeout):
+    return await asyncio.to_thread(dns_query_sync, name, qtype, timeout)
+
+
+async def discover_servers(address, limit, timeout):
+    address = address.strip()
+    if address.count("@") != 1:
+        raise ValueError("discovery needs a valid email address")
+    local, domain = address.rsplit("@", 1)
+    domain = domain.strip().lower().rstrip(".")
+    try:
+        domain = domain.encode("idna").decode("ascii")
+        encode_dns_name(domain)
+    except (UnicodeError, ValueError) as error:
+        raise ValueError("discovery needs a valid email address") from error
+    labels = domain.split(".")
+    if (not local or any(ord(char) < 33 or char.isspace() for char in local)
+            or "." not in domain
+            or any(label.startswith("-") or label.endswith("-")
+                   or any(not (char.isascii() and (char.isalnum() or char == "-"))
+                          for char in label)
+                   for label in labels)):
+        raise ValueError("discovery needs a valid email address")
+
+    step_timeout = min(timeout, 5)
+    encoded = quote(address, safe="")
+    urls = [
+        ("autoconfig", f"https://autoconfig.{domain}/mail/config-v1.1.xml?emailaddress={encoded}"),
+        ("well_known", f"https://{domain}/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress={encoded}"),
+        ("ispdb", f"https://autoconfig.thunderbird.net/v1.1/{domain}"),
+    ]
+    for source, url in urls:
+        try:
+            status, body = await fetch_document(url, limit, step_timeout)
+        except (ValueError, OSError, asyncio.TimeoutError):
+            continue
+        if status == 200:
+            found = parse_autoconfig(body, address, source)
+            if found:
+                return found
+
+    root = ET.Element("Autodiscover", {
+        "xmlns": "http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006"
+    })
+    request_node = ET.SubElement(root, "Request")
+    ET.SubElement(request_node, "EMailAddress").text = address
+    ET.SubElement(request_node, "AcceptableResponseSchema").text = (
+        "http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a"
+    )
+    request = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    for url in (
+        f"https://autodiscover.{domain}/autodiscover/autodiscover.xml",
+        f"https://{domain}/autodiscover/autodiscover.xml",
+    ):
+        try:
+            status, body = await fetch_document(url, limit, step_timeout, request)
+        except (ValueError, OSError, asyncio.TimeoutError):
+            continue
+        if status == 200:
+            found = parse_autodiscover(body)
+            if found:
+                return found
+
+    async def first_srv(names):
+        for name, security in names:
+            records = await dns_records(name, 33, step_timeout)
+            if records:
+                _, _, host, port = records[0]
+                return host, port, security
+        return None
+
+    imap = await first_srv([
+        (f"_imaps._tcp.{domain}", "implicit"),
+        (f"_imap._tcp.{domain}", "starttls"),
+    ])
+    smtp = await first_srv([
+        (f"_submission._tcp.{domain}", "starttls"),
+        (f"_submissions._tcp.{domain}", "implicit"),
+    ])
+    mx = await dns_records(domain, 15, step_timeout) if imap is None or smtp is None else []
+    fallback = domain
+    source = "guess"
+    if mx:
+        labels = mx[0][1].split(".")
+        if len(labels) >= 2 and mx[0][1] != domain and not mx[0][1].endswith("." + domain):
+            fallback = ".".join(labels[-2:])
+            source = "mx"
+    imap_host, imap_port, imap_security = imap or (f"imap.{fallback}", 993, "implicit")
+    smtp_host, smtp_port, smtp_security = smtp or (f"smtp.{fallback}", 587, "starttls")
+    imap_source = "srv" if imap else source
+    smtp_source = "srv" if smtp else source
+    return {
+        "known": True,
+        "imap_host": imap_host, "imap_port": imap_port, "imap_security": imap_security,
+        "smtp_host": smtp_host, "smtp_port": smtp_port, "smtp_security": smtp_security,
+        "imap_source": imap_source, "smtp_source": smtp_source,
+        "authoritative": imap_source == "srv" and smtp_source == "srv",
+    }
 
 
 def http_response(status, reason, body=b"", content_type="text/plain; charset=utf-8",
@@ -278,7 +667,16 @@ async def handle(web_reader, web_writer, targets, policy, slots):
                 if ":" in line:
                     name, value = line.split(":", 1)
                     headers[name.lower()] = value.strip()
-            requested_image = image_url(request_line[1])
+            try:
+                requested_image = image_url(request_line[1])
+                requested_discovery = discovery_address(request_line[1])
+            except ValueError as error:
+                body = str(error).encode()
+                web_writer.write(http_response(
+                    400, "Bad Request", body, cache_control="no-store"
+                ))
+                await web_writer.drain()
+                return
             if requested_image is not None:
                 try:
                     content_type, body = await fetch_image(
@@ -289,6 +687,32 @@ async def handle(web_reader, web_writer, targets, policy, slots):
                     body = str(error).encode()
                     web_writer.write(http_response(
                         400, "Bad Request", body, cache_control="no-store"
+                    ))
+                await web_writer.drain()
+                return
+            if requested_discovery is not None:
+                try:
+                    result = await asyncio.wait_for(
+                        discover_servers(
+                            requested_discovery,
+                            policy["max_discovery_bytes"],
+                            policy["idle_timeout"],
+                        ),
+                        min(policy["idle_timeout"], 30),
+                    )
+                    body = json.dumps(result, separators=(",", ":")).encode()
+                    web_writer.write(http_response(
+                        200, "OK", body, "application/json", cache_control="no-store"
+                    ))
+                except ValueError as error:
+                    body = json.dumps({"error": str(error)}).encode()
+                    web_writer.write(http_response(
+                        400, "Bad Request", body, "application/json", cache_control="no-store"
+                    ))
+                except asyncio.TimeoutError:
+                    body = json.dumps({"error": "server discovery timed out"}).encode()
+                    web_writer.write(http_response(
+                        504, "Gateway Timeout", body, "application/json", cache_control="no-store"
                     ))
                 await web_writer.drain()
                 return
@@ -346,6 +770,7 @@ async def run(args):
         if args.allowed_host and target_host not in args.allowed_host:
             raise SystemExit(f"target host {target_host!r} is not in --allowed-host")
     policy = {"max_bytes": args.max_bytes, "max_image_bytes": args.max_image_bytes,
+              "max_discovery_bytes": args.max_discovery_bytes,
               "idle_timeout": args.idle_timeout}
     slots = asyncio.Semaphore(args.max_connections)
     server = await asyncio.start_server(
@@ -375,6 +800,7 @@ def main():
     )
     parser.add_argument("--max-bytes", type=int, default=64 * 1024 * 1024)
     parser.add_argument("--max-image-bytes", type=int, default=10 * 1024 * 1024)
+    parser.add_argument("--max-discovery-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--idle-timeout", type=float, default=120.0)
     parser.add_argument("--max-connections", type=int, default=100)
     parser.add_argument("--tls-terminated", action="store_true", required=True,
@@ -384,7 +810,7 @@ def main():
         args.allowed_port = list(ALLOWED_PORTS)
     if any(not 1 <= port <= 65535 for port in args.allowed_port):
         parser.error("allowed ports must be between 1 and 65535")
-    if (args.max_bytes <= 0 or args.max_image_bytes <= 0 or
+    if (args.max_bytes <= 0 or args.max_image_bytes <= 0 or args.max_discovery_bytes <= 0 or
             args.idle_timeout <= 0 or args.max_connections <= 0):
         parser.error("limits must be positive")
     asyncio.run(run(args))

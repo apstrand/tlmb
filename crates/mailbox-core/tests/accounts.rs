@@ -121,22 +121,24 @@ fn what_the_caller_gives_beats_the_table() {
 }
 
 #[test]
-fn a_second_account_for_the_same_address_needs_its_own_id() {
+fn a_conflicting_short_id_falls_back_to_the_email_address() {
     let fx = Fx::new();
     accounts::add(&fx.path, &spec("peter@gmail.com")).expect("first");
 
-    let error = accounts::add(&fx.path, &spec("peter@gmail.com")).expect_err("collides");
-    assert!(error.to_string().contains("already exists"), "{error}");
+    let second = accounts::add(&fx.path, &spec("peter@googlemail.com")).expect("fallback id");
+    assert_eq!(second.id, "peter@googlemail.com");
+    assert!(fx.config().accounts.contains_key("peter@googlemail.com"));
 
-    accounts::add(
+    let named = accounts::add(
         &fx.path,
         &NewAccount {
-            id: "personal".into(),
-            ..spec("peter@gmail.com")
+            id: "Peter+Personal@Example.COM".into(),
+            ..spec("other@gmail.com")
         },
     )
     .expect("a named one is fine");
-    assert_eq!(fx.config().accounts.len(), 2);
+    assert_eq!(named.id, "peter+personal@example.com");
+    assert_eq!(fx.config().accounts.len(), 3);
 }
 
 #[test]

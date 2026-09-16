@@ -55,7 +55,7 @@ pub fn generate(options: &Options) -> Result<Report> {
         "/*\n",
         "  Cross-Origin-Opener-Policy: same-origin\n",
         "  Cross-Origin-Embedder-Policy: credentialless\n",
-        "  Content-Security-Policy: default-src 'self'; connect-src 'self' ws: wss:; ",
+        "  Content-Security-Policy: default-src 'self'; connect-src 'self' http: https: ws: wss:; ",
         "worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'; ",
         // Hosted message bodies are blob frames. A blob inherits this policy,
         // so the outer policy must permit the remote schemes before the
@@ -121,6 +121,7 @@ mod tests {
         let headers = std::fs::read_to_string(out.join("_headers")).unwrap();
         assert!(headers.contains("Cross-Origin-Opener-Policy: same-origin"));
         assert!(headers.contains("Cross-Origin-Embedder-Policy: credentialless"));
+        assert!(headers.contains("connect-src 'self' http: https: ws: wss:"));
         assert!(headers.contains("img-src 'self' https: http: data: blob:"));
         assert_eq!(
             std::fs::read(out.join("pkg/mailbox_wasm_bg.wasm")).unwrap(),

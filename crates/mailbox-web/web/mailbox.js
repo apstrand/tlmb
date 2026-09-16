@@ -973,6 +973,10 @@ el("setup-discover").addEventListener("click", () => discoverServers());
 function provenance(hints) {
     switch (hints.imap_source) {
         case "table": return "Server settings for this provider are built in.";
+        case "autoconfig": return "Found in the domain's autoconfiguration.";
+        case "well_known": return "Found in the domain's published autoconfiguration.";
+        case "ispdb": return "Found in the Mozilla provider database.";
+        case "autodiscover": return "Found through the domain's Exchange autodiscovery.";
         case "srv": return "Found in the domain's own DNS records.";
         case "mx": return "Guessed from the domain's mail exchanger — check them.";
         case "guess": return "No settings published; these are the usual names — check them.";
@@ -992,10 +996,16 @@ function apply(hints) {
         el("setup-imap-host").value = hints.imap_host;
     }
     if (hints.imap_port) el("setup-imap-port").value = String(hints.imap_port);
+    if (hints.imap_user && !el("setup-imap-user").value) {
+        el("setup-imap-user").value = hints.imap_user;
+    }
     if (hints.smtp_host && (!el("setup-smtp-host").value || !providerKnown)) {
         el("setup-smtp-host").value = hints.smtp_host;
     }
     if (hints.smtp_port) el("setup-smtp-port").value = String(hints.smtp_port);
+    if (hints.smtp_user && !el("setup-smtp-user").value) {
+        el("setup-smtp-user").value = hints.smtp_user;
+    }
     security = {
         imap: hints.imap_security ?? security.imap,
         smtp: hints.smtp_security ?? security.smtp,

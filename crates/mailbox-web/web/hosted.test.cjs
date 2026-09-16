@@ -5,6 +5,7 @@ const { test } = require("node:test");
 
 function client(relay, account, options = {}) {
     const urls = [];
+    const fetches = [];
     const requests = [];
     let settings = { config: { accounts: options.accounts ?? { test: account } }, remoteFolders: options.remoteFolders };
     const credentials = { ...options.credentials };
@@ -19,7 +20,7 @@ function client(relay, account, options = {}) {
                 return;
             }
             const spec = JSON.parse(request.args);
-            const id = spec.id || "test";
+            const id = spec.id || spec.address?.split("@")[0] || "test";
             const accounts = request.config ? JSON.parse(request.config).accounts : {};
             if (request.method === "sync" && options.fail?.includes(Object.keys(accounts)[0])) {
                 queueMicrotask(() => this.listeners.message({ data: { ok: false, error: "sync failed" } }));
@@ -58,7 +59,21 @@ function client(relay, account, options = {}) {
         URL, Worker, WebSocket, SharedArrayBuffer, Atomics, Int32Array, Uint8Array,
         setInterval, clearInterval, queueMicrotask, crossOriginIsolated: true,
         location: { href: "https://mail.example/" },
-        fetch: async () => ({ ok: true, json: async () => ({ relay }) }),
+        fetch: async (input) => {
+            const url = new URL(String(input), "https://mail.example/");
+            fetches.push(url.href);
+            if (url.pathname === "/_discover") {
+                const result = options.discovery ?? {
+                    known: true, imap_host: "imap.discovered.example", imap_port: 993,
+                    imap_security: "implicit", smtp_host: "smtp.discovered.example",
+                    smtp_port: 587, smtp_security: "starttls", imap_source: "srv",
+                    smtp_source: "srv", authoritative: true,
+                };
+                return { ok: !result.error, status: result.error ? 400 : 200,
+                    json: async () => result };
+            }
+            return { ok: true, status: 200, json: async () => ({ relay }) };
+        },
         loadSettings: async () => settings,
         saveSettings: async (value) => { settings = value; },
         loadCredential: async (id) => credentials[id],
@@ -69,7 +84,7 @@ function client(relay, account, options = {}) {
     vm.runInContext(source, context);
     return { api: context.api, syncProgressively: context.syncProgressively,
         hostedImageUrl: context.hostedImageUrl,
-        urls, requests, credentials, checkpoints, settings: () => settings };
+        urls, fetches, requests, credentials, checkpoints, settings: () => settings };
 }
 
 test("hosted remote images use the HTTP endpoint on the configured relay", async () => {
@@ -78,6 +93,16 @@ test("hosted remote images use the HTTP endpoint on the configured relay", async
     assert.equal(
         c.hostedImageUrl("https://claude.ai/images/email/social_x.png"),
         "https://relay.example/_image?url=https%3A%2F%2Fclaude.ai%2Fimages%2Femail%2Fsocial_x.png",
+    );
+});
+
+test("hosted server discovery uses the relay HTTP endpoint", async () => {
+    const c = client("wss://relay.example/account", accounts?.home);
+    const result = await c.api("/api/discover?address=me%40custom.example");
+    assert.equal(result.imap_host, "imap.discovered.example");
+    assert.equal(
+        c.fetches.find(url => url.includes("/_discover")),
+        "https://relay.example/_discover?address=me%40custom.example",
     );
 });
 
@@ -142,6 +167,18 @@ test("adding an account retains existing mail and rejects duplicate IDs", async 
     assert.equal(c.credentials.work, "new-password");
     assert.equal(c.checkpoints.home, image);
     await assert.rejects(c.api("/api/accounts", options), /already exists/);
+});
+
+test("a conflicting generated account id falls back to the email address", async () => {
+    const c = client("wss://relay.example/", undefined, {
+        accounts: { peter: { address: "peter@one.example", imap_host: "imap.one.example" } },
+    });
+    await c.api("/api/accounts", { method: "POST", body: JSON.stringify({
+        address: "peter@two.example", password: "new-password",
+        imap_host: "imap.two.example", smtp_host: "smtp.two.example",
+    }) });
+    assert.deepEqual(Object.keys(c.settings().config.accounts), ["peter", "peter@two.example"]);
+    assert.equal(c.credentials["peter@two.example"], "new-password");
 });
 
 test("one failed account does not stop sync of the others", async () => {

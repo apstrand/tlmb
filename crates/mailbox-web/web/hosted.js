@@ -21,10 +21,13 @@ const siteConfig = fetch("config.json").then(async (response) => {
     return response.json();
 });
 let imageProxy;
+let discoveryProxy;
 export const ready = siteConfig.then(({ relay }) => {
     if (!relay) return;
     imageProxy = new URL("/_image", relay);
     imageProxy.protocol = imageProxy.protocol === "wss:" ? "https:" : "http:";
+    discoveryProxy = new URL("/_discover", relay);
+    discoveryProxy.protocol = discoveryProxy.protocol === "wss:" ? "https:" : "http:";
 });
 
 export function hostedImageUrl(source) {
@@ -323,9 +326,7 @@ async function dispatch(path, options, generation) {
         case "GET providers": return core("providers", {
             address: url.searchParams.get("address"),
         });
-        case "GET discover": throw new Error(
-            "Browser DNS discovery is unavailable; enter the IMAP and SMTP servers.",
-        );
+        case "GET discover": return discover(url.searchParams.get("address"));
         case "POST flag": return core("flag", {
             ids: value.ids,
             changes: flagChanges(value),
@@ -339,6 +340,27 @@ async function dispatch(path, options, generation) {
         case "POST accounts": return add(value);
         default: throw new Error(`hosted backend has no ${options.method ?? "GET"} ${route}`);
     }
+}
+
+async function discover(address) {
+    await ready;
+    if (!discoveryProxy) throw new Error(
+        "Server discovery needs a configured mailbox relay.",
+    );
+    const url = new URL(discoveryProxy);
+    url.searchParams.set("address", address || "");
+    const response = await fetch(url, {
+        headers: { Accept: "application/json" },
+        credentials: "omit",
+    });
+    let result;
+    try {
+        result = await response.json();
+    } catch {
+        throw new Error(`Server discovery failed with HTTP ${response.status}.`);
+    }
+    if (!response.ok) throw new Error(result.error || `Server discovery failed with HTTP ${response.status}.`);
+    return result;
 }
 
 async function show(args, generation) {
@@ -420,12 +442,18 @@ async function test(spec) {
 
 async function add(spec) {
     await test(spec);
-    const prepared = await workerCall({
+    let prepared = await workerCall({
         operation: "prepare",
         args: JSON.stringify(spec),
     }, false);
-    const account = prepared.result;
     const old = await context();
+    if (!spec.id && Object.hasOwn(old.config.accounts ?? {}, prepared.result.id)) {
+        prepared = await workerCall({
+            operation: "prepare",
+            args: JSON.stringify({ ...spec, id: spec.address }),
+        }, false);
+    }
+    const account = prepared.result;
     const config = {
         ...old.config,
         accounts: { ...old.config.accounts, ...account.config.accounts },

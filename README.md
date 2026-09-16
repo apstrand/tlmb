@@ -92,7 +92,9 @@ with `MAILBOX_GOOGLE_CLIENT_ID`, `MAILBOX_GOOGLE_CLIENT_SECRET`,
 `MAILBOX_YAHOO_CLIENT_SECRET`.
 
 Run `mailbox accounts` to see account IDs. Add more accounts the same way, and
-use `--account <id>` to select one for a command.
+use `--account <id>` to select one for a command. IDs may be email addresses.
+When two accounts have the same local part, the first uses the short ID and the
+next automatically uses its complete email address.
 
 ## Run
 

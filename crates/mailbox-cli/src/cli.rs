@@ -693,8 +693,8 @@ pub struct AddAccountArgs {
     /// The email address. Everything else is discovered or defaulted.
     pub address: String,
 
-    /// The config key, and what `--account` takes. Defaults to the local part
-    /// of the address.
+    /// The config key, and what `--account` takes. Defaults to the local part;
+    /// if that is already used, the complete email address is used.
     #[arg(long)]
     pub id: Option<String>,
 

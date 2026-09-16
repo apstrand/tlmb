@@ -256,7 +256,7 @@ pub fn verify(
 /// Adds an account to the config at `path`.
 pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
     let Prepared {
-        id,
+        mut id,
         config: cfg,
         discovered,
         source,
@@ -266,9 +266,15 @@ pub fn add(path: &Path, spec: &NewAccount) -> Result<Added> {
     // Loaded before anything else fails, so a broken config is reported as
     // itself rather than as a failure to add.
     let mut config = load_or_empty(path)?;
+    if config.accounts.contains_key(&id) && spec.id.trim().is_empty() {
+        let email_id = normalize_id(&cfg.address)?;
+        if !config.accounts.contains_key(&email_id) {
+            id = email_id;
+        }
+    }
     if config.accounts.contains_key(&id) {
         return Err(Error::usage(format!(
-            "account `{id}` already exists; pass an id to add a second one for the same address"
+            "account `{id}` already exists; pass a different id to add another account"
         )));
     }
     let address = cfg.address.clone();
@@ -490,9 +496,8 @@ fn load_or_empty(path: &Path) -> Result<Config> {
 /// The config key for an address, when the caller did not choose one.
 ///
 /// The local part, lowercased, with anything that is not a plain identifier
-/// character dropped — this ends up in `--account`, in an environment variable
-/// name, and in a directory name, and the intersection of what all three
-/// accept is narrow.
+/// character dropped. If this short name conflicts, [`add`] falls back to the
+/// complete email address.
 pub fn id_from_address(address: &str) -> String {
     let local = address.split('@').next().unwrap_or(address);
     let s: String = local
@@ -511,10 +516,10 @@ fn normalize_id(given: &str) -> Result<String> {
     let id = given.to_ascii_lowercase();
     if id
         .chars()
-        .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+        .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | '+')))
     {
         return Err(Error::usage(format!(
-            "`{given}` is not a usable account id; letters, digits, `-`, `_`, and `.` only"
+            "`{given}` is not a usable account id; letters, digits, `-`, `_`, `.`, `+`, and `@` only"
         )));
     }
     Ok(id)

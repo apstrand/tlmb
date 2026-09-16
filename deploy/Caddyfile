@@ -11,7 +11,7 @@ mail.example.com {
 	header {
 		Cross-Origin-Opener-Policy "same-origin"
 		Cross-Origin-Embedder-Policy "credentialless"
-		Content-Security-Policy "default-src 'self'; connect-src 'self' wss://relay.example.com; worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' https: http: data: blob:; frame-src blob:; base-uri 'none'; form-action 'none'"
+		Content-Security-Policy "default-src 'self'; connect-src 'self' https://relay.example.com wss://relay.example.com; worker-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' https: http: data: blob:; frame-src blob:; base-uri 'none'; form-action 'none'"
 	}
 	file_server
 }

@@ -73,6 +73,22 @@ def check_image_proxy(url):
         raise RuntimeError("relay image endpoint is missing cross-origin resource policy")
 
 
+def check_discovery_proxy(url):
+    parsed = urllib.parse.urlsplit(url)
+    scheme = "https" if parsed.scheme == "wss" else "http"
+    probe = urllib.parse.urlunsplit((scheme, parsed.netloc, "/_discover", "", ""))
+    try:
+        fetch(probe)
+    except urllib.error.HTTPError as error:
+        status, headers = error.code, error.headers
+    else:
+        raise RuntimeError("relay discovery endpoint accepted a request without an address")
+    if status != 400:
+        raise RuntimeError(f"relay discovery endpoint returned HTTP {status}, expected 400")
+    if headers.get("access-control-allow-origin") != "*":
+        raise RuntimeError("relay discovery endpoint is missing cross-origin access")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--site", required=True, help="public https:// site URL")
@@ -91,6 +107,7 @@ def main():
         ))
     check_relay(relay)
     check_image_proxy(relay)
+    check_discovery_proxy(relay)
     print("hosted deployment checks passed")
 
 
