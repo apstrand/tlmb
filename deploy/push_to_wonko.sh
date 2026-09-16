@@ -17,3 +17,8 @@ crates/mailbox-wasm/build-web.sh
 cargo run -p mailbox-cli -- site --out dist --relay "$relay_url"
 
 rsync -av dist/ wonko.nena.se:web/tlmb/
+
+python crates/mailbox-wasm/deploy-check.py \
+  --site https://tlmb.2615.io/ \
+  --relay "$relay_url" \
+  --imap-host mail.nena.se

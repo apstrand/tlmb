@@ -15,7 +15,8 @@ import urllib.error
 def fetch(url):
     request = urllib.request.Request(url, headers={"User-Agent": "mailbox-deploy-check/1"})
     with urllib.request.urlopen(request, timeout=10) as response:
-        return response.status, dict(response.headers), response.read()
+        headers = {name.lower(): value for name, value in response.headers.items()}
+        return response.status, headers, response.read()
 
 
 def check_site(url, relay):
@@ -32,6 +33,17 @@ def check_site(url, relay):
                            ("cross-origin-embedder-policy", "credentialless")):
         if headers.get(name, "").lower() != expected:
             raise RuntimeError(f"missing {name}: expected {expected!r}")
+    relay_url = urllib.parse.urlsplit(relay)
+    discovery_scheme = "https" if relay_url.scheme == "wss" else "http"
+    discovery_origin = f"{discovery_scheme}://{relay_url.netloc}"
+    csp = headers.get("content-security-policy", "")
+    connect = next((part for part in csp.split(";")
+                    if part.strip().startswith("connect-src ")), "")
+    allowed = connect.split()[1:]
+    if discovery_origin not in allowed and f"{discovery_scheme}:" not in allowed:
+        raise RuntimeError(
+            f"connect-src does not allow relay discovery origin {discovery_origin!r}"
+        )
 
 
 def check_relay(url):
