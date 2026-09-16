@@ -71,3 +71,9 @@ For the Wonko deployment, `push_to_wonko.sh` defaults to the shared root URL:
 The service routes are `/zarq` for `mail.zarquon.se:993`, `/nena` for
 `mail.nena.se:993`, and `/u2615` for `mail.2615.io:993`. The shared root URL
 supports all three destinations according to the account being connected.
+
+The Linux desktop app has its own static site on the same host —
+`tlmb-flat.2615.io`, from `web/tlmb-flat/` — holding the signed Flatpak update
+repository. It is unrelated to the web client and is published by
+`packaging/flatpak/build.sh --release`; see `Release.md` and
+`nginx-flatpak.conf`.

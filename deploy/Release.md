@@ -5,12 +5,13 @@ has two parts, and the release process always publishes both:
 
 | Part | Where | What it is for |
 |---|---|---|
-| Update repository | `gh-pages` branch, served at <https://apstrand.github.io/tlmb/repo> | The signed Flatpak (OSTree) repository. Every installed copy checks it, and the window's *Install* button pulls from it. |
+| Update repository | <https://tlmb-flat.2615.io/repo>, served from `web/tlmb-flat/repo` on `wonko.nena.se` | The signed Flatpak (OSTree) repository. Every installed copy checks it, and the window's *Install* button pulls from it. |
 | GitHub release `v<version>` | <https://github.com/apstrand/tlmb/releases> | `tlmb-<version>.flatpak`, a one-file installer, and `tlmb.flatpakref`. Both point at the update repository. |
 
 GitHub Releases cannot hold the update repository itself. A Flatpak
 repository is a tree of files at fixed paths, and release assets are a flat
-list. That is why the repository lives on Pages.
+list. That is why the repository is a static site of its own, uploaded with
+rsync over ssh to the same host the hosted web client is served from.
 
 Everything below is done by `packaging/flatpak/build.sh --release`. The
 GitHub workflow runs that same command on a runner.
@@ -21,16 +22,32 @@ GitHub workflow runs that same command on a runner.
 
 ### 1. Make the repository public
 
-GitHub Pages and anonymous release downloads both need `apstrand/tlmb` to be
-public. Until it is, `flatpak` cannot fetch anything from it.
+Anonymous release downloads need `apstrand/tlmb` to be public: until it is,
+nobody can fetch `tlmb-<version>.flatpak` from the GitHub release. The update
+repository itself is served from `tlmb-flat.2615.io` and does not depend on
+it.
 
-### 2. Enable GitHub Pages
+### 2. Serve the site
 
-Settings → Pages → *Deploy from a branch* → `gh-pages`, folder `/ (root)`.
+`tlmb-flat.2615.io` serves `~peter/web/tlmb-flat` on `wonko.nena.se` over
+HTTPS, as plain files at their literal paths. `deploy/nginx-flatpak.conf` is
+that vhost:
 
-The branch does not exist until the first release pushes it. The release
-tries to enable Pages through the API after that first push. If it can't, it
-says so, and you set it as above once the branch is there.
+```sh
+scp deploy/nginx-flatpak.conf wonko.nena.se:/tmp/
+ssh wonko.nena.se "sudo install -m644 /tmp/nginx-flatpak.conf \
+    /etc/nginx/sites-available/tlmb-flat.2615.io \
+  && sudo ln -sf ../sites-available/tlmb-flat.2615.io /etc/nginx/sites-enabled/ \
+  && sudo nginx -t && sudo systemctl reload nginx"
+```
+
+> **No `try_files … /index.html` on this host.** OSTree asks for files that may
+> legitimately be missing — a summary signature, a static delta for a version
+> the client does not have — and reads a 404 as "not there". A fallback index
+> page returned with 200 instead looks like a corrupt object, and updates fail
+> obscurely. With Caddy, a bare `root` + `file_server` behaves correctly.
+
+The directory can be empty; the first release fills it.
 
 ### 3. The signing key
 
@@ -52,21 +69,28 @@ Settings → Secrets and variables → Actions → *New repository secret*:
 |---|---|
 | `FLATPAK_GPG_PRIVATE_KEY` | output of `gpg --armor --export-secret-keys 772EE1812AA4D782E519E62E4496C4F85CE95DB1` |
 | `FLATPAK_GPG_PASSPHRASE` | that key's passphrase |
+| `FLATPAK_PUBLISH_SSH_KEY` | private key allowed to write `web/tlmb-flat` as `peter@wonko.nena.se` — give the workflow a key of its own (`ssh-keygen -t ed25519 -f flatpak-publish -C "flatpak-release"`, public half appended to that account's `~/.ssh/authorized_keys`), so it can be revoked without touching anything else. It needs ordinary ssh, not only rsync: the release runs `mkdir -p` on the site directory before fetching it |
+| `FLATPAK_PUBLISH_KNOWN_HOSTS` | output of `ssh-keyscan wonko.nena.se` — without it the job takes the host key on first sight and says so |
 | `MAILBOX_GOOGLE_CLIENT_ID`, `MAILBOX_GOOGLE_CLIENT_SECRET`, `MAILBOX_MICROSOFT_CLIENT_ID`, `MAILBOX_MICROSOFT_CLIENT_SECRET`, `MAILBOX_YAHOO_CLIENT_ID`, `MAILBOX_YAHOO_CLIENT_SECRET` | *optional* — OAuth2 client credentials compiled into the build; missing ones are left out |
 
-The workflow's token needs no configuration. The workflow asks for
-`contents: write` (push `gh-pages`, create the release) and `pages: write`
-itself.
+The workflow's token needs no configuration; it asks for `contents: write`
+(create the release) itself. The site is published over ssh with the key
+above, not with the token.
+
+The host and directory can be overridden per repository under Settings →
+Secrets and variables → Actions → *Variables*: `MAILBOX_FLATPAK_SITE` and
+`MAILBOX_FLATPAK_PUBLISH`. Unset, the workflow uses the defaults in this
+document.
 
 ### 5. Tools (manual releases only)
 
 On the machine that releases:
 
-- `flatpak`, `ostree`, `git`, `gpg`, a Rust toolchain (`cargo vendor` runs on the host)
+- `flatpak`, `ostree`, `git`, `gpg`, `rsync`, `ssh`, a Rust toolchain (`cargo vendor` runs on the host)
 - a flatpak-builder: `flatpak install flathub org.flatpak.Builder`, or the distribution's `flatpak-builder` package
 - the GitHub CLI, logged in with push access: `gh auth login`
 - the signing key's secret part in your keyring
-- push access to `git@github.com:apstrand/tlmb.git` over SSH
+- ssh access to `peter@wonko.nena.se`, able to write `web/tlmb-flat`
 
 The GNOME runtime, SDK and Rust extension are installed by the build on first
 use. That is a few GB, once.
@@ -122,9 +146,11 @@ These steps are the same whichever way you publish.
    packaging/flatpak/build.sh --release --dry-run
    ```
 
-   The result is in `packaging/flatpak/.build/`: the site in `pages/`, the
+   The result is in `packaging/flatpak/.build/`: the site in `site/`, the
    installer as `tlmb-<version>.flatpak`. The dry run does not check for a
-   clean tree or an existing release.
+   clean tree or an existing release, but it does fetch the published site,
+   since that is what this build's static delta is cut against — so it needs
+   ssh access too.
 
 ---
 
@@ -145,13 +171,15 @@ It:
 3. imports the signing key from secrets into a throwaway GnuPG home and
    presets its passphrase (`packaging/flatpak/ci-import-key.sh`), because
    signing cannot ask for it;
-4. runs `build.sh --release`, which builds, signs, pushes `gh-pages` with the
-   job's token, and creates the GitHub release.
+4. installs the publishing key from secrets, with the host key from
+   `FLATPAK_PUBLISH_KNOWN_HOSTS`;
+5. runs `build.sh --release`, which builds, signs, uploads the site with
+   rsync, and creates the GitHub release.
 
 A release takes roughly as long as a cold release build plus the SDK
 download. The job times out after 90 minutes. Tag pushes queue behind each
 other rather than running in parallel, since two releases at once would
-overwrite each other's `gh-pages`.
+overwrite each other's uploads.
 
 To retry a failed run, fix the cause and re-run the job from the Actions page.
 If a release was already created before the failure, see
@@ -171,21 +199,25 @@ Before it builds anything, it checks that:
 
 - the signing key is in your keyring;
 - the metainfo has a `<release>` for the version;
+- `rsync` and `ssh` are installed;
 - the working tree has no uncommitted changes;
 - `gh` is installed, and `apstrand/tlmb` has no release `v<version>` yet.
 
 Then it:
 
 1. vendors the crates and builds the app;
-2. clones `gh-pages` (or starts it, on the first release) and exports the
-   build into its repository, on top of the previous release's history;
+2. fetches the published site into `.build/site` with rsync (starting an empty
+   repository there, on the first release) and exports the build into its
+   repository, on top of the previous release's history;
 3. signs the commit and the repository summary, generates a static delta from
    the previous build, and prunes history older than five releases;
 4. writes `tlmb.flatpakref` and `tlmb.flatpakrepo` at the site root, and the
    `tlmb-<version>.flatpak` bundle;
-5. replaces `gh-pages` with a single commit and force-pushes it;
-6. enables Pages if it is not yet;
-7. creates the GitHub release `v<version>` at the current `HEAD` with the
+5. uploads the site in three passes — the objects, then the `summary` that
+   names them, then a `--delete` pass for what pruning dropped — so a client
+   fetching while it runs sees the old repository or the new one, never a
+   summary pointing at objects that are not there yet;
+6. creates the GitHub release `v<version>` at the current `HEAD` with the
    bundle and `tlmb.flatpakref` attached. The tag is created by this step if
    you have not pushed one.
 
@@ -197,21 +229,21 @@ The defaults can be overridden for a fork or a test:
 |---|---|
 | `MAILBOX_FLATPAK_GPG_KEY` | `772EE1812AA4D782E519E62E4496C4F85CE95DB1` |
 | `MAILBOX_FLATPAK_GPG_HOMEDIR` | GnuPG's own |
-| `MAILBOX_FLATPAK_SITE` | `https://apstrand.github.io/tlmb` |
-| `MAILBOX_FLATPAK_PAGES_GIT` | `git@github.com:apstrand/tlmb.git` |
+| `MAILBOX_FLATPAK_SITE` | `https://tlmb-flat.2615.io` |
+| `MAILBOX_FLATPAK_PUBLISH` | `peter@wonko.nena.se:web/tlmb-flat` |
 | `MAILBOX_FLATPAK_GITHUB` | `apstrand/tlmb` |
 
 ---
 
 ## After a release
 
-Pages can take a few minutes to serve the new files, and caches them for
-about ten more.
+The upload is live as soon as it finishes; any caching in front of the site is
+what decides how soon a client sees it.
 
 - **Fresh install:**
 
   ```sh
-  flatpak install --user https://apstrand.github.io/tlmb/tlmb.flatpakref
+  flatpak install --user https://tlmb-flat.2615.io/tlmb.flatpakref
   flatpak run com.thelastmailbox.flat
   ```
 
@@ -236,10 +268,10 @@ builds apart in `flatpak info` and `flatpak remote-info --log`.
 Everything already published stays in the update repository. There is no
 "unpublish" that reaches installed copies. Choose by how far it got:
 
-- **Failed before the `gh-pages` push:** nothing is published. Fix the cause
-  and run it again. Delete the tag first if the workflow created nothing and
-  you need to move it (`git push --delete origin v0.2.0`).
-- **`gh-pages` pushed, release not created:** the update is already live for
+- **Failed before the upload:** nothing is published. Fix the cause and run it
+  again. Delete the tag first if the workflow created nothing and you need to
+  move it (`git push --delete origin v0.2.0`).
+- **Uploaded, release not created:** the update is already live for
   installed copies. Re-running the job or `build.sh --release` works, but it
   publishes a second build of the same version on top, and installed copies
   are offered that as one more update. To avoid it, create the release by
@@ -250,7 +282,7 @@ Everything already published stays in the update repository. There is no
   ```sh
   gh release create v0.2.0 -R apstrand/tlmb \
       packaging/flatpak/.build/tlmb-0.2.0.flatpak \
-      packaging/flatpak/.build/pages/tlmb.flatpakref
+      packaging/flatpak/.build/site/tlmb.flatpakref
   ```
 
 - **A broken build shipped:** release a fixed version on top. The next
@@ -273,7 +305,7 @@ copies expect the history to continue from what they have.
 
 ## Trying a build without releasing
 
-Nothing here touches `gh-pages` or GitHub:
+Nothing here touches the site or GitHub:
 
 ```sh
 packaging/flatpak/build.sh --run

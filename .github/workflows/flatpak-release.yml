@@ -4,12 +4,15 @@
 #
 # The tag has to match the version in Cargo.toml, and the metainfo has to
 # have a <release> for it. packaging/flatpak/build.sh --release does the work:
-# the signed update repository on gh-pages, and a GitHub release with the
+# the signed update repository on the web host, and a GitHub release with the
 # installer and the .flatpakref (README, "The Linux desktop app").
 #
 # Secrets:
 #   FLATPAK_GPG_PRIVATE_KEY   gpg --armor --export-secret-keys 772EE181…5DB1
 #   FLATPAK_GPG_PASSPHRASE    its passphrase
+#   FLATPAK_PUBLISH_SSH_KEY   private key that may rsync into the site directory
+#   FLATPAK_PUBLISH_KNOWN_HOSTS  ssh-keyscan of that host (optional but wanted:
+#                             without it the host key is taken on first sight)
 #   MAILBOX_*_CLIENT_ID/SECRET  optional OAuth2 client credentials to compile in
 name: flatpak-release
 
@@ -18,15 +21,14 @@ on:
     tags: ["v*"]
   workflow_dispatch: 
 
-# Two releases at once would both fetch gh-pages and the second push would
-# drop the first one's build from the update history.
+# Two releases at once would both fetch the published repository and the
+# second upload would drop the first one's build from the update history.
 concurrency:
   group: flatpak-release
   cancel-in-progress: false
 
 permissions:
-  contents: write # push gh-pages, create the release
-  pages: write # turn Pages on for the first release
+  contents: write # create the release
 
 jobs:
   release:
@@ -34,8 +36,8 @@ jobs:
     timeout-minutes: 90
     env:
       MAILBOX_FLATPAK_GITHUB: ${{ github.repository }}
-      MAILBOX_FLATPAK_SITE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
-      MAILBOX_FLATPAK_PAGES_GIT: https://github.com/${{ github.repository }}.git
+      MAILBOX_FLATPAK_SITE: ${{ vars.MAILBOX_FLATPAK_SITE || 'https://tlmb-flat.2615.io' }}
+      MAILBOX_FLATPAK_PUBLISH: ${{ vars.MAILBOX_FLATPAK_PUBLISH || 'peter@wonko.nena.se:web/tlmb-flat' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -65,9 +67,33 @@ jobs:
             echo "MAILBOX_FLATPAK_GPG_KEY=$fingerprint"
           } >> "$GITHUB_ENV"
 
-      # gh-pages is pushed over HTTPS with this job's token.
-      - name: Git credentials
-        run: gh auth setup-git
+      # The update repository is published with rsync over ssh, so the job
+      # needs a key that may write the site directory on that host.
+      - name: Publishing key
+        env:
+          SSH_KEY: ${{ secrets.FLATPAK_PUBLISH_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.FLATPAK_PUBLISH_KNOWN_HOSTS }}
+        run: |
+          if [[ -z "$SSH_KEY" ]]; then
+            echo "::error::FLATPAK_PUBLISH_SSH_KEY is not set"
+            exit 1
+          fi
+          host="${MAILBOX_FLATPAK_PUBLISH%%:*}"
+          host="${host#*@}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_publish
+          chmod 600 ~/.ssh/id_publish
+          if [[ -n "$KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::FLATPAK_PUBLISH_KNOWN_HOSTS is not set; trusting $host on first sight"
+            ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+          printf 'Host %s\n  IdentityFile ~/.ssh/id_publish\n  IdentitiesOnly yes\n' \
+            "$host" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       # Flatpak's tools expect a session bus, and a runner's job has none.
       - name: Build and release

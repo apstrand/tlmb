@@ -14,7 +14,8 @@ sudo=()
 
 "${sudo[@]}" apt-get update -q
 "${sudo[@]}" apt-get install -y -q --no-install-recommends \
-    flatpak flatpak-builder ostree gnupg dbus dbus-user-session git ca-certificates
+    flatpak flatpak-builder ostree gnupg dbus dbus-user-session git ca-certificates \
+    rsync openssh-client
 
 # Ubuntu 24.04 has AppArmor refuse unprivileged user namespaces, and
 # bubblewrap — so every Flatpak build and every `flatpak run` — needs them.
