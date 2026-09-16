@@ -24,6 +24,17 @@ tests/e2e/mailbox-e2e check folders        # or tui | web | gui | compose | …
 tests/e2e/mailbox-e2e check tui large
 ```
 
+`check` records a video; `run` does not. Either takes `--video` / `--no-video`
+to say so outright:
+
+```sh
+tests/e2e/mailbox-e2e run --video gui inbox    # just the run, with an mp4
+tests/e2e/mailbox-e2e check --no-video folders # everything else, no recording
+```
+
+The video lands **inside that run's directory** — `out/<stamp>/gui-inbox.mp4`,
+not `out/videos/`, which is where the manual `record stop` puts one.
+
 It prints where the evidence went and exits non-zero if a check failed:
 
 ```
@@ -35,9 +46,8 @@ It prints where the evidence went and exits non-zero if a check failed:
   summary   tests/e2e/out/20260916T211354Z/summary.txt
 ```
 
-`run` is the same thing without the VM lifecycle, the video, or the summary —
-use it when the guest is already up and you want the fastest loop.
-`MAILBOX_E2E_VIDEO=0 … check` skips the recording.
+`run` is the same thing without the VM lifecycle or the summary — use it when
+the guest is already up and you want the fastest loop.
 
 ## Isolation
 
@@ -79,8 +89,8 @@ misconfigures the account. Provision masks NTP wait: an isolated boot has
 no WAN, and Arch's `systemd-time-wait-sync` would otherwise block sshd forever.
 
 Evidence lands in `tests/e2e/out/<timestamp>/`: PNG screenshots, TUI pane
-dumps, guest logs under `logs/`, and — from `check`, or `run` with
-`MAILBOX_E2E_VIDEO=1` — an `.mp4` of the compositor while the UI was driven.
+dumps, guest logs under `logs/`, and — from `check`, or `run --video` — an
+`.mp4` of the compositor while the UI was driven.
 
 ## Commands
 
@@ -93,6 +103,7 @@ dumps, guest logs under `logs/`, and — from `check`, or `run` with
 | `seed NAME` | `inbox`, `html-images`, `attachments`, `thread`, `large`, `imap` |
 | `run UI [NAME]` | `tui`, `web`, `gui`, `folders`, `compose`, `isolation`, or `all` |
 | `check UI [NAME]` | The lot in one line: start, sync, record, run, collect |
+| `--video` / `--no-video` | On `run` or `check`: record the compositor, or do not |
 | `shot NAME` | Guest grim, else `virsh screenshot` |
 | `record start\|stop` | wf-recorder in the guest (compositor) |
 | `key KEYS` | `virsh send-key` — compositor shortcuts |
@@ -120,6 +131,21 @@ headless Sway. Nothing from `run all` appears on that login screen. After
 | `imap` | Same as inbox, but APPENDed to Dovecot and synced |
 | `compose` | `mailbox send` into the loopback SMTP sink |
 | `isolation` | Probe + tcpdump while HTML mail is on screen |
+
+Each UI is its own script under `guest/tests/`, and each runs on its own in
+the guest as well as through the runner:
+
+```
+guest/lib.sh          the session, the binary, the helpers, the recorder
+guest/run.sh          a dispatcher: run.sh <ui> [scenario] → tests/<ui>.sh
+guest/tests/tui.sh    one file per UI — web.sh, gui.sh, folders.sh, …
+guest/tests/folders.py  the driver folders.sh runs
+guest/cdp.py          the DevTools client the drivers import
+```
+
+```sh
+mailbox-e2e ssh "bash mailbox/tests/e2e/guest/tests/folders.sh inbox"
+```
 
 `folders` is the one that clicks. The others photograph a mailbox; this one
 drives the served page through Chromium's debugger (`guest/cdp.py`, stdlib

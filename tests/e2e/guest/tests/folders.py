@@ -11,7 +11,7 @@ contract cannot show:
    list pane and did nothing, because there was nothing above the list to go
    back to and the folder list was unreachable.
 
-Usage: drive-folders.py <url> <evidence-dir> <token>
+Usage: folders.py <url> <evidence-dir> <token>  (folders.sh runs it)
 """
 
 import json

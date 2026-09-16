@@ -10,7 +10,10 @@
 #                            tui | web | gui | folders | compose | isolation | all
 #   mailbox-e2e check UI [NAME]
 #                            the whole thing in one line: start the VM if it is
-#                            off, sync, run with video, collect logs and shots
+#                            off, sync, run, collect video, logs and shots
+#
+#   --video / --no-video     record the compositor while the UI runs (or do
+#                            not). `check` records by default, `run` does not.
 #   mailbox-e2e shot NAME    guest grim (or virsh screenshot) into out/shots/
 #   mailbox-e2e record       start/stop a video of the compositor
 #   mailbox-e2e key KEYS     virtual keyboard (KEY_ENTER, KEY_LEFTMETA, …)
@@ -51,6 +54,22 @@ ISOLATED_NET=mailbox-e2e
 QEMU_USER=libvirt-qemu
 
 die() { echo "mailbox-e2e: $1" >&2; exit 1; }
+
+# `--video` / `--no-video` anywhere in a run's arguments; MAILBOX_E2E_VIDEO is
+# the default when neither is given. Leaves the rest in ARGS.
+take_video_flag() {
+  local default=$1; shift
+  VIDEO=${MAILBOX_E2E_VIDEO:-$default}
+  ARGS=()
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+    --video) VIDEO=1 ;;
+    --no-video) VIDEO=0 ;;
+    *) ARGS+=("$arg") ;;
+    esac
+  done
+}
 # stderr: callers capture `vm_ssh` stdout (checksums, versions).
 say() { printf '\033[32m●\033[0m %s\n' "$1" >&2; }
 
@@ -484,7 +503,8 @@ write_summary() {
 }
 
 cmd_check() {
-  local ui=${1:-folders} scenario=${2:-inbox} result=passed
+  take_video_flag 1 "$@"
+  local ui=${ARGS[0]:-folders} scenario=${ARGS[1]:-inbox} result=passed
   domain_exists || die "no VM named $VM — run: mailbox-e2e create && mailbox-e2e provision"
   if ! domain_running; then
     say "$VM is off; starting it"
@@ -493,7 +513,7 @@ cmd_check() {
     rm -f "$KEY_DIR"/cm-*
   fi
   wait_for_ssh
-  MAILBOX_E2E_VIDEO=${MAILBOX_E2E_VIDEO:-1} cmd_run "$ui" "$scenario" || result=FAILED
+  MAILBOX_E2E_VIDEO=$VIDEO cmd_run "$ui" "$scenario" || result=FAILED
   [[ -n ${LAST_DEST:-} ]] || die "no evidence directory"
   write_summary "$LAST_DEST" "$ui" "$scenario" "$result"
   echo
@@ -511,8 +531,9 @@ cmd_check() {
 }
 
 cmd_run() {
-  local ui=${1:-all}
-  local scenario=${2:-inbox}
+  take_video_flag 0 "$@"
+  local ui=${ARGS[0]:-all}
+  local scenario=${ARGS[1]:-inbox}
   local stamp dest
   require_domain
   wait_for_ssh
@@ -534,7 +555,7 @@ cmd_run() {
     say "Running $u / $s"
     vm_ssh "mkdir -p \$HOME/mailbox-e2e-out && \
       EVIDENCE=\$HOME/mailbox-e2e-out MAILBOX_E2E_ROOT=\$HOME/mailbox PATH=\$HOME/bin:\$PATH \
-      MAILBOX_E2E_VIDEO=${MAILBOX_E2E_VIDEO:-0} \
+      MAILBOX_E2E_VIDEO=$VIDEO \
       bash \$HOME/mailbox/tests/e2e/guest/run.sh $(printf '%q' "$u") $(printf '%q' "$s")" \
       || status=$?
     scp -q -i "$KEY" "${SSH_OPTS[@]}" -r "$GUEST_USER@$IP:mailbox-e2e-out/." "$dest/" || true
@@ -559,7 +580,7 @@ cmd_run() {
     run_one "$ui" "$scenario"
     ;;
   *)
-    die "usage: mailbox-e2e run tui|web|gui|folders|compose|isolation|all [scenario]"
+    die "usage: mailbox-e2e run [--video] tui|web|gui|folders|compose|isolation|all [scenario]"
     ;;
   esac
 

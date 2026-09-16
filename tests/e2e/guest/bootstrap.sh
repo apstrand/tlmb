@@ -52,6 +52,7 @@ cp "$HERE/sway.conf" "$HOME/.config/sway/config"
 # A sink that accepts submission and writes the bytes, and never talks to anyone.
 chmod +x "$HERE/smtp-sink.py" "$HERE/imap-append.py" "$HERE/session-env.sh" \
   "$HERE/compositor.sh" "$HERE/capture.sh" "$HERE/record.sh" "$HERE/seed.sh" \
-  "$HERE/run.sh" "$HERE/probe-isolation.sh" "$HERE/console-setup.sh"
+  "$HERE/run.sh" "$HERE/probe-isolation.sh" "$HERE/console-setup.sh" \
+  "$HERE"/tests/*.sh
 
 echo "mailbox-e2e: bootstrap done"
