@@ -364,10 +364,25 @@ impl Store {
         })
     }
 
+    /// The folders, with the counts derived rather than read.
+    ///
+    /// `folders.total` and `folders.unread` are refreshed by a sync pass, so
+    /// between two passes they do not know about anything done here: a message
+    /// read locally leaves the unread count where it was until the next sync.
+    /// That was invisible while the interfaces showed the total, which local
+    /// reads do not change. §7's folder list shows the unread count, which they
+    /// do, so it is counted now rather than remembered. Both counts are an
+    /// index range — `placements_folder_msg` and `placements_unread` — not a
+    /// scan.
     pub fn folders(&self) -> Result<Vec<Folder>> {
         let mut st = self.conn.prepare(
-            "SELECT path, name, special_use, total, unread, selectable FROM folders
-             ORDER BY rank, path",
+            "SELECT f.path, f.name, f.special_use,
+                    (SELECT count(*) FROM placements p WHERE p.folder_id = f.id),
+                    (SELECT count(*) FROM placements p
+                     WHERE p.folder_id = f.id AND p.seen = 0),
+                    f.selectable
+             FROM folders f
+             ORDER BY f.rank, f.path",
         )?;
         let rows = st.query_map([], |r| {
             Ok(Folder {

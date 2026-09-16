@@ -229,7 +229,8 @@ function startReadDwell(message, seq) {
         // that arrived late could have moved the cursor since.
         if (seq !== state.openSeq) return;
         try {
-            await post("/api/flag", { ids: [message.id], add: ["seen"] });
+            await post("/api/flag", { ids: [message.id], add: ["seen"],
+                account: message.account });
             // The row, not the whole listing: reloading here would move things
             // under someone who is in the middle of reading.
             message.flags = [...message.flags, "seen"];
@@ -427,7 +428,11 @@ async function change(run, what) {
 
 const flag = (id, spec) =>
     change(async () => {
-        await post("/api/flag", { ids: [id], ...spec });
+        // The account travels with the write for the same reason it does on a
+        // move: the hosted backend keeps one store per account, and the folder
+        // counts it caches are per account too.
+        const account = state.messages.find((message) => message.id === id)?.account;
+        await post("/api/flag", { ids: [id], ...spec, account });
         // `seen` is what the folder counts count.
         if ([...spec.add ?? [], ...spec.remove ?? []].includes("seen")) await loadFolders();
     }, "changed");
@@ -711,12 +716,23 @@ document.addEventListener("keydown", (event) => {
 
 // ---- panes, on a screen too narrow for three ----
 
+/// Narrow, the three panes are a stack rather than a row, and back walks up
+/// it. The folders are the top: without this the list was the top, which left
+/// the folder nav with nothing that could reach it and back on the list pane
+/// with nowhere to go.
+const PANE_ABOVE = { reader: "list", list: "folders" };
+
 function showPane(name) {
     document.body.dataset.pane = name;
-    el("back").hidden = name === "list";
+    const above = PANE_ABOVE[name];
+    const back = el("back");
+    back.hidden = !above;
+    if (above) back.setAttribute("aria-label", `Back to the ${above}`);
 }
 
-el("back").addEventListener("click", () => showPane("list"));
+el("back").addEventListener("click", () => {
+    showPane(PANE_ABOVE[document.body.dataset.pane] ?? "folders");
+});
 
 // ---- starting up ----
 
@@ -733,6 +749,7 @@ el("search-form").addEventListener("submit", (event) => {
     state.activeFolder = null;
     el("load-more").hidden = true;
     run(el("search").value.trim());
+    showPane("list");
     el("search").blur();
 });
 
@@ -859,6 +876,7 @@ async function start() {
     clearTimeout(setupTimer);
     document.body.dataset.state = "mail";
     el("setup").hidden = true;
+    showPane(document.body.dataset.pane || "list");
     loadFolders();
     loadIdentities();
     reload();

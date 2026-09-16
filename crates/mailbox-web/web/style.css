@@ -300,7 +300,10 @@ iframe.body {
     body[data-pane="reader"] #reader { display: block; }
     body[data-pane="reader"] #reader { display: flex; }
 
-    #back { display: block; }
+    /* `[hidden]` comes from the browser's own stylesheet, which an id selector
+       outranks — so say it here, or the arrow also shows on the folder pane,
+       where there is nothing above it to go back to. */
+    #back:not([hidden]) { display: block; }
 }
 
 @media (min-width: 45.01rem) {

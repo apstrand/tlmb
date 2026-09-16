@@ -327,10 +327,7 @@ async function dispatch(path, options, generation) {
             address: url.searchParams.get("address"),
         });
         case "GET discover": return discover(url.searchParams.get("address"));
-        case "POST flag": return core("flag", {
-            ids: value.ids,
-            changes: flagChanges(value),
-        });
+        case "POST flag": return flag(value);
         case "POST move": return move(value);
         case "POST snooze": return core("snooze", value);
         case "POST send": return core("send", value);
@@ -403,6 +400,28 @@ async function refreshFolderCounts(id) {
     await saveSettings({ ...settings, remoteFolders: {
         ...settings.remoteFolders, [id]: result.folders,
     } });
+    return result;
+}
+
+async function flag(value) {
+    const result = await core("flag", { ids: value.ids, changes: flagChanges(value) });
+    // The same reason as `move`: the folder list shows unread, and the cached
+    // server counts would otherwise keep reporting the count from the last
+    // sync until the next one.
+    const record = result.messages?.find((message) => message.changed);
+    const delta = value.add?.includes("seen") ? -1 : value.remove?.includes("seen") ? 1 : 0;
+    if (record?.folder && delta && value.account) {
+        const settings = await loadSettings();
+        const remote = settings.remoteFolders?.[value.account];
+        if (remote) {
+            const updated = remote.map((folder) => folder.path === record.folder
+                ? { ...folder, unread: Math.max(0, folder.unread + delta) }
+                : folder);
+            await saveSettings({ ...settings, remoteFolders: {
+                ...settings.remoteFolders, [value.account]: updated,
+            } });
+        }
+    }
     return result;
 }
 
