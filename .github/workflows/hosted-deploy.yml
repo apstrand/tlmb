@@ -1,0 +1,103 @@
+# Publish the hosted mailbox site and relay to the configured server.
+#
+# Required secrets:
+#   MAILBOX_DEPLOY_SSH_KEY       private key for the deploy account
+#   MAILBOX_DEPLOY_KNOWN_HOSTS   ssh-keyscan output for the server
+#   MAILBOX_DEPLOY_HOST          SSH host name
+#   MAILBOX_DEPLOY_USER          SSH user name
+#   MAILBOX_DEPLOY_SITE_URL      public site URL, including https://
+#   MAILBOX_DEPLOY_RELAY_URL     public relay URL, including wss://
+#   MAILBOX_DEPLOY_IMAP_HOST     one allowed upstream used by deploy-check
+# Optional secrets:
+#   MAILBOX_DEPLOY_RELAY_DIR     remote relay directory (default: web/relay)
+#   MAILBOX_DEPLOY_SITE_DIR      remote site directory (default: web/tlmb)
+
+name: hosted-deploy
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: hosted-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DEPLOY_HOST: ${{ secrets.MAILBOX_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.MAILBOX_DEPLOY_USER }}
+      SITE_URL: ${{ secrets.MAILBOX_DEPLOY_SITE_URL }}
+      RELAY_URL: ${{ secrets.MAILBOX_DEPLOY_RELAY_URL }}
+      IMAP_HOST: ${{ secrets.MAILBOX_DEPLOY_IMAP_HOST }}
+      RELAY_DIR: ${{ secrets.MAILBOX_DEPLOY_RELAY_DIR || 'web/relay' }}
+      SITE_DIR: ${{ secrets.MAILBOX_DEPLOY_SITE_DIR || 'web/tlmb' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deployment settings
+        run: |
+          for name in DEPLOY_HOST DEPLOY_USER SITE_URL RELAY_URL IMAP_HOST; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::missing secret for $name"
+              exit 1
+            fi
+          done
+          [[ "$SITE_URL" == https://* ]] || { echo "::error::SITE_URL must use https://"; exit 1; }
+          [[ "$RELAY_URL" == wss://* ]] || { echo "::error::RELAY_URL must use wss://"; exit 1; }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install matching wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.MAILBOX_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.MAILBOX_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          [[ -n "$SSH_KEY" ]] || { echo "::error::MAILBOX_DEPLOY_SSH_KEY is not set"; exit 1; }
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [[ -n "$KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::error::MAILBOX_DEPLOY_KNOWN_HOSTS is not set"
+            exit 1
+          fi
+          chmod 600 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            IdentityFile ~/.ssh/id_deploy
+            IdentitiesOnly yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Build and publish
+        env:
+          MAILBOX_GOOGLE_CLIENT_ID: ${{ secrets.MAILBOX_GOOGLE_CLIENT_ID }}
+          MAILBOX_GOOGLE_CLIENT_SECRET: ${{ secrets.MAILBOX_GOOGLE_CLIENT_SECRET }}
+          MAILBOX_MICROSOFT_CLIENT_ID: ${{ secrets.MAILBOX_MICROSOFT_CLIENT_ID }}
+          MAILBOX_MICROSOFT_CLIENT_SECRET: ${{ secrets.MAILBOX_MICROSOFT_CLIENT_SECRET }}
+          MAILBOX_YAHOO_CLIENT_ID: ${{ secrets.MAILBOX_YAHOO_CLIENT_ID }}
+          MAILBOX_YAHOO_CLIENT_SECRET: ${{ secrets.MAILBOX_YAHOO_CLIENT_SECRET }}
+        run: |
+          ./crates/mailbox-wasm/build-web.sh
+          cargo run -p mailbox-cli -- site --out dist --relay "$RELAY_URL"
+          scp crates/mailbox-wasm/mailbox-relay.py deploy-target:"$RELAY_DIR/"
+          ssh deploy-target 'systemctl --user restart mailbox-relay'
+          rsync -az --delete dist/ deploy-target:"$SITE_DIR/"
+
+      - name: Verify deployment
+        run: |
+          python crates/mailbox-wasm/deploy-check.py \
+            --site "$SITE_URL/" --relay "$RELAY_URL" --imap-host "$IMAP_HOST"

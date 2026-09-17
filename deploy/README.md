@@ -87,7 +87,17 @@ and the image and discovery endpoints. It does not log in to the upstream
 mailbox. After it passes, open the site and use **Discover servers** or enter
 the settings manually, then use the account Test button.
 
-For the Wonko deployment, `push_to_wonko.sh` defaults to the shared root URL:
+For the Wonko deployment, the GitHub Actions workflow `.github/workflows/hosted-deploy.yml`
+publishes on version tags (`v*`) and can also be started with **Run workflow**.
+Configure these repository secrets: `MAILBOX_DEPLOY_SSH_KEY`,
+`MAILBOX_DEPLOY_KNOWN_HOSTS`, `MAILBOX_DEPLOY_HOST`, `MAILBOX_DEPLOY_USER`,
+`MAILBOX_DEPLOY_SITE_URL`, `MAILBOX_DEPLOY_RELAY_URL`, and
+`MAILBOX_DEPLOY_IMAP_HOST`. `MAILBOX_DEPLOY_RELAY_DIR` and
+`MAILBOX_DEPLOY_SITE_DIR` are optional when the defaults (`web/relay` and
+`web/tlmb`) are used. OAuth client secrets use the `MAILBOX_*_CLIENT_ID` and
+`MAILBOX_*_CLIENT_SECRET` names described in `Release.md`.
+
+For a local deployment, `push_to_wonko.sh` remains available and defaults to the shared root URL:
 
 ```sh
 ./deploy/push_to_wonko.sh
