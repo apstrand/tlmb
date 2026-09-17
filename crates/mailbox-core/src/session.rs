@@ -429,6 +429,11 @@ impl Session {
                 login_user: cfg.login_user().to_string(),
                 imap_host: cfg.imap_host.clone().unwrap_or_default(),
                 imap_port: cfg.port(),
+                imap_security: format!("{:?}", cfg.security()).to_lowercase(),
+                smtp_host: cfg.smtp_host.clone().unwrap_or_default(),
+                smtp_port: cfg.smtp_port(),
+                smtp_security: format!("{:?}", cfg.smtp_security()).to_lowercase(),
+                smtp_user: cfg.smtp_login_user().to_string(),
                 has_credential,
                 last_sync,
             });

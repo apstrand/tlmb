@@ -629,6 +629,11 @@ impl Store {
             login_user: login_user.to_string(),
             imap_host: imap_host.to_string(),
             imap_port,
+            imap_security: "implicit".to_string(),
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_security: "starttls".to_string(),
+            smtp_user: login_user.to_string(),
             has_credential: false,
             last_sync: (state.last_full_sync > 0).then(|| format_rfc3339(state.last_full_sync)),
         }

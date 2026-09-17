@@ -811,6 +811,7 @@ pub fn folders(ctx: &Ctx<'_>, args: &FoldersArgs) -> Result<()> {
         crate::output::Mode::Human => {
             use crate::table::{Column, Table};
             let mut table = Table::new(vec![
+                Column::new("account").flexible().min(12),
                 Column::new("folder").flexible().min(20),
                 Column::new("use").min(7),
                 Column::new("unread").right().min(6),
@@ -818,6 +819,7 @@ pub fn folders(ctx: &Ctx<'_>, args: &FoldersArgs) -> Result<()> {
             ]);
             for f in &list.folders {
                 table.push(vec![
+                    f.account.clone(),
                     f.path.clone(),
                     ctx.out.dim(f.special_use.as_deref().unwrap_or("")),
                     if f.unread > 0 {

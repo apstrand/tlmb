@@ -335,6 +335,7 @@ async function dispatch(path, options, generation) {
         case "POST folders/refresh": return refreshFolderCounts(value.account);
         case "POST accounts/test": return test(value);
         case "POST accounts": return add(value);
+        case "POST accounts/edit": return editAccount(value);
         default: throw new Error(`hosted backend has no ${options.method ?? "GET"} ${route}`);
     }
 }
@@ -488,6 +489,18 @@ async function add(spec) {
         discovered: account.discovered,
         credential: "browser storage",
     };
+}
+
+async function editAccount(spec) {
+    const settings = await loadSettings();
+    const account = settings.config?.accounts?.[spec.id];
+    if (!account) throw new Error(`Unknown account '${spec.id}'.`);
+    const fields = ["address", "imap_host", "imap_user", "imap_security", "smtp_host", "smtp_user", "smtp_security"];
+    for (const field of fields) if (spec[field]?.trim()) account[field] = spec[field].trim();
+    for (const field of ["imap_port", "smtp_port"]) if (spec[field]) account[field] = Number(spec[field]);
+    if (spec.password) await saveCredential(spec.id, spec.password);
+    await saveSettings({ ...settings, config: settings.config });
+    return { updated: spec.id };
 }
 
 export function hostedBodyUrl(message, images) {

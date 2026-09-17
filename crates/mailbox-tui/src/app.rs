@@ -123,6 +123,14 @@ pub enum Write {
     MarkRead { id: String },
 }
 
+/// A reversible move kept only for this TUI session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoEntry {
+    pub id: String,
+    pub account: String,
+    pub folder: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SuspendedTask {
     Reply { id: String, all: bool },
@@ -152,6 +160,8 @@ pub struct App {
     pub status: String,
     /// True while a worker is syncing — shown, never waited on.
     pub syncing: bool,
+    /// The most recent destructive moves, retained until this session ends.
+    pub undo: Vec<UndoEntry>,
     pub page_size: usize,
     /// Set when the list no longer matches the store and should be reloaded.
     pub dirty: bool,
@@ -185,6 +195,7 @@ impl App {
             query: String::new(),
             status: String::new(),
             syncing: false,
+            undo: Vec::new(),
             page_size: DEFAULT_PAGE,
             dirty: false,
             no_accounts: false,
@@ -511,6 +522,7 @@ impl App {
             // session; the state machine only says what was asked for.
             Action::ToggleRead
             | Action::ToggleFlagged
+            | Action::Undo
             | Action::Archive
             | Action::Delete
             | Action::Spam => Effect::None,

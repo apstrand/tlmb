@@ -287,7 +287,8 @@ fn the_default_keymap_is_the_muscle_memory_the_spec_names() {
         ("/", Action::Search),
         ("t", Action::Tag),
         ("d", Action::Delete),
-        ("s", Action::Archive),
+        ("s", Action::ToggleRead),
+        ("a", Action::Archive),
         ("m", Action::Compose),
         ("r", Action::Reply),
         ("R", Action::ReplyAll),
@@ -322,7 +323,7 @@ fn the_emacs_keymap_keeps_the_mutt_letters() {
 #[test]
 fn an_override_replaces_rather_than_adds() {
     let mut map = Keymap::vim();
-    assert_eq!(map.action("s"), Some(Action::Archive));
+    assert_eq!(map.action("s"), Some(Action::ToggleRead));
 
     let overrides = [("archive".to_string(), "e".to_string())]
         .into_iter()
@@ -330,7 +331,12 @@ fn an_override_replaces_rather_than_adds() {
     assert!(map.apply_overrides(&overrides).is_empty());
 
     assert_eq!(map.action("e"), Some(Action::Archive));
-    assert_eq!(map.action("s"), None, "the old binding should be gone");
+    assert_eq!(
+        map.action("a"),
+        None,
+        "the old archive binding should be gone"
+    );
+    assert_eq!(map.action("s"), Some(Action::ToggleRead));
 }
 
 /// A typo in `[keys]` that silently does nothing is a rebinding the user

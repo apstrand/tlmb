@@ -160,6 +160,22 @@ nav#folders {
     padding: .5rem;
 }
 
+.folder-tabs { display: flex; gap: .25rem; margin-bottom: .5rem; border-bottom: 1px solid var(--line); }
+.folder-tabs .is-selected { color: var(--accent); border-bottom: 2px solid var(--accent); }
+#folder-view details { margin: .15rem 0; }
+#folder-view summary { cursor: pointer; display: flex; justify-content: space-between; padding: .45rem .5rem; font-weight: 600; }
+#folder-view summary .summary-link { cursor: pointer; }
+#folder-view summary .count { color: var(--text-dim); font-weight: 400; }
+#folder-view details > .folder { margin-left: .65rem; width: calc(100% - .65rem); }
+#folder-view h3 { margin: 1rem .5rem .3rem; font-size: .8rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+.folder-tabs button { border-radius: var(--radius) var(--radius) 0 0; }
+.account-row { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(10rem, 1.5fr) minmax(9rem, 1fr) auto; gap: .7rem; align-items: center; padding: .6rem 0; border-bottom: 1px solid var(--line); }
+.account-row .address, .account-row .server { color: var(--text-dim); font-size: .9rem; }
+.dialog-heading { display: flex; justify-content: space-between; align-items: center; }
+#accounts-window { width: min(44rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); }
+#account-edit-form { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
+@media (max-width: 40rem) { .account-row { grid-template-columns: 1fr auto; } .account-row .address, .account-row .server { grid-column: 1; } }
+
 .folder {
     display: flex;
     justify-content: space-between;

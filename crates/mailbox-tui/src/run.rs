@@ -25,7 +25,7 @@ use mailbox_core::{Tracer, Workspace};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use crate::app::{App, Effect, SuspendedTask, Update, View};
+use crate::app::{App, Effect, SuspendedTask, UndoEntry, Update, View};
 use crate::keys::{describe_key, Action, Keymap};
 
 /// How long to wait for a key before looping anyway.
@@ -282,8 +282,20 @@ fn handle_key(
         Action::ToggleRead => Some(toggle_flag(app, opts, tracer, clock, "seen")?),
         Action::ToggleFlagged => Some(toggle_flag(app, opts, tracer, clock, "flagged")?),
         Action::Archive => Some(move_to(app, opts, tracer, clock, "archive")?),
-        Action::Delete => Some(move_to(app, opts, tracer, clock, "trash")?),
+        Action::Delete => {
+            let entry = app.current().map(|message| UndoEntry {
+                id: message.id.clone(),
+                account: message.account.clone(),
+                folder: message.folder.clone(),
+            });
+            let status = move_to(app, opts, tracer, clock, "trash")?;
+            if let Some(entry) = entry {
+                app.undo.push(entry);
+            }
+            Some(status)
+        }
         Action::Spam => Some(move_to(app, opts, tracer, clock, "junk")?),
+        Action::Undo => Some(undo_last(app, opts, tracer, clock)?),
         _ => None,
     };
     if let Some(status) = performed {
@@ -704,6 +716,7 @@ fn toggle_flag(
         .unwrap_or(false);
 
     let mut writable = opts.clone();
+    writable.account = app.current().map(|message| message.account.clone());
     writable.read_only = false;
     let mut session = Session::open(&writable, tracer.clone(), clock.clone())?;
 
@@ -737,9 +750,31 @@ fn move_to(
         return Ok(String::new());
     };
     let mut writable = opts.clone();
+    // The unified TUI can display messages from every account. Route the
+    // write through the account that owns the selected message; otherwise a
+    // special-folder lookup happens on the default account and may report
+    // that `trash` does not exist there.
+    writable.account = app.current().map(|message| message.account.clone());
     writable.read_only = false;
     let mut session = Session::open(&writable, tracer.clone(), clock.clone())?;
     let folder = session.special_folder(special_use)?;
     session.move_to(std::slice::from_ref(&target), &folder)?;
     Ok(format!("moved to {folder}"))
+}
+
+fn undo_last(
+    app: &mut App,
+    opts: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+) -> Result<String> {
+    let Some(entry) = app.undo.pop() else {
+        return Ok("nothing to undo".to_string());
+    };
+    let mut writable = opts.clone();
+    writable.account = Some(entry.account.clone());
+    writable.read_only = false;
+    let mut session = Session::open(&writable, tracer.clone(), clock.clone())?;
+    session.move_to(&[IdRef::Id(entry.id)], &entry.folder)?;
+    Ok(format!("restored to {}", entry.folder))
 }

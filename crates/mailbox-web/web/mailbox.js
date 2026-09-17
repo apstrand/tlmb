@@ -481,19 +481,7 @@ async function loadFolders() {
     try {
         const { folders } = await api("/api/folders");
         state.folderRecords = folders;
-        const nav = el("folders");
-        // The first button *is* the inbox, so listing the inbox folder beside
-        // it would be the same place named twice.
-        const rest = folders.filter((f) => f.special_use !== "inbox");
-        nav.replaceChildren(
-            folderButton("Inbox", "", folders.filter((folder) => folder.special_use === "inbox")
-                .reduce((total, folder) => total + folder.total, 0),
-                folders.filter((folder) => folder.special_use === "inbox")
-                    .reduce((total, folder) => total + folder.unread, 0), { path: "INBOX" }),
-            ...rest.map((f) =>
-                folderButton(f.name, `account:${f.account} in:${f.path.includes(" ") ? `"${f.path}"` : f.path}`,
-                    f.total, f.unread, { account: f.account, path: f.path })),
-        );
+        renderFolders();
         state.unloadedFolders = folders.some((folder) => folder.total > (folder.downloaded ?? folder.total));
         el("list-coverage").hidden = !(state.partial || state.unloadedFolders);
         el("load-more").hidden = !hostedBackend || !state.activeFolder || !folders.some((folder) =>
@@ -504,6 +492,86 @@ async function loadFolders() {
         fail(e);
     }
 }
+
+let folderLayout = "unified";
+const folderOpenState = new Map();
+const useNames = { inbox: "Inbox", sent: "Sent", drafts: "Drafts", trash: "Trash", junk: "Junk", archive: "Archive", all: "All mail", flagged: "Flagged", important: "Important" };
+
+function rememberFolderOpenState() {
+    for (const details of el("folder-view").querySelectorAll("details[data-folder-key]")) {
+        folderOpenState.set(`${folderLayout}:${details.dataset.folderKey}`, details.open);
+    }
+}
+
+function selectFolderQuery(query) {
+    el("search").value = query;
+    state.query = query;
+    state.activeFolder = undefined;
+    state.listLimit = 100;
+    run(query);
+    showPane("list");
+}
+
+function folderDetails(label, records, key, aggregateQuery) {
+    const details = document.createElement("details");
+    details.dataset.folderKey = key;
+    const remembered = folderOpenState.get(`${folderLayout}:${key}`);
+    details.open = remembered ?? folderLayout === "tree";
+    const summary = document.createElement("summary");
+    const total = records.reduce((n, f) => n + f.total, 0);
+    const unread = records.reduce((n, f) => n + f.unread, 0);
+    const labelNode = span("name", label);
+    if (aggregateQuery) {
+        labelNode.classList.add("summary-link");
+        labelNode.title = "Show this folder across all accounts";
+        labelNode.addEventListener("click", (event) => {
+            event.preventDefault(); event.stopPropagation(); selectFolderQuery(aggregateQuery);
+        });
+    }
+    summary.append(labelNode, span("count", unread ? String(unread) : String(total)));
+    details.append(summary, ...records
+        .slice().sort((a, b) => a.account.localeCompare(b.account) || a.path.localeCompare(b.path))
+        .map((f) => folderButton(`${f.account} · ${f.name}`, `account:${f.account} in:${f.path.includes(" ") ? `"${f.path}"` : f.path}`, f.total, f.unread, { account: f.account, path: f.path })));
+    return details;
+}
+
+function renderFolders() {
+    rememberFolderOpenState();
+    const view = el("folder-view");
+    const records = state.folderRecords.filter((f) => f.selectable !== false);
+    if (folderLayout === "tree") {
+        const byAccount = new Map();
+        for (const f of records) (byAccount.get(f.account) ?? byAccount.set(f.account, []).get(f.account)).push(f);
+        view.replaceChildren(...[...byAccount].sort().map(([account, fs]) => folderDetails(account, fs, `account:${account}`)));
+        return;
+    }
+    const uses = new Map(), names = new Map();
+    for (const f of records) {
+        if (f.special_use) (uses.get(f.special_use) ?? uses.set(f.special_use, []).get(f.special_use)).push(f);
+        else (names.get(f.name) ?? names.set(f.name, []).get(f.name)).push(f);
+    }
+    const used = [...uses].sort((a, b) => (useNames[a[0]] ?? a[0]).localeCompare(useNames[b[0]]));
+    const ordinary = [...names].sort((a, b) => a[0].localeCompare(b[0]));
+    const nodes = used.map(([use, fs]) => folderDetails(useNames[use] ?? use, fs, `use:${use}`, `in:${use}`));
+    if (ordinary.length) {
+        const heading = document.createElement("h3"); heading.textContent = "Other folders";
+        nodes.push(heading, ...ordinary.map(([name, fs]) => folderDetails(name, fs, `name:${name}`)));
+    }
+    view.replaceChildren(...nodes);
+}
+
+el("folders-unified").addEventListener("click", () => {
+    folderLayout = "unified";
+    el("folders-unified").classList.add("is-selected"); el("folders-tree").classList.remove("is-selected");
+    el("folders-unified").setAttribute("aria-selected", "true"); el("folders-tree").setAttribute("aria-selected", "false");
+    renderFolders();
+});
+el("folders-tree").addEventListener("click", () => {
+    folderLayout = "tree";
+    el("folders-tree").classList.add("is-selected"); el("folders-unified").classList.remove("is-selected");
+    el("folders-tree").setAttribute("aria-selected", "true"); el("folders-unified").setAttribute("aria-selected", "false");
+    renderFolders();
+});
 
 function folderButton(label, query, total = 0, unread = 0, scope) {
     const button = document.createElement("button");
@@ -526,6 +594,61 @@ function folderButton(label, query, total = 0, unread = 0, scope) {
     });
     return button;
 }
+
+// ---- accounts ----
+
+let accountRecords = [];
+async function loadAccounts() {
+    try {
+        accountRecords = (await api("/api/accounts")).accounts ?? [];
+        const list = el("account-list");
+        list.replaceChildren(...accountRecords.map((account) => {
+            const row = document.createElement("div");
+            row.className = "account-row";
+            row.append(span("name", account.id), span("address", account.address), span("server", account.imap_host));
+            const edit = document.createElement("button");
+            edit.className = "text"; edit.textContent = "Edit"; edit.disabled = !setupAllowed;
+            edit.addEventListener("click", () => openAccountEditor(account));
+            row.append(edit);
+            return row;
+        }));
+    } catch (e) { fail(e); }
+}
+
+function openAccountEditor(account) {
+    el("account-edit-id").value = account.id;
+    el("account-edit-title").textContent = `Edit ${account.id}`;
+    for (const [id, value] of [["address", account.address], ["imap-host", account.imap_host], ["imap-port", account.imap_port], ["imap-user", account.login_user], ["smtp-host", account.smtp_host], ["smtp-port", account.smtp_port], ["smtp-user", account.smtp_user]]) {
+        el(`account-edit-${id}`).value = value ?? "";
+    }
+    el("account-edit-password").value = "";
+    el("account-edit-note").textContent = account.has_credential ? "A password is stored. Leave blank to keep it." : "No password is stored.";
+    el("account-edit-form").hidden = false;
+}
+
+el("accounts").addEventListener("click", async () => {
+    el("account-edit-form").hidden = true;
+    await loadAccounts();
+    el("accounts-window").showModal();
+});
+el("accounts-close").addEventListener("click", () => el("accounts-window").close());
+el("account-edit-cancel").addEventListener("click", () => { el("account-edit-form").hidden = true; });
+el("account-edit-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const value = (id) => el(id).value.trim();
+    const spec = {
+        id: value("account-edit-id"), address: value("account-edit-address"),
+        imap_host: value("account-edit-imap-host"), imap_port: Number(value("account-edit-imap-port")),
+        imap_user: value("account-edit-imap-user"), smtp_host: value("account-edit-smtp-host"),
+        smtp_port: Number(value("account-edit-smtp-port")), smtp_user: value("account-edit-smtp-user"),
+        password: value("account-edit-password") || undefined,
+    };
+    try {
+        await api("/api/accounts/edit", { method: "POST", body: JSON.stringify(spec) });
+        el("account-edit-note").textContent = "Saved.";
+        await loadAccounts(); await loadFolders();
+    } catch (e) { el("account-edit-note").textContent = e.message; }
+});
 
 // ---- writing (§7) ----
 
@@ -878,6 +1001,7 @@ async function start() {
     el("setup").hidden = true;
     showPane(document.body.dataset.pane || "list");
     loadFolders();
+    loadAccounts();
     loadIdentities();
     reload();
 }

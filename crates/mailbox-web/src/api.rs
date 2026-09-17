@@ -67,6 +67,9 @@ pub fn handle(
         ("POST", "accounts") => {
             add_account(request, workspace, session, tracer, clock, setup_allowed)
         }
+        ("POST", "accounts/edit") => {
+            edit_account(request, workspace, session, tracer, clock, setup_allowed)
+        }
         ("POST", "accounts/test") => test_account(request, tracer, setup_allowed),
         ("GET", _) | ("POST", _) => Err(Error::not_found("route", path)),
         _ => Err(Error::usage(format!(
@@ -650,6 +653,33 @@ fn add_account(
     }
 
     Ok(Response::json(200, &serde_json::to_value(added)?))
+}
+
+fn edit_account(
+    request: &Request,
+    workspace: &Mutex<Workspace>,
+    session: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+    setup_allowed: bool,
+) -> Result<Response> {
+    if !setup_allowed {
+        return Err(off_loopback());
+    }
+    let form: SetupForm = serde_json::from_slice(&request.body)
+        .map_err(|e| Error::usage(format!("the request body is not an account: {e}")))?;
+    let id = form.id.trim().to_string();
+    if id.is_empty() {
+        return Err(Error::usage("account edit needs an `id`"));
+    }
+    let spec = form.into_spec();
+    let path = session
+        .config_path
+        .clone()
+        .unwrap_or_else(mailbox_core::paths::config_file);
+    mailbox_core::accounts::edit(&path, &id, &spec)?;
+    *workspace.lock().unwrap() = Workspace::open_or_empty(session, tracer.clone(), clock.clone())?;
+    Ok(Response::json(200, &serde_json::json!({"updated": id})))
 }
 
 /// A message body, as a document of its own, for the interface to frame.

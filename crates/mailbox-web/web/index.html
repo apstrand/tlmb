@@ -29,6 +29,7 @@
   </form>
   <button id="compose" class="text">Write</button>
   <button id="sync" class="text">Sync</button>
+  <button id="accounts" class="text">Accounts</button>
   <button id="add-account" class="text" hidden>Add account</button>
   <span id="spinner" class="spinner" hidden aria-hidden="true"></span>
 </header>
@@ -162,7 +163,13 @@
 
 <main>
   <nav id="folders" aria-label="Folders">
-    <button class="folder is-current" data-query="">Inbox</button>
+    <div class="folder-tabs" role="tablist" aria-label="Folder layout">
+      <button id="folders-unified" class="text is-selected" role="tab" aria-selected="true">Unified</button>
+      <button id="folders-tree" class="text" role="tab" aria-selected="false">Tree</button>
+    </div>
+    <div id="folder-view">
+      <button class="folder is-current" data-query="">Inbox</button>
+    </div>
   </nav>
 
   <section id="list-pane" aria-label="Messages">
@@ -176,6 +183,23 @@
     <p class="empty">No message selected</p>
   </article>
 </main>
+
+<dialog id="accounts-window" aria-label="Accounts">
+  <div class="dialog-heading"><h2>Accounts</h2><button type="button" id="accounts-close" class="text">Close</button></div>
+  <div id="account-list"></div>
+  <form id="account-edit-form" hidden>
+    <h3 id="account-edit-title">Edit account</h3>
+    <input id="account-edit-id" type="hidden">
+    <div class="field"><label for="account-edit-address">Address</label><input id="account-edit-address" type="email" required></div>
+    <div class="field"><label for="account-edit-imap-host">IMAP host</label><input id="account-edit-imap-host" required></div>
+    <div class="setup-row"><div class="field"><label for="account-edit-imap-port">Port</label><input id="account-edit-imap-port" type="number" min="1" max="65535"></div><div class="field"><label for="account-edit-imap-user">Username</label><input id="account-edit-imap-user"></div></div>
+    <div class="field"><label for="account-edit-smtp-host">SMTP host</label><input id="account-edit-smtp-host"></div>
+    <div class="setup-row"><div class="field"><label for="account-edit-smtp-port">Port</label><input id="account-edit-smtp-port" type="number" min="1" max="65535"></div><div class="field"><label for="account-edit-smtp-user">Username</label><input id="account-edit-smtp-user"></div></div>
+    <div class="field"><label for="account-edit-password">New password (optional)</label><input id="account-edit-password" type="password" autocomplete="new-password"></div>
+    <p id="account-edit-note" class="setup-note" role="status"></p>
+    <div class="setup-actions"><button type="submit" class="primary">Save</button><button type="button" id="account-edit-cancel">Cancel</button></div>
+  </form>
+</dialog>
 
 <!-- The compose window (§7). A dialog rather than a fourth pane: writing is a
      thing you finish and close, and it should not cost the message you were

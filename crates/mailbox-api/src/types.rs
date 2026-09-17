@@ -171,6 +171,11 @@ pub struct Account {
     pub login_user: String,
     pub imap_host: String,
     pub imap_port: u16,
+    pub imap_security: String,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_security: String,
+    pub smtp_user: String,
     /// Whether a credential for this account is currently resolvable.
     pub has_credential: bool,
     /// RFC3339 of the last completed sync pass, if any.
