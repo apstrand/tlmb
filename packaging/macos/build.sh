@@ -30,7 +30,10 @@
 #                            builds unsigned — fine here, useless to ship.
 #   APPLE_API_KEY            App Store Connect key id, for notarization
 #   APPLE_API_ISSUER         its issuer UUID
-#   APPLE_API_KEY_PATH       the .p8 holding it
+#   APPLE_API_KEY_BASE64     base64 of the .p8 holding it — the form a CI
+#                            secret can be, and what the release workflow sets
+#   APPLE_API_KEY_PATH       the .p8 itself, if you have it on disk; takes
+#                            precedence over APPLE_API_KEY_BASE64
 #   MAILBOX_MACOS_GITHUB     owner/repo the release is created in
 #   MAILBOX_GOOGLE_CLIENT_ID …  OAuth2 client credentials, compiled in exactly
 #                            as a `cargo build` would (README, "Building")
@@ -78,6 +81,27 @@ dmg_path="$work/Mailbox-$version-universal.dmg"
 zip_path="$work/Mailbox-$version-universal.zip"
 
 identity="${APPLE_SIGNING_IDENTITY:-}"
+
+# notarytool reads the key from a file, and a secret is a string. So the
+# base64 form becomes a file here rather than in the caller: one place that
+# knows it is a key, mode 600 before anything is written to it, under TMPDIR
+# instead of the work directory so it is never in the tree being built, and
+# removed however this exits.
+key_file=""
+remove_key_file() { [[ -n $key_file ]] && rm -f "$key_file"; return 0; }
+trap remove_key_file EXIT
+
+if [[ -z ${APPLE_API_KEY_PATH:-} && -n ${APPLE_API_KEY_BASE64:-} ]]; then
+    key_file="$(mktemp "${TMPDIR:-/tmp}/mailbox-authkey.XXXXXXXX")"
+    chmod 600 "$key_file"
+    # -D, not --decode: the long option is recent, and this is the one every
+    # macOS has had.
+    base64 -D <<<"$APPLE_API_KEY_BASE64" >"$key_file" \
+        || fail "APPLE_API_KEY_BASE64 is not base64"
+    [[ -s $key_file ]] || fail "APPLE_API_KEY_BASE64 decoded to nothing"
+    export APPLE_API_KEY_PATH="$key_file"
+fi
+
 notarize=0
 if [[ -n ${APPLE_API_KEY:-} && -n ${APPLE_API_ISSUER:-} && -n ${APPLE_API_KEY_PATH:-} ]]; then
     notarize=1
@@ -95,7 +119,7 @@ fi
 if [[ $notarize == 1 ]]; then
     [[ -f ${APPLE_API_KEY_PATH} ]] || fail "APPLE_API_KEY_PATH is not a file: $APPLE_API_KEY_PATH"
 elif [[ $release == 1 ]]; then
-    fail "a release needs APPLE_API_KEY, APPLE_API_ISSUER and APPLE_API_KEY_PATH to notarize"
+    fail "a release needs APPLE_API_KEY, APPLE_API_ISSUER and one of APPLE_API_KEY_BASE64 or APPLE_API_KEY_PATH to notarize"
 elif [[ -n $identity ]]; then
     echo "warning: signing without notarizing — a downloaded build still gets a Gatekeeper warning"
 fi
