@@ -7,7 +7,7 @@
 #   mailbox-e2e sync         rsync this checkout and the mailbox binary in
 #   mailbox-e2e seed NAME    fill the guest store (inbox, html-images, large, …)
 #   mailbox-e2e run UI [NAME]
-#                            tui | web | gui | folders | compose | isolation | all
+#                            tui | web | gui | folders | guide | compose | isolation | all
 #   mailbox-e2e check UI [NAME]
 #                            the whole thing in one line: start the VM if it is
 #                            off, sync, run, collect video, logs and shots
@@ -572,15 +572,16 @@ cmd_run() {
     run_one gui inbox
     run_one gui html-images
     run_one folders inbox
+    run_one guide inbox
     run_one compose inbox
     run_one isolation html-images
     run_one tui large
     ;;
-  tui | web | gui | folders | compose | isolation)
+  tui | web | gui | folders | guide | compose | isolation)
     run_one "$ui" "$scenario"
     ;;
   *)
-    die "usage: mailbox-e2e run [--video] tui|web|gui|folders|compose|isolation|all [scenario]"
+    die "usage: mailbox-e2e run [--video] tui|web|gui|folders|guide|compose|isolation|all [scenario]"
     ;;
   esac
 

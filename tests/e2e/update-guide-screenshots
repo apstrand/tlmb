@@ -1,0 +1,14 @@
+#!/bin/bash
+# Copy the five screenshots from a passing `mailbox-e2e check guide` into docs.
+set -euo pipefail
+HERE=$(cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
+ROOT=$(cd -- "$HERE/../.." && pwd)
+source_dir=${1:?usage: update-guide-screenshots tests/e2e/out/TIMESTAMP}
+dest="$ROOT/docs/images"
+mkdir -p "$dest"
+for name in setup inbox folders compose shortcuts; do
+  source="$source_dir/guide-$name.png"
+  [[ -s $source ]] || { echo "missing $source" >&2; exit 1; }
+  cp "$source" "$dest/$name.png"
+done
+echo "updated $dest"

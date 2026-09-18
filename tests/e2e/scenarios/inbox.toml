@@ -8,6 +8,14 @@ special_use = "inbox"
 path = "Archive"
 special_use = "archive"
 
+[[folder]]
+path = "Trash"
+special_use = "trash"
+
+[[folder]]
+path = "Junk"
+special_use = "junk"
+
 [[message]]
 name = "invoice"
 folder = "INBOX"

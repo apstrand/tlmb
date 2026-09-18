@@ -20,7 +20,7 @@ it is off, syncs the checkout and the binary, seeds, records, runs, and leaves
 video, screenshots and logs in one directory:
 
 ```sh
-tests/e2e/mailbox-e2e check folders        # or tui | web | gui | compose | …
+tests/e2e/mailbox-e2e check folders        # or tui | web | gui | guide | compose | …
 tests/e2e/mailbox-e2e check tui large
 ```
 
@@ -101,7 +101,7 @@ dumps, guest logs under `logs/`, and — from `check`, or `run --video` — an
 | `isolate` | Nic onto `mailbox-e2e` (no WAN). VM must be off |
 | `sync` | rsync the checkout and copy `target/{release,debug}/mailbox` |
 | `seed NAME` | `inbox`, `html-images`, `attachments`, `thread`, `large`, `imap` |
-| `run UI [NAME]` | `tui`, `web`, `gui`, `folders`, `compose`, `isolation`, or `all` |
+| `run UI [NAME]` | `tui`, `web`, `gui`, `folders`, `guide`, `compose`, `isolation`, or `all` |
 | `check UI [NAME]` | The lot in one line: start, sync, record, run, collect |
 | `--video` / `--no-video` | On `run` or `check`: record the compositor, or do not |
 | `shot NAME` | Guest grim, else `virsh screenshot` |
@@ -147,8 +147,8 @@ guest/cdp.py          the DevTools client the drivers import
 mailbox-e2e ssh "bash mailbox/tests/e2e/guest/tests/folders.sh inbox"
 ```
 
-`folders` is the one that clicks. The others photograph a mailbox; this one
-drives the served page through Chromium's debugger (`guest/cdp.py`, stdlib
+`folders` is the layout-focused browser scenario. It drives the served page
+through Chromium's debugger (`guest/cdp.py`, stdlib
 only — the guest has no pip after `isolate`) and checks §7 behaviour a
 screenshot cannot show:
 
@@ -156,6 +156,12 @@ screenshot cannot show:
   hover, and the count follows a message being read and marked unread again;
 - on a phone-shaped viewport the panes are a stack — folders → list → reader —
   that the back arrow walks up, which is how the folder list is reached at all.
+
+`guide` drives and photographs every state used by `docs/USER-GUIDE.md`:
+first-run setup, reading, folders, compose, and shortcut help. It also executes
+the documented read toggle, archive, trash, and spam actions and checks the
+result through the HTTP API. After a passing run, refresh the checked-in images
+with `tests/e2e/update-guide-screenshots PATH-TO-EVIDENCE`.
 
 Every click is a real mouse event at the control's rendered position, because
 the bug it was written for was an arrow that was visible and did nothing.

@@ -40,7 +40,7 @@ RECORDING=no
 # the failure is the one worth keeping.
 start_recording() {
   [[ ${MAILBOX_E2E_VIDEO:-0} == 1 ]] || return 0
-  case "$UI" in tui | gui | folders | isolation) ;; *) return 0 ;; esac
+  case "$UI" in tui | gui | folders | guide | isolation) ;; *) return 0 ;; esac
   "$HERE/compositor.sh" >/dev/null 2>&1 || return 0
   # shellcheck disable=SC1091
   source "$HERE/session-env.sh"

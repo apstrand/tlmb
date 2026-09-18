@@ -268,6 +268,39 @@ class Browser:
             raise BrowserError(f"no {selector} reads {text!r}")
         self.click("[data-cdp-target]", settle=settle)
 
+    def fill(self, selector, value, settle=0.2):
+        """Replace a form control's value using the browser's input path."""
+        self.click(selector, settle=0)
+        self.call(
+            "Input.dispatchKeyEvent",
+            type="keyDown",
+            key="a",
+            code="KeyA",
+            modifiers=2,  # Ctrl
+        )
+        self.call(
+            "Input.dispatchKeyEvent",
+            type="keyUp",
+            key="a",
+            code="KeyA",
+            modifiers=2,
+        )
+        self.call("Input.insertText", text=value)
+        time.sleep(settle)
+
+    def key(self, key, code=None, modifiers=0, settle=0.4):
+        """Press one key through Chrome's normal keyboard event path."""
+        code = code or (f"Key{key.upper()}" if len(key) == 1 else key)
+        for kind in ("keyDown", "keyUp"):
+            self.call(
+                "Input.dispatchKeyEvent",
+                type=kind,
+                key=key,
+                code=code,
+                modifiers=modifiers,
+            )
+        time.sleep(settle)
+
     def viewport(self, width, height, mobile=False):
         """Resize the page the way a phone would, media queries and all."""
         self.call(

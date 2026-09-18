@@ -5,6 +5,10 @@ Read, search, organize, and send mail from a desktop window, a browser, or the
 terminal. It supports multiple accounts, a unified inbox, conversation threads,
 attachments, and offline access to cached mail.
 
+See the [short user guide](docs/USER-GUIDE.md) for the graphical interface and
+the [technical guide](docs/TECHNICAL-GUIDE.md) for architecture, mail flows,
+tradeoffs, and the security model.
+
 ## Build
 
 You need Rust 1.90 or newer, Cargo, and a C/C++ build toolchain. The desktop
