@@ -127,8 +127,13 @@ if [[ $release == 1 ]]; then
     if [[ $dry_run == 0 ]]; then
         [[ $revision != *-dirty ]] || fail "the working tree has uncommitted changes"
         command -v gh >/dev/null || fail "needs the GitHub CLI (gh) to create the release"
-        if gh release view "$tag" -R "$github" >/dev/null 2>&1; then
-            fail "$github already has a release $tag — bump the version in Cargo.toml"
+        # The macOS release runs on the same tag and the two share one GitHub
+        # release, so an existing $tag is expected. What must not happen twice
+        # is this version's own bundle, which is what says a version was
+        # released and never quietly rebuilt.
+        if gh release view "$tag" -R "$github" --json assets --jq '.assets[].name' 2>/dev/null \
+            | grep -qx "tlmb-$version.flatpak"; then
+            fail "$github's release $tag already has tlmb-$version.flatpak — bump the version in Cargo.toml"
         fi
     fi
 fi
@@ -310,6 +315,7 @@ A real run would now:
   rsync -a --delete --exclude='/repo/tmp/' $stage/ $publish/
   gh release create $tag -R $github --target $(git -C "$root" rev-parse HEAD) \\
       $bundle $stage/tlmb.flatpakref
+  (or, if the macOS release already made $tag, upload them into it)
 EOF
     exit 0
 fi
@@ -322,11 +328,16 @@ rsync -a --exclude='/repo/tmp/' --exclude='/repo/summary*' "$stage/" "$publish/"
 rsync -a "$stage"/repo/summary* "$publish/repo/"
 rsync -a --delete --exclude='/repo/tmp/' "$stage/" "$publish/"
 
-echo "creating release $tag"
-gh release create "$tag" -R "$github" \
-    --target "$(git -C "$root" rev-parse HEAD)" \
-    --title "tlmb $version" \
-    --notes "$notes" \
-    "$bundle" "$stage/tlmb.flatpakref"
+if gh release view "$tag" -R "$github" >/dev/null 2>&1; then
+    echo "adding the Linux assets to release $tag"
+    gh release upload "$tag" -R "$github" --clobber "$bundle" "$stage/tlmb.flatpakref"
+else
+    echo "creating release $tag"
+    gh release create "$tag" -R "$github" \
+        --target "$(git -C "$root" rev-parse HEAD)" \
+        --title "tlmb $version" \
+        --notes "$notes" \
+        "$bundle" "$stage/tlmb.flatpakref"
+fi
 
 echo "released $tag: $site/tlmb.flatpakref"

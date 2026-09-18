@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The bundle's manifest, filled in by build.sh beside this file: __VERSION__
+  becomes the version in Cargo.toml.
+
+  CFBundleExecutable is the `mailbox` binary itself rather than a launcher
+  script — a shell script cannot be the main executable of a hardened-runtime
+  app, and notarization requires one. Started from Finder the binary has no
+  subcommand, which main.rs reads as `mailbox gui` when it sees it is running
+  from inside a bundle.
+
+  Nothing here exempts the loopback server from App Transport Security,
+  because ATS does not cover a URL whose host is an IP address, and the
+  window's is always 127.0.0.1 (mailbox-web's `Server::url`).
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Mailbox</string>
+	<key>CFBundleDisplayName</key>
+	<string>Mailbox</string>
+	<key>CFBundleExecutable</key>
+	<string>mailbox</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.thelastmailbox.mailbox</string>
+	<key>CFBundleIconFile</key>
+	<string>mailbox</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<!-- Tauri 2's floor, and WKWebView's. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>10.15</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>MIT OR Apache-2.0</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+</dict>
+</plist>

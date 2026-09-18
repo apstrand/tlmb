@@ -33,7 +33,7 @@ use cli::{Cli, Command};
 use output::Out;
 
 fn main() -> ExitCode {
-    let cli = match Cli::try_parse() {
+    let cli = match Cli::try_parse_from(argv()) {
         Ok(c) => c,
         Err(e) => return usage_exit(e),
     };
@@ -46,6 +46,52 @@ fn main() -> ExitCode {
             ExitCode::from(err.exit_code() as u8)
         }
     }
+}
+
+/// The command line to parse.
+///
+/// On every platform this is the process's own arguments. Inside a macOS
+/// `.app` it is those plus a subcommand, because there is nowhere in a bundle
+/// to put one: `Info.plist` names an executable, not a command, and Finder
+/// starts it bare. The bundle *is* the desktop app, so a bare start there
+/// means `mailbox gui` — while the same binary on a terminal's `PATH` still
+/// has to be told, since `mailbox` alone is a usage error (§6.6).
+#[cfg(target_os = "macos")]
+fn argv() -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // LaunchServices passes a process serial number on some launch paths.
+    // It is addressed to the framework, which is not reading argv here, and
+    // clap would only reject it.
+    args.retain(|a| !a.as_encoded_bytes().starts_with(b"-psn_"));
+    if args.len() <= 1 && std::env::current_exe().is_ok_and(|exe| in_app_bundle(&exe)) {
+        args.push("gui".into());
+    }
+    args
+}
+
+#[cfg(not(target_os = "macos"))]
+fn argv() -> Vec<std::ffi::OsString> {
+    std::env::args_os().collect()
+}
+
+/// Whether this executable is the one inside `Something.app/Contents/MacOS`.
+///
+/// Kept separate from [`argv`] because the shape of the path is the whole
+/// rule, and compiled under `test` on every platform so that rule has a test
+/// everywhere rather than only where it runs.
+#[cfg(any(target_os = "macos", test))]
+fn in_app_bundle(exe: &std::path::Path) -> bool {
+    let Some(macos) = exe.parent() else {
+        return false;
+    };
+    let Some(contents) = macos.parent() else {
+        return false;
+    };
+    macos.file_name().is_some_and(|n| n == "MacOS")
+        && contents.file_name().is_some_and(|n| n == "Contents")
+        && contents
+            .parent()
+            .is_some_and(|bundle| bundle.extension().is_some_and(|e| e == "app"))
 }
 
 /// clap's own errors are usage errors (§6.6 exit code 2), except `--help` and
@@ -224,4 +270,30 @@ fn build_tracer(cli: &Cli, clock: &Clock) -> mailbox_core::Result<Tracer> {
         cli.global.trace_bodies,
         until,
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_app_bundle;
+    use std::path::Path;
+
+    #[test]
+    fn only_the_executable_inside_a_bundle_counts_as_one() {
+        assert!(in_app_bundle(Path::new(
+            "/Applications/Mailbox.app/Contents/MacOS/mailbox"
+        )));
+
+        for elsewhere in [
+            "/usr/local/bin/mailbox",
+            "/Applications/Mailbox.app/Contents/Resources/mailbox",
+            // A directory named after the bundle is not the bundle.
+            "/Applications/Mailbox/Contents/MacOS/mailbox",
+            "mailbox",
+        ] {
+            assert!(
+                !in_app_bundle(Path::new(elsewhere)),
+                "{elsewhere} is not a bundled executable"
+            );
+        }
+    }
 }

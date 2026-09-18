@@ -33,6 +33,24 @@ flatpak install flathub org.flatpak.Builder
 packaging/flatpak/build.sh --run
 ```
 
+For a macOS app bundle:
+
+```sh
+packaging/macos/build.sh --run
+```
+
+That builds a universal `Mailbox.app` — Apple silicon and Intel — and copies
+it to `/Applications`. It is unsigned unless `APPLE_SIGNING_IDENTITY` names a
+Developer ID in your keychain, which is fine for a build you run yourself and
+not enough for one you hand to someone else; `packaging/macos/build.sh --help`
+lists what signing and notarizing a release needs. The binary inside the
+bundle is the whole `mailbox` command, so the terminal commands below are a
+symlink away:
+
+```sh
+ln -s /Applications/Mailbox.app/Contents/MacOS/mailbox /usr/local/bin/mailbox
+```
+
 For the native iOS app, see [ios/README.md](ios/README.md).
 
 ## Add an account
