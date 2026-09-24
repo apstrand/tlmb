@@ -411,11 +411,12 @@ async function flag(value) {
     // sync until the next one.
     const record = result.messages?.find((message) => message.changed);
     const delta = value.add?.includes("seen") ? -1 : value.remove?.includes("seen") ? 1 : 0;
-    if (record?.folder && delta && value.account) {
+    const messageFolder = record?.folder ?? value.folder;
+    if (messageFolder && delta && value.account) {
         const settings = await loadSettings();
         const remote = settings.remoteFolders?.[value.account];
         if (remote) {
-            const updated = remote.map((folder) => folder.path === record.folder
+            const updated = remote.map((folder) => folder.path === messageFolder
                 ? { ...folder, unread: Math.max(0, folder.unread + delta) }
                 : folder);
             await saveSettings({ ...settings, remoteFolders: {

@@ -230,7 +230,7 @@ function startReadDwell(message, seq) {
         if (seq !== state.openSeq) return;
         try {
             await post("/api/flag", { ids: [message.id], add: ["seen"],
-                account: message.account });
+                account: message.account, folder: message.folder });
             // The row, not the whole listing: reloading here would move things
             // under someone who is in the middle of reading.
             message.flags = [...message.flags, "seen"];
