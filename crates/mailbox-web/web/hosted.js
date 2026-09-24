@@ -482,7 +482,7 @@ async function add(spec) {
     if (Object.hasOwn(old.config.accounts ?? {}, account.id)) {
         throw new Error(`Account '${account.id}' already exists; choose a different account ID.`);
     }
-    await saveCredential(account.id, spec.password);
+    await saveCredential(account.id, spec.oauth_provider ? `oauth2:${spec.password}` : spec.password);
     await saveSettings({ ...await loadSettings(), config });
     return {
         id: account.id,

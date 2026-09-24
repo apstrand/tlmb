@@ -1185,6 +1185,48 @@ el("setup-same-user").addEventListener("change", () => {
     el("setup-smtp-user-field").hidden = el("setup-same-user").checked;
 });
 
+const oauthProviders = {
+    google: { auth: "https://accounts.google.com/o/oauth2/v2/auth", token: "https://oauth2.googleapis.com/token", scope: "https://mail.google.com/" },
+    microsoft: { auth: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize", token: "https://login.microsoftonline.com/common/oauth2/v2.0/token", scope: "offline_access https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send" },
+    yahoo: { auth: "https://api.login.yahoo.com/oauth2/request_auth", token: "https://api.login.yahoo.com/oauth2/get_token", scope: "mail-w" },
+};
+function base64url(bytes) { let s = ""; for (const byte of bytes) s += String.fromCharCode(byte); return btoa(s).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
+async function startOAuth() {
+    const client = el("setup-oauth-client").value.trim();
+    const provider = oauthProviders[el("setup-oauth-provider").value];
+    if (!client) { el("setup-oauth-note").textContent = "Enter the OAuth client ID first."; return; }
+    const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+    const challenge = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+    const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
+    const redirect = `${location.origin}${location.pathname}`;
+    sessionStorage.setItem("mailbox-oauth", JSON.stringify({ verifier, state, provider: el("setup-oauth-provider").value, client, redirect }));
+    const url = new URL(provider.auth);
+    url.search = new URLSearchParams({ response_type: "code", client_id: client, redirect_uri: redirect, scope: provider.scope, code_challenge: challenge, code_challenge_method: "S256", state, access_type: "offline", prompt: "consent" });
+    location.assign(url);
+}
+async function finishOAuth() {
+    const params = new URLSearchParams(location.search), pending = JSON.parse(sessionStorage.getItem("mailbox-oauth") || "null");
+    if (!pending || !params.get("code")) return;
+    sessionStorage.removeItem("mailbox-oauth"); history.replaceState({}, "", location.pathname);
+    if (params.get("state") !== pending.state) throw new Error("OAuth state did not match; sign-in was cancelled.");
+    const provider = oauthProviders[pending.provider];
+    const response = await fetch(provider.token, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code: params.get("code"), client_id: pending.client, redirect_uri: pending.redirect, code_verifier: pending.verifier }) });
+    const result = await response.json();
+    if (!response.ok || !result.access_token) throw new Error(result.error_description || result.error || "OAuth token exchange failed.");
+    el("setup-auth").value = "oauth"; el("setup-auth").dispatchEvent(new Event("change"));
+    el("setup-oauth-provider").value = pending.provider; el("setup-oauth-client").value = pending.client;
+    el("setup-password").value = result.access_token;
+    el("setup-oauth-note").textContent = "Signed in. Add the account to finish setup.";
+}
+el("setup-auth").addEventListener("change", () => {
+    const oauth = el("setup-auth").value === "oauth";
+    el("setup-oauth-fields").hidden = !oauth;
+    el("setup-password").required = !oauth;
+    el("setup-password").closest(".setup-field").querySelector("label").textContent = oauth ? "Access token" : "Password";
+});
+el("setup-oauth-login").addEventListener("click", () => startOAuth().catch(setupError));
+finishOAuth().catch(setupError);
+
 // ---- testing, and adding ----
 
 /// The account as the fields currently describe it.
@@ -1210,6 +1252,8 @@ function accountFromForm() {
         smtp_port: port("setup-smtp-port", 587),
         smtp_user: el("setup-same-user").checked ? user : value("setup-smtp-user"),
         smtp_security: security.smtp,
+        oauth_provider: el("setup-auth").value === "oauth" ? el("setup-oauth-provider").value : undefined,
+        oauth_client_id: el("setup-auth").value === "oauth" ? value("setup-oauth-client") : undefined,
     };
 }
 

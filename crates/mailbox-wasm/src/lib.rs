@@ -361,13 +361,19 @@ impl HostedMailbox {
         let mut sessions = Vec::new();
         let mut stores = BTreeMap::new();
         for account_id in config.accounts.keys() {
-            if let Some(password) = credentials
+            if let Some(credential) = credentials
                 .get(account_id)
                 .filter(|value| !value.is_empty())
             {
+                let value = credential.strip_prefix("oauth2:").unwrap_or(credential);
+                let kind = if credential.starts_with("oauth2:") {
+                    mailbox_core::imap::Credential::OAuth2(value.to_string())
+                } else {
+                    mailbox_core::imap::Credential::Password(value.to_string())
+                };
                 mailbox_core::credentials::install(
                     account_id,
-                    mailbox_core::imap::Credential::Password(password.clone()),
+                    kind,
                 );
             }
             let (database, files) =
@@ -559,11 +565,17 @@ pub fn test_account(args_json: &str) -> Result<String, JsError> {
         .clone()
         .filter(|value| !value.is_empty())
         .ok_or_else(|| JsError::new("an account test needs a password"))?;
+    let oauth = input.oauth_provider.is_some();
     let (id, account, _) = mailbox_core::accounts::prepare(&input.into()).map_err(js_error)?;
+    let credential = if oauth {
+        mailbox_core::imap::Credential::OAuth2(password)
+    } else {
+        mailbox_core::imap::Credential::Password(password)
+    };
     let verified = mailbox_core::accounts::verify(
         &id,
         &account,
-        &mailbox_core::imap::Credential::Password(password),
+        &credential,
         Tracer::disabled(),
         std::time::Duration::from_secs(30),
     )
@@ -595,6 +607,8 @@ struct HostedAccountInput {
     smtp_user: Option<String>,
     password: Option<String>,
     require_tls: Option<bool>,
+    oauth_provider: Option<String>,
+    oauth_client_id: Option<String>,
 }
 
 impl From<HostedAccountInput> for mailbox_core::accounts::NewAccount {
@@ -612,6 +626,8 @@ impl From<HostedAccountInput> for mailbox_core::accounts::NewAccount {
             smtp_user: input.smtp_user,
             password: input.password,
             require_tls: input.require_tls,
+            oauth_provider: input.oauth_provider,
+            oauth_client_id: input.oauth_client_id,
             ..Default::default()
         }
     }

@@ -64,6 +64,17 @@
         <input id="setup-password" name="password" type="password"
                autocomplete="current-password" required>
       </div>
+      <div class="setup-field">
+        <label for="setup-auth">Authentication</label>
+        <select id="setup-auth"><option value="password">Password</option><option value="oauth">OAuth sign-in</option></select>
+      </div>
+      <div id="setup-oauth-fields" hidden>
+        <div class="setup-field"><label for="setup-oauth-provider">Provider</label>
+          <select id="setup-oauth-provider"><option value="google">Google</option><option value="microsoft">Microsoft</option><option value="yahoo">Yahoo</option></select></div>
+        <div class="setup-field"><label for="setup-oauth-client">OAuth client ID</label><input id="setup-oauth-client" spellcheck="false" autocomplete="off"></div>
+        <button type="button" id="setup-oauth-login">Sign in with provider</button>
+        <span id="setup-oauth-note" class="setup-note">The provider redirect must be registered for this site.</span>
+      </div>
 
       <div class="setup-field">
         <label for="setup-id">Account name (optional)</label>
