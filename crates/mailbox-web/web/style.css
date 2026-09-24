@@ -173,6 +173,10 @@ nav#folders {
 .account-row .address, .account-row .server { color: var(--text-dim); font-size: .9rem; }
 .dialog-heading { display: flex; justify-content: space-between; align-items: center; }
 #accounts-window { width: min(44rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); }
+#help-window { width: min(28rem, calc(100vw - 2rem)); }
+.shortcut-list { display: grid; grid-template-columns: 6rem 1fr; gap: .45rem .8rem; margin: 1rem 0 0; }
+.shortcut-list dt { font-family: ui-monospace, monospace; color: var(--accent); }
+.shortcut-list dd { margin: 0; }
 #account-edit-form { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
 @media (max-width: 40rem) { .account-row { grid-template-columns: 1fr auto; } .account-row .address, .account-row .server { grid-column: 1; } }
 

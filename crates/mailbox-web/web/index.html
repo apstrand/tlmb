@@ -30,6 +30,7 @@
   <button id="compose" class="text">Write</button>
   <button id="sync" class="text">Sync</button>
   <button id="accounts" class="text">Accounts</button>
+  <button id="help" class="text" aria-label="Help">Help</button>
   <button id="add-account" class="text" hidden>Add account</button>
   <span id="spinner" class="spinner" hidden aria-hidden="true"></span>
 </header>
@@ -210,6 +211,16 @@
     <p id="account-edit-note" class="setup-note" role="status"></p>
     <div class="setup-actions"><button type="submit" class="primary">Save</button><button type="button" id="account-edit-cancel">Cancel</button></div>
   </form>
+</dialog>
+
+<dialog id="help-window" aria-label="Keyboard help">
+  <div class="dialog-heading"><h2>Keyboard shortcuts</h2><button type="button" id="help-close" class="text">Close</button></div>
+  <dl class="shortcut-list">
+    <dt>j / ↓</dt><dd>Next message</dd><dt>k / ↑</dt><dd>Previous message</dd>
+    <dt>Enter</dt><dd>Open message</dd><dt>s</dt><dd>Archive</dd><dt>d</dt><dd>Move to trash</dd>
+    <dt>u</dt><dd>Toggle read</dd><dt>f</dt><dd>Toggle flag</dd><dt>r / R</dt><dd>Reply / reply all</dd>
+    <dt>m</dt><dd>Write message</dd><dt>g</dt><dd>Sync</dd><dt>?</dt><dd>Show this help</dd>
+  </dl>
 </dialog>
 
 <!-- The compose window (§7). A dialog rather than a fourth pane: writing is a

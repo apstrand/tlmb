@@ -787,7 +787,11 @@ const keys = {
     // Sync has a button; `g` is the convenience, and `r` belongs to reply
     // the way it does in the terminal.
     g: () => syncNow(),
+    "?": () => { if (!el("help-window").open) el("help-window").showModal(); },
 };
+
+el("help").addEventListener("click", () => el("help-window").showModal());
+el("help-close").addEventListener("click", () => el("help-window").close());
 
 function move(delta) {
     const at = state.messages.findIndex((m) => m.id === state.selected?.id);
