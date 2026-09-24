@@ -2,6 +2,7 @@
 //! renders — nothing here decides behaviour.
 
 use mailbox_api::{BodyFormat, MessageList, ShowResult, ThreadList};
+use mailbox_core::build;
 use mailbox_core::clock::Clock;
 use mailbox_core::error::{Error, Result};
 use mailbox_core::history::History;
@@ -1690,6 +1691,10 @@ pub fn status(ctx: &Ctx<'_>) -> Result<()> {
         ctx.out.reply("status", &status)?;
         return Ok(());
     }
+    // Which build produced this answer. `status` is the command a bug report
+    // is pasted from, and the version is half of what makes one actionable.
+    ctx.out
+        .print(ctx.out.dim(&format!("mailbox {}", build::INFO.short())));
     for a in &status.accounts {
         ctx.out.print(format!(
             "{} ({})\n  {} messages, {} unread, {} folders\n  last sync: {}\n  store: {}",

@@ -19,10 +19,25 @@ pub(crate) const SCRIPT: &str = include_str!("../web/mailbox.js");
 pub const UNAUTHORIZED: &str = include_str!("../web/unauthorized.html");
 
 pub(crate) fn index(token: &str, setup_allowed: bool, backend: &str) -> String {
+    let build = mailbox_core::build::INFO;
     INDEX
         .replace("{{TOKEN}}", token)
         .replace("{{SETUP}}", if setup_allowed { "1" } else { "" })
         .replace("{{BACKEND}}", backend)
+        // Which build served this page (§4). Escaped like anything else put
+        // into an attribute: these come from `Cargo.toml` and from git, so
+        // they are not a visitor's doing, but "it cannot contain a quote" is
+        // exactly the assumption that stops being true later.
+        .replace("{{VERSION}}", &attr(&build.short()))
+        .replace("{{BUILD}}", &attr(&format!("mailbox {}", build.long())))
+}
+
+/// Text made safe for a double-quoted HTML attribute.
+fn attr(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 pub fn serve(path: &str, token: Option<&str>, setup_allowed: bool) -> Response {
@@ -87,6 +102,38 @@ mod tests {
         assert!(
             js.contains("multi-account"),
             "§7's per-account colour has nowhere to land"
+        );
+    }
+
+    /// A screenshot of the window should say which build it is, so the page
+    /// carries the stamp rather than making someone ask the binary.
+    #[test]
+    fn the_page_says_which_build_served_it() {
+        let page = super::index("t", true, "http");
+        let build = mailbox_core::build::INFO;
+        assert!(!page.contains("{{VERSION}}"), "version left unsubstituted");
+        assert!(!page.contains("{{BUILD}}"), "build left unsubstituted");
+        assert!(
+            page.contains(&format!(r#"data-version="{}""#, build.short())),
+            "no version in the page config"
+        );
+        assert!(
+            page.contains(build.version),
+            "the page does not name the version"
+        );
+        // The bar is where it is shown, and the script is what puts it there.
+        assert!(super::INDEX.contains(r#"id="version""#));
+        assert!(super::SCRIPT.contains("dataset.version"));
+    }
+
+    /// Nothing in the stamp may close the attribute it is written into. The
+    /// values come from `Cargo.toml` and git today; the escaping is what
+    /// keeps that from being load-bearing.
+    #[test]
+    fn the_build_stamp_is_escaped_into_its_attribute() {
+        assert_eq!(
+            super::attr(r#"a "b" <c> & d"#),
+            "a &quot;b&quot; &lt;c&gt; &amp; d"
         );
     }
 

@@ -18,7 +18,8 @@
 <!-- Read by the module below. A `data-` attribute rather than an inline
      script, so the page's policy needs no `unsafe-inline` for scripts. -->
 <div id="config" data-token="{{TOKEN}}" data-setup="{{SETUP}}"
-     data-backend="{{BACKEND}}" hidden></div>
+     data-backend="{{BACKEND}}" data-version="{{VERSION}}"
+     data-build="{{BUILD}}" hidden></div>
 
 <header class="bar">
   <button id="back" class="icon" aria-label="Back to the list" hidden>&#8592;</button>
@@ -270,6 +271,10 @@
     <button type="button" id="update-action" hidden></button>
   </span>
   <span id="host"></span>
+  <!-- Which build this is. Filled from the page config; the full detail —
+       commit, date, tag — is the tooltip, since the bar has room for one
+       line and a bug report needs the rest. -->
+  <span id="version" title=""></span>
 </footer>
 
 <script type="module" src="mailbox.js"></script>

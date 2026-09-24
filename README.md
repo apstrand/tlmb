@@ -30,6 +30,13 @@ The executable is `target/release/mailbox` (`mailbox.exe` on Windows). Add its
 directory to your `PATH` to use the commands below. SQLite is included; no
 separate database server is needed.
 
+Builds stamp in the commit they came from, which `mailbox --version` prints and
+the status bar shows. That comes from `git` in the source tree; a build from a
+tarball has none, so a packager can supply it instead through
+`MAILBOX_BUILD_COMMIT`, `MAILBOX_BUILD_COMMIT_DATE` and `MAILBOX_BUILD_TAG`.
+Set `MAILBOX_BUILD_RELEASE=1` to mark a build as an official release — the
+packaging scripts below do this for you.
+
 For a Linux Flatpak build:
 
 ```sh

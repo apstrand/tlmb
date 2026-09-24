@@ -45,7 +45,12 @@ modules:
     build-commands:
       # OAuth2 client credentials are compiled in when the environment has
       # them (README, "Building"); `build.sh` writes whatever it was given.
-      - set -a && . ./oauth.env && set +a && cargo build --release --locked --offline -p mailbox-cli
+      #
+      # `build.env` carries the commit this was built from. `.git` is skipped
+      # from the source below and the sandbox has no git anyway, so the host
+      # has to answer that question before the build starts — otherwise every
+      # Flatpak reports a version and no commit.
+      - set -a && . ./oauth.env && . ./build.env && set +a && cargo build --release --locked --offline -p mailbox-cli
       - install -Dm755 target/release/mailbox /app/libexec/mailbox
       - install -Dm755 packaging/flatpak/mailbox.sh /app/bin/mailbox
       - install -Dm755 packaging/flatpak/mailbox-desktop.sh /app/bin/mailbox-desktop
@@ -73,3 +78,5 @@ modules:
         dest-filename: config.toml
       - type: file
         path: .build/oauth.env
+      - type: file
+        path: .build/build.env

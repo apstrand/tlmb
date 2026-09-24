@@ -8,6 +8,7 @@
 pub mod accounts;
 pub mod attach;
 pub mod bench;
+pub mod build;
 pub mod clipboard;
 pub mod clock;
 pub mod compose;

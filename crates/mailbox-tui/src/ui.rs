@@ -5,6 +5,7 @@
 //! second copy of the truth to drift.
 
 use mailbox_api::MessageSummary;
+use mailbox_core::build;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -451,7 +452,20 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, keymap: &Keymap) {
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" keys — any key to close "),
+                .title(" keys — any key to close ")
+                // Which build this is. On the border rather than after the
+                // list, because the list is longer than a short terminal and
+                // a line nobody can scroll to says nothing. The status bar is
+                // spoken for — counts, the query, whatever just happened —
+                // and this is the screen someone is on when they are about to
+                // report that something did not work.
+                .title_bottom(
+                    Line::styled(
+                        format!(" mailbox {} ", build::INFO.short()),
+                        Style::default().fg(theme::DIM),
+                    )
+                    .right_aligned(),
+                ),
         ),
         area,
     );
@@ -590,7 +604,7 @@ fn accent() -> Color {
 #[cfg(test)]
 mod tests {
     use super::draw;
-    use crate::app::App;
+    use crate::app::{App, View};
     use crate::keys::Keymap;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -609,6 +623,22 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// The help pane is the one screen that is always reachable, so it is
+    /// where the terminal answers "which build is this?". A bug report from a
+    /// terminal has no window title and no About box to read it from.
+    #[test]
+    fn the_help_pane_names_the_build() {
+        let mut app = App::new();
+        app.view = View::Help;
+
+        let screen = painted(&mut app);
+        let stamp = mailbox_core::build::INFO.short();
+        assert!(
+            screen.contains(&stamp),
+            "the help pane does not name the build {stamp:?}: {screen:?}"
+        );
     }
 
     /// The first screen a new install sees.

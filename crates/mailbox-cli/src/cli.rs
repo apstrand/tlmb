@@ -6,11 +6,21 @@
 //! adding one is the same kind of commitment as adding a JSON field.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::sync::LazyLock;
+
+// clap wants `&'static str`, and the build stamp is assembled at runtime;
+// borrowing a `LazyLock` static gives one without leaking anything.
+static VERSION: LazyLock<String> = LazyLock::new(|| mailbox_core::build::INFO.short());
+static LONG_VERSION: LazyLock<String> = LazyLock::new(|| mailbox_core::build::INFO.long());
 
 #[derive(Debug, Parser)]
 #[command(
     name = "mailbox",
-    version,
+    // `--version` is where a CLI answers "which build is this?", so it
+    // answers it properly: the number for a release, the commit and its date
+    // for anything else, and every field on `--version` in long form.
+    version = VERSION.as_str(),
+    long_version = LONG_VERSION.as_str(),
     about = "A self-contained IMAP & SMTP client",
     // Human help stays short; the JSON contract is the documentation agents
     // read, via `mailbox schema`.

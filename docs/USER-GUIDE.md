@@ -76,5 +76,16 @@ amount of grief.
 Downloaded mail remains readable offline. Run `mailbox sync --full` if you want
 all bodies and attachments cached rather than recent and opened mail only.
 
+## Which build is this
+
+The right of the status bar names the version. A release shows its number and
+nothing else; any other build adds the commit it was built from and the day
+that commit was made, since between releases the number alone does not say
+which build you have. Hover it for the full detail, or run `mailbox --version`,
+which prints the same thing plus the tag if the commit carries one. That is the
+line worth pasting into a bug report.
+
+In the terminal, `?` shows it along the bottom of the help pane.
+
 The screenshots and the actions described here are exercised by
 `tests/e2e/mailbox-e2e check guide`; see the [e2e README](../tests/e2e/README.md).

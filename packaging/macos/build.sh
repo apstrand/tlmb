@@ -145,6 +145,10 @@ if command -v rustup >/dev/null; then
     rustup target add "${targets[@]}" >/dev/null
 fi
 
+# The build stamps its own commit in (mailbox-core's `build.rs`); what it
+# cannot work out for itself is whether this is the build that gets published.
+export MAILBOX_BUILD_RELEASE=$([[ $release == 1 && $dry_run == 0 ]] && echo 1 || echo 0)
+
 slices=()
 for target in "${targets[@]}"; do
     echo "building $target"

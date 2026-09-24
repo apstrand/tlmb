@@ -165,6 +165,18 @@ for var in MAILBOX_GOOGLE_CLIENT_ID MAILBOX_GOOGLE_CLIENT_SECRET \
     fi
 done
 
+# The commit this build came from, answered here because the sandbox cannot:
+# `.git` is skipped from the manifest's source and the runtime has no git. A
+# `--release` build is the one that goes to the published repository, which is
+# exactly what "an official release" means here.
+git_out() { (cd "$root" && git "$@" 2>/dev/null) || true; }
+{
+    printf "MAILBOX_BUILD_COMMIT='%s'\n" "$(git_out rev-parse HEAD)"
+    printf "MAILBOX_BUILD_COMMIT_DATE='%s'\n" "$(git_out log -1 --format=%cI HEAD)"
+    printf "MAILBOX_BUILD_TAG='%s'\n" "$(git_out describe --tags --exact-match HEAD)"
+    printf "MAILBOX_BUILD_RELEASE='%s'\n" "$([[ $release == 1 ]] && echo 1 || echo 0)"
+} >"$work/build.env"
+
 # ---- the repository this build goes into ----
 
 if [[ $release == 1 ]]; then

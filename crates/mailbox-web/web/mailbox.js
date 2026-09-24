@@ -935,6 +935,12 @@ el("host").textContent = hostedBackend
     ? "browser store"
     : window.__MAILBOX_SHELL__ === "gui" ? "local store" : location.host;
 
+// Which build this is, at the end of the status bar. A screenshot of a bug
+// carries the version with it this way, and the commit behind the tooltip is
+// what turns "0.1.6" into a build somebody can check out.
+el("version").textContent = pageConfig.dataset.version || "";
+el("version").title = pageConfig.dataset.build || "";
+
 // ---- the first launch (§9) ----
 //
 // `serve` and `gui` start whether or not an account exists, so the page has

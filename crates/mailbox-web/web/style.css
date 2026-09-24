@@ -82,6 +82,10 @@ body {
     font-size: 12px;
     color: var(--text-dim);
     min-height: 1.9rem;
+    /* A grid item's `auto` minimum is its content, so without this the bar
+       grows past its column rather than shrinking anything inside it, and a
+       long error pushes the items after it off the edge of the window. */
+    min-width: 0;
 }
 
 #search-form { flex: 1; display: flex; }
@@ -117,8 +121,21 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 button.icon { padding: .35rem .55rem; }
 
-#error { color: var(--danger); }
+/* An error is the one item here of unbounded length — a failed lookup carries
+   the id it failed on — so it is the item that gives way when the bar is
+   narrower than its contents, rather than pushing the fixed ones off the end. */
+#error {
+    color: var(--danger);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 #host { margin-left: auto; }
+#host, #version { flex: none; }
+/* Last in the bar, and quieter than the rest: it is reference, not news. */
+#version { opacity: .6; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#version:empty { display: none; }
 
 #update { margin-left: auto; display: flex; align-items: center; gap: .5rem; }
 #update:not([hidden]) + #host { margin-left: 0; }
