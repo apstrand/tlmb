@@ -54,6 +54,28 @@ html = """
 """
 "#;
 
+/// A second account, whose mail is the mail the default account does not have.
+///
+/// The subject is what the multi-account tests below look the message up by.
+const OTHER_FIXTURE: &str = r#"
+[[folder]]
+path = "INBOX"
+special_use = "inbox"
+
+[[folder]]
+path = "Archive"
+special_use = "archive"
+
+[[message]]
+name = "elsewhere"
+folder = "INBOX"
+from = "Carol <carol@other.example>"
+subject = "From the other account"
+date = "2026-08-04T10:00:00Z"
+message_id = "<four@other.example>"
+body = "over here"
+"#;
+
 struct Serving {
     dir: PathBuf,
     config: PathBuf,
@@ -93,6 +115,51 @@ impl Serving {
             .output()
             .expect("seed");
         assert!(seeded.status.success(), "seeding failed");
+
+        Serving::spawn(dir, config, state, port)
+    }
+
+    /// A server over two accounts, as §1.5's unified mailbox is normally run.
+    ///
+    /// `alpha` sorts first and so is what `default_account` picks; the message
+    /// under test lives in `beta`, which is the case a single-account write
+    /// path gets wrong.
+    fn start_two_accounts() -> Serving {
+        let port = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("mailbox-serve-{}-{port}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let config = dir.join("config.toml");
+        std::fs::write(
+            &config,
+            "[accounts.alpha]\naddress = \"peter@alpha.example\"\nimap_host = \"127.0.0.1\"\n\n\
+             [accounts.beta]\naddress = \"peter@beta.example\"\nimap_host = \"127.0.0.1\"\n",
+        )
+        .expect("write config");
+        let state = dir.join("state");
+
+        for (account, fixture) in [("alpha", FIXTURE), ("beta", OTHER_FIXTURE)] {
+            let manifest = dir.join(format!("{account}.toml"));
+            std::fs::write(&manifest, fixture).expect("write fixture");
+            let seeded = Command::new(env!("CARGO_BIN_EXE_mailbox"))
+                .args([
+                    "--account",
+                    account,
+                    "debug",
+                    "fixture",
+                    "load",
+                    manifest.to_str().unwrap(),
+                ])
+                .env("MAILBOX_CONFIG", &config)
+                .env("MAILBOX_STATE_DIR", &state)
+                .env("MAILBOX_NOTIFIER", "none")
+                .env("MAILBOX_KEYCHAIN", "none")
+                .env("MAILBOX_CLOCK", "2026-09-01T12:00:00Z")
+                .output()
+                .expect("seed");
+            assert!(seeded.status.success(), "seeding {account} failed");
+        }
 
         Serving::spawn(dir, config, state, port)
     }
@@ -461,6 +528,55 @@ fn flags_can_be_set_and_are_visible_to_the_next_read() {
 
     let read = s.api("/api/ls?q=is%3Aread");
     assert_eq!(read["messages"].as_array().unwrap().len(), 1, "{read:#}");
+}
+
+/// The bug this guards: the page lists every account's mail (§1.5), so the
+/// message someone marks read is as likely to be in the second account as the
+/// first. Resolving its id against the default account's store alone reported
+/// "no such message" for an id the page was displaying at that moment, and
+/// mark-as-read simply did not work for most of the mailbox.
+#[test]
+fn a_write_reaches_the_account_that_owns_the_message() {
+    let s = Serving::start_two_accounts();
+    let id = s.id_of("From the other account");
+
+    let (status, body) = s.post(
+        "/api/flag",
+        &format!(r#"{{"ids":["{id}"],"add":["seen"]}}"#),
+    );
+    assert_eq!(status, 200, "flagging the other account's mail: {body:#}");
+    assert_eq!(body["changed"], 1, "{body:#}");
+
+    // Read back through the unified listing, which is where it has to show.
+    let read = s.api("/api/ls?q=is%3Aread");
+    let subjects: Vec<&str> = read["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["subject"].as_str().unwrap())
+        .collect();
+    assert_eq!(subjects, ["From the other account"], "{read:#}");
+}
+
+/// Moving and snoozing route the same way, and were wrong the same way.
+#[test]
+fn moving_and_snoozing_reach_the_owning_account_too() {
+    let s = Serving::start_two_accounts();
+    let id = s.id_of("From the other account");
+
+    let (status, body) = s.post(
+        "/api/snooze",
+        &format!(r#"{{"ids":["{id}"],"until":"2h"}}"#),
+    );
+    assert_eq!(status, 200, "{body:#}");
+    assert_eq!(body["snoozed"].as_array().unwrap().len(), 1, "{body:#}");
+
+    let (status, body) = s.post(
+        "/api/move",
+        &format!(r#"{{"ids":["{id}"],"folder":"Archive"}}"#),
+    );
+    assert_eq!(status, 200, "{body:#}");
+    assert_eq!(body["changed"], 1, "{body:#}");
 }
 
 #[test]

@@ -240,7 +240,7 @@ fn send(
         return Err(Error::usage("a message needs at least one recipient"));
     }
 
-    let mut session = writable(session, tracer, clock)?;
+    let mut session = writable_session(session, tracer, clock)?;
     let result = session.enqueue_send(&mailbox_core::send::SendRequest {
         draft,
         idempotency_key: None,
@@ -254,12 +254,27 @@ fn send(
     Ok(Response::json(200, &serde_json::to_value(result)?))
 }
 
-/// Opens a writable session for one operation.
+/// Opens a writable workspace for one operation.
 ///
 /// Per request rather than held: the server's own handle is read-only, so
 /// reads never contend with a write, and a write that fails leaves nothing
 /// half-open (§4.1).
-fn writable(session: &SessionOptions, tracer: &Tracer, clock: &Clock) -> Result<Session> {
+///
+/// Every account, not one. The page shows the unified mailbox of §1.5, so the
+/// message being written to belongs to whichever account owns its id, and only
+/// a workspace can route it there. Opening a single session instead resolves
+/// every id against the default account's store, which makes a write to any
+/// other account fail as "no such message" — naming a message the page is
+/// displaying at that moment.
+fn writable(session: &SessionOptions, tracer: &Tracer, clock: &Clock) -> Result<Workspace> {
+    let mut opts = session.clone();
+    opts.read_only = false;
+    Workspace::open(&opts, tracer.clone(), clock.clone())
+}
+
+/// The same, for the writes that belong to one account rather than to the
+/// message they name.
+fn writable_session(session: &SessionOptions, tracer: &Tracer, clock: &Clock) -> Result<Session> {
     let mut opts = session.clone();
     opts.read_only = false;
     Session::open(&opts, tracer.clone(), clock.clone())
@@ -313,8 +328,8 @@ fn flag(
         remove_tags: strings(&body, "remove_tags"),
     };
 
-    let mut session = writable(session, tracer, clock)?;
-    let written = session.flag(&refs, &spec)?;
+    let mut workspace = writable(session, tracer, clock)?;
+    let written = workspace.write_each(&refs, |session, ids| session.flag(ids, &spec))?;
     Ok(Response::json(
         200,
         &serde_json::to_value(mailbox_core::store::write_result(&written))?,
@@ -334,8 +349,8 @@ fn move_to(
         .and_then(|v| v.as_str())
         .ok_or_else(|| Error::usage("give a `folder` to move to"))?;
 
-    let mut session = writable(session, tracer, clock)?;
-    let written = session.move_to(&refs, folder)?;
+    let mut workspace = writable(session, tracer, clock)?;
+    let written = workspace.write_each(&refs, |session, ids| session.move_to(ids, folder))?;
     Ok(Response::json(
         200,
         &serde_json::to_value(mailbox_core::store::write_result(&written))?,
@@ -351,11 +366,11 @@ fn snooze(
     let body = body(request)?;
     let refs = ids(&body)?;
 
-    let mut session = writable(session, tracer, clock)?;
+    let mut workspace = writable(session, tracer, clock)?;
     match body.get("until").and_then(|v| v.as_str()) {
         Some(until) => {
             let when = mailbox_core::store::snooze::parse_until(until, clock)?;
-            let ids = session.snooze(&refs, when)?;
+            let ids = workspace.snooze(&refs, when)?;
             Ok(Response::json(
                 200,
                 &serde_json::json!({
@@ -368,7 +383,7 @@ fn snooze(
         // No time means wake it, which is what the picker's "unsnooze" does.
         None => Ok(Response::json(
             200,
-            &serde_json::json!({ "woke": session.unsnooze(&refs)? }),
+            &serde_json::json!({ "woke": workspace.unsnooze(&refs)? }),
         )),
     }
 }
