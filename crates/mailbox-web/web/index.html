@@ -32,7 +32,6 @@
   <button id="sync" class="text">Sync</button>
   <button id="accounts" class="text">Accounts</button>
   <button id="help" class="text" aria-label="Help">Help</button>
-  <button id="add-account" class="text" hidden>Add account</button>
   <span id="spinner" class="spinner" hidden aria-hidden="true"></span>
 </header>
 
@@ -200,6 +199,14 @@
 <dialog id="accounts-window" aria-label="Accounts">
   <div class="dialog-heading"><h2>Accounts</h2><button type="button" id="accounts-close" class="text">Close</button></div>
   <div id="account-list"></div>
+  <!-- Adding an account belongs with the accounts, not in the header: the
+       header is for what someone does with their mail, and this is done once
+       and then never again. Disabled rather than hidden off loopback, for the
+       same reason Edit is — the capability exists, this server just will not
+       take a password (see `setup_allowed` in server.rs). -->
+  <div class="setup-actions">
+    <button type="button" id="account-add" class="primary">Add account</button>
+  </div>
   <form id="account-edit-form" hidden>
     <h3 id="account-edit-title">Edit account</h3>
     <input id="account-edit-id" type="hidden">

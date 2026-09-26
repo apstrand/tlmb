@@ -612,7 +612,23 @@ async function loadAccounts() {
             row.append(edit);
             return row;
         }));
+        const add = el("account-add");
+        add.disabled = !setupAllowed;
+        add.title = setupAllowed ? "" : "This server does not take a password; add the account from the terminal.";
     } catch (e) { fail(e); }
+}
+
+/** Opens the setup form on an empty slate, for an account that is not the first. */
+function beginAddAccount() {
+    el("setup-form").reset();
+    security = { imap: null, smtp: null };
+    providerKnown = false;
+    setupError("");
+    el("setup-status").textContent = "";
+    // Cancel is what gets back to the mailbox; the first-launch form has
+    // nothing to go back to and so does not show it.
+    el("setup-cancel").hidden = false;
+    showSetup();
 }
 
 function openAccountEditor(account) {
@@ -632,6 +648,10 @@ el("accounts").addEventListener("click", async () => {
     el("accounts-window").showModal();
 });
 el("accounts-close").addEventListener("click", () => el("accounts-window").close());
+el("account-add").addEventListener("click", () => {
+    el("accounts-window").close();
+    beginAddAccount();
+});
 el("account-edit-cancel").addEventListener("click", () => { el("account-edit-form").hidden = true; });
 el("account-edit-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -966,16 +986,6 @@ const SETUP_POLL_MS = 2000;
 
 /** Whether this server will take a password — loopback only. See `server.rs`. */
 const setupAllowed = pageConfig.dataset.setup === "1";
-el("add-account").hidden = !setupAllowed;
-el("add-account").addEventListener("click", () => {
-    el("setup-form").reset();
-    security = { imap: null, smtp: null };
-    providerKnown = false;
-    setupError("");
-    el("setup-status").textContent = "";
-    el("setup-cancel").hidden = false;
-    showSetup();
-});
 el("setup-cancel").addEventListener("click", () => {
     el("setup-password").value = "";
     start();

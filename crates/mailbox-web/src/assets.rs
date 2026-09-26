@@ -157,6 +157,26 @@ mod tests {
         }
     }
 
+    /// Adding a further account is an accounts thing, not a header thing: the
+    /// header is for what someone does with their mail. The button lives in
+    /// the dialog that lists the accounts, and the first-launch form it opens
+    /// is the same one.
+    #[test]
+    fn a_further_account_is_added_from_the_accounts_dialog() {
+        assert!(
+            super::INDEX.contains(r#"id="account-add""#),
+            "the accounts dialog has no add button"
+        );
+        assert!(
+            !super::INDEX.contains(r#"id="add-account""#),
+            "the header still carries the old add button"
+        );
+        // It opens the setup form, and offers the way back that the
+        // first-launch form has no use for.
+        assert!(super::SCRIPT.contains("beginAddAccount"));
+        assert!(super::SCRIPT.contains(r#"el("setup-cancel").hidden = false"#));
+    }
+
     /// `serve` and `gui` start whether or not an account exists (§9), and this
     /// is the only page either of them has — so the way to add one is carried
     /// here or nowhere. A browser tab and the desktop window are exactly the
