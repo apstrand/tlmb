@@ -472,12 +472,25 @@ impl Workspace {
     /// account should still deliver the working ones' mail. The failure is
     /// reported through `status`, which is where a user looks for it anyway.
     pub fn sync(&mut self, opts: &SyncOptions) -> Result<SyncResult> {
+        self.sync_watched(opts, &mut crate::imap::sync::ignore_progress())
+    }
+
+    /// [`Workspace::sync`], saying which account and folder it is on.
+    ///
+    /// A pass over several accounts is the one that most needs this: it is the
+    /// longest, and until it finishes every account but the first looks like a
+    /// mailbox that has stopped receiving mail.
+    pub fn sync_watched(
+        &mut self,
+        opts: &SyncOptions,
+        progress: &mut dyn FnMut(crate::imap::sync::Progress),
+    ) -> Result<SyncResult> {
         let mut synced = Vec::new();
         let mut submitted = None;
         let mut first_error = None;
 
         for session in &mut self.accounts {
-            match session.sync(opts) {
+            match session.sync_watched(opts, progress) {
                 Ok(result) => {
                     synced.extend(result.synced);
                     if let Some(s) = result.submitted {

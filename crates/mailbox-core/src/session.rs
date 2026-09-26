@@ -16,7 +16,7 @@ use mailbox_api::{
 use crate::clock::{format_rfc3339, Clock};
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::imap::sync::{sync_once, SyncOptions};
+use crate::imap::sync::{sync_once_watched, SyncOptions};
 use crate::imap::{Client, ConnectionConfig};
 use crate::query::{self, Node};
 use crate::render::RenderOptions;
@@ -674,6 +674,15 @@ impl Session {
     /// A mail server that is down must not stop the mailbox from syncing, so a
     /// submission failure is reported and swallowed rather than propagated.
     pub fn sync(&mut self, requested: &SyncOptions) -> Result<SyncResult> {
+        self.sync_watched(requested, &mut crate::imap::sync::ignore_progress())
+    }
+
+    /// [`Session::sync`], saying which folder it is on while it runs.
+    pub fn sync_watched(
+        &mut self,
+        requested: &SyncOptions,
+        progress: &mut dyn FnMut(crate::imap::sync::Progress),
+    ) -> Result<SyncResult> {
         // §5.1's `offline` is per account, and a workspace syncs several at
         // once — so the policy is applied here, against this account's config,
         // rather than baked into the options the caller passed.
@@ -707,9 +716,15 @@ impl Session {
             }
         }
 
+        // Connecting is the slow part of a first pass and says nothing on its
+        // own, so the account is announced before it rather than after.
+        progress(crate::imap::sync::Progress {
+            account: self.account_id.clone(),
+            folder: None,
+        });
         let mut client = self.connect()?;
         let clock = self.clock.clone();
-        let report = sync_once(&mut client, &mut self.store, opts, &clock);
+        let report = sync_once_watched(&mut client, &mut self.store, opts, &clock, progress);
 
         // File any Sent copies while the connection is already open (§5.5).
         let preferred_sent = self.special_folder("sent").ok();

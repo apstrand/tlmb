@@ -30,6 +30,64 @@ use mailbox_core::{Clock, Tracer, Workspace};
 
 use crate::http::{Request, Response};
 
+/// What the sync pass running right now is doing (§7).
+///
+/// A sync over several accounts and their folders takes long enough that a
+/// spinner alone is indistinguishable from a hang. The pass reports the
+/// boundaries it already has, this holds the latest one, and the page reads it
+/// while its own request is still in flight — which works because the server
+/// serves each connection on its own thread and this lock is never held across
+/// any I/O.
+///
+/// No history and no queue: the only question being answered is "what now?",
+/// and an interface that fell behind would rather skip to the present than
+/// replay where the sync has been.
+#[derive(Default)]
+pub struct SyncProgress {
+    stage: Mutex<Option<mailbox_core::imap::sync::Progress>>,
+}
+
+impl SyncProgress {
+    pub fn new() -> SyncProgress {
+        SyncProgress::default()
+    }
+
+    fn set(&self, stage: mailbox_core::imap::sync::Progress) {
+        if let Ok(mut held) = self.stage.lock() {
+            *held = Some(stage);
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(mut held) = self.stage.lock() {
+            *held = None;
+        }
+    }
+
+    /// `{"running": false}` when nothing is syncing, and the account and
+    /// folder when something is.
+    fn snapshot(&self) -> serde_json::Value {
+        let held = self.stage.lock().ok().and_then(|s| s.clone());
+        match held {
+            Some(stage) => serde_json::json!({
+                "running": true,
+                "account": stage.account,
+                "folder": stage.folder,
+            }),
+            None => serde_json::json!({ "running": false }),
+        }
+    }
+}
+
+/// Clears the stage however the pass ends, including by `?` and by panic.
+struct Running<'a>(&'a SyncProgress);
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.0.clear();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn handle(
     path: &str,
@@ -39,6 +97,7 @@ pub fn handle(
     tracer: &Tracer,
     clock: &Clock,
     setup_allowed: bool,
+    progress: &SyncProgress,
 ) -> Response {
     let result = match (request.method.as_str(), path) {
         ("GET", "ls") => list(request, workspace),
@@ -61,7 +120,9 @@ pub fn handle(
         ("POST", "flag") => flag(request, session, tracer, clock),
         ("POST", "move") => move_to(request, session, tracer, clock),
         ("POST", "snooze") => snooze(request, session, tracer, clock),
-        ("POST", "sync") => sync(request, workspace, session, tracer, clock),
+        ("POST", "sync") => sync(request, workspace, session, tracer, clock, progress),
+        // Read while a sync is still running, from another connection.
+        ("GET", "sync/progress") => Ok(Response::json(200, &progress.snapshot())),
         ("GET", "providers") => providers(request),
         ("GET", "discover") => discover(request),
         ("POST", "accounts") => {
@@ -394,6 +455,7 @@ fn sync(
     session: &SessionOptions,
     tracer: &Tracer,
     clock: &Clock,
+    progress: &SyncProgress,
 ) -> Result<Response> {
     let body = if request.body.is_empty() {
         serde_json::Value::Null
@@ -408,7 +470,10 @@ fn sync(
     let mut opts_session = session.clone();
     opts_session.read_only = false;
     let mut writable = Workspace::open(&opts_session, tracer.clone(), clock.clone())?;
-    let result = writable.sync(&opts)?;
+    let result = {
+        let _running = Running(progress);
+        writable.sync_watched(&opts, &mut |stage| progress.set(stage))?
+    };
     // The reading handle has an older view of the store until it reopens; the
     // caller asked for a sync and then reads, so refresh it now rather than
     // leaving the next `ls` to show what was there before.

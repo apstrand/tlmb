@@ -530,6 +530,19 @@ fn flags_can_be_set_and_are_visible_to_the_next_read() {
     assert_eq!(read["messages"].as_array().unwrap().len(), 1, "{read:#}");
 }
 
+/// The page asks this while its own sync request is still in flight, so it
+/// has to be answerable on another connection and must not wait on the
+/// workspace lock. Idle is the state worth pinning down here: a running pass
+/// needs a mail server, and this harness has none.
+#[test]
+fn the_sync_progress_route_answers_when_nothing_is_syncing() {
+    let s = Serving::start();
+    let at = s.api("/api/sync/progress");
+
+    assert_eq!(at["running"], false, "{at:#}");
+    assert!(at.get("folder").is_none(), "{at:#}");
+}
+
 /// The bug this guards: the page lists every account's mail (§1.5), so the
 /// message someone marks read is as likely to be in the second account as the
 /// first. Resolving its id against the default account's store alone reported

@@ -82,6 +82,28 @@ impl Default for SyncOptions {
     }
 }
 
+/// How far a pass has got, for an interface that says so while it runs.
+///
+/// Reported at the boundaries the pass already has — a folder is about to be
+/// examined — rather than as a percentage. A sync does not know how long it
+/// will take (the server decides how many messages there are to hear about),
+/// and a bar that guesses is worse than a sentence that is true.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Progress {
+    pub account: String,
+    /// The folder being examined, or `None` for the parts of a pass that are
+    /// not about one folder: the outbox flush, and listing the folders.
+    pub folder: Option<String>,
+}
+
+/// What a caller that does not care passes.
+///
+/// Named rather than written inline at each call site, because `&mut |_| {}`
+/// four times over reads as if something were being suppressed.
+pub fn ignore_progress() -> impl FnMut(Progress) {
+    |_| {}
+}
+
 /// Runs exactly one sync pass to quiescence and returns.
 ///
 /// No background loop, no `IDLE`, no timers (§6.7). If the tracer was armed
@@ -91,6 +113,17 @@ pub fn sync_once(
     store: &mut Store,
     opts: &SyncOptions,
     clock: &Clock,
+) -> Result<SyncReport> {
+    sync_once_watched(client, store, opts, clock, &mut ignore_progress())
+}
+
+/// [`sync_once`], reporting which folder it is on as it goes.
+pub fn sync_once_watched(
+    client: &mut Client,
+    store: &mut Store,
+    opts: &SyncOptions,
+    clock: &Clock,
+    progress: &mut dyn FnMut(Progress),
 ) -> Result<SyncReport> {
     let started = web_time::Instant::now();
     // An L1 recording is of a pass made with particular options (§14.2), and
@@ -157,6 +190,10 @@ pub fn sync_once(
         }
 
         tracer.emit1(event::SYNC_FOLDER_BEGIN, "folder", &path);
+        progress(Progress {
+            account: store.account().to_string(),
+            folder: Some(path.clone()),
+        });
         let folder_state = state.folder(&path);
         let result = sync_folder(client, store, folder_id, &path, &folder_state, opts, clock);
 

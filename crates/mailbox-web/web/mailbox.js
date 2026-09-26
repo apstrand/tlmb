@@ -909,11 +909,52 @@ el("load-more").addEventListener("click", async () => {
     finally { el("load-more").disabled = false; }
 });
 
+/** How often the window syncs by itself, once it is open. */
+const BACKGROUND_SYNC_MS = 5 * 60 * 1000;
+
+/** How often to ask the server's sync pass where it has got to. */
+const PROGRESS_POLL_MS = 700;
+
+let progressTimer = 0;
+
+/**
+ * Says which account and folder the server's pass is on, until it stops.
+ *
+ * The hosted backend syncs in this page and reports as it goes; a served
+ * mailbox syncs inside one long request, so the only way to know is to ask on
+ * another connection. A pass over several accounts is slow enough that a
+ * spinner on its own is indistinguishable from a hang.
+ */
+async function pollProgress() {
+    try {
+        const at = await api("/api/sync/progress");
+        if (at.running) {
+            say(at.folder ? `syncing ${at.account} — ${at.folder}` : `syncing ${at.account}…`);
+        }
+    } catch {
+        // Whatever went wrong, the sync's own reply will say it better.
+    }
+    progressTimer = setTimeout(pollProgress, PROGRESS_POLL_MS);
+}
+
+function stopPollingProgress() {
+    clearTimeout(progressTimer);
+    progressTimer = 0;
+}
+
 let syncTask;
 let syncController;
-function syncNow(args = {}) {
+/**
+ * Runs a sync pass.
+ *
+ * `auto` marks the passes nobody asked for — the one on open and the ones on
+ * the timer. Those report a failure into the status line rather than the error
+ * line: a mailbox that cannot reach its server is worth saying once, quietly,
+ * and not worth colouring red every five minutes on a laptop that is offline.
+ */
+function syncNow(args = {}, { auto = false } = {}) {
     if (syncTask) {
-        return args.account ? syncTask.then(() => syncNow(args)) : syncTask;
+        return args.account ? syncTask.then(() => syncNow(args, { auto })) : syncTask;
     }
     syncController = new AbortController();
     el("sync").textContent = hostedBackend ? "Stop sync" : "Syncing…";
@@ -921,6 +962,10 @@ function syncNow(args = {}) {
     syncTask = (async () => {
         state.inFlight += 1;
         el("spinner").hidden = false;
+        if (!hostedBackend) {
+            say("syncing…");
+            pollProgress();
+        }
         try {
             const result = hostedBackend
                 ? await hostedBackend.syncProgressively(args, async ({ account, folder, result }) => {
@@ -935,8 +980,10 @@ function syncNow(args = {}) {
                 (errors.length ? `; ${errors.join("; ")}` : ""));
             await Promise.all([reload(), loadFolders()]);
         } catch (error) {
-            fail(error);
+            if (auto) say(`sync failed — ${error.message ?? error}`);
+            else fail(error);
         } finally {
+            stopPollingProgress();
             state.inFlight -= 1;
             el("spinner").hidden = state.inFlight === 0;
             el("sync").textContent = "Sync";
@@ -944,6 +991,26 @@ function syncNow(args = {}) {
         }
     })().finally(() => { syncTask = undefined; });
     return syncTask;
+}
+
+/**
+ * Keeps the mailbox current while the window is open.
+ *
+ * Skipped while the page is hidden: a window left open for a week behind other
+ * windows should not keep a connection to the mail server busy on its owner's
+ * behalf, and it syncs on the way back anyway.
+ */
+function startBackgroundSync() {
+    setInterval(() => {
+        if (document.body.dataset.state !== "mail") return;
+        if (document.hidden || syncTask) return;
+        syncNow({}, { auto: true });
+    }, BACKGROUND_SYNC_MS);
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && document.body.dataset.state === "mail" && !syncTask) {
+            syncNow({}, { auto: true });
+        }
+    });
 }
 
 el("sync").addEventListener("click", () => {
@@ -1024,7 +1091,20 @@ async function start() {
     loadAccounts();
     loadIdentities();
     reload();
+
+    // Mail that arrived while the window was shut is the mail someone opened
+    // it for, so the pass starts with the window rather than waiting to be
+    // asked. It runs behind the listing, which draws from the store and does
+    // not wait for the network.
+    syncNow({}, { auto: true });
+    if (!backgroundSyncStarted) {
+        backgroundSyncStarted = true;
+        startBackgroundSync();
+    }
 }
+
+/** `start()` runs again after setup, and the timer is wanted only once. */
+let backgroundSyncStarted = false;
 
 function showSetup() {
     document.body.dataset.state = "setup";

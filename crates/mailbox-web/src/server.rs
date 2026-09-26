@@ -71,6 +71,8 @@ struct Inner {
     /// and a cap is what keeps "several" from becoming "as many as anyone
     /// cares to open".
     live: AtomicUsize,
+    /// What the sync running right now is doing, for the page to show.
+    progress: api::SyncProgress,
 }
 
 /// Enough for a browser's parallel fetches several times over, and few enough
@@ -121,6 +123,7 @@ impl Server {
                 token: opts.token,
                 setup_allowed: opts.bind.is_loopback(),
                 workspace: Mutex::new(workspace),
+                progress: api::SyncProgress::new(),
                 session,
                 tracer,
                 clock,
@@ -283,6 +286,7 @@ impl Inner {
                 &self.tracer,
                 &self.clock,
                 self.setup_allowed,
+                &self.progress,
             );
         }
 

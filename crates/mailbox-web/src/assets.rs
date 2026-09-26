@@ -157,6 +157,25 @@ mod tests {
         }
     }
 
+    /// Mail that arrived while the window was shut is the mail it was opened
+    /// for, so the page syncs on open and then on a timer rather than waiting
+    /// to be asked — and says where the pass has got to while it runs, which
+    /// a served mailbox can only learn by asking on another connection.
+    #[test]
+    fn the_page_syncs_by_itself_and_says_what_the_pass_is_doing() {
+        for needle in [
+            "syncNow({}, { auto: true })",
+            "BACKGROUND_SYNC_MS",
+            "visibilitychange",
+            "/api/sync/progress",
+        ] {
+            assert!(
+                super::SCRIPT.contains(needle),
+                "mailbox.js is missing {needle}"
+            );
+        }
+    }
+
     /// Adding a further account is an accounts thing, not a header thing: the
     /// header is for what someone does with their mail. The button lives in
     /// the dialog that lists the accounts, and the first-launch form it opens
