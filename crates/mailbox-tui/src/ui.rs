@@ -47,7 +47,7 @@ pub fn draw(
 
     let mut links = Vec::new();
     match app.view {
-        View::List => draw_list(frame, areas[0], app),
+        View::List => draw_index(frame, areas[0], app, &mut links),
         View::Message => draw_message(frame, areas[0], app, &mut links),
         View::Thread => draw_thread(frame, areas[0], app),
         View::Links => draw_links(frame, areas[0], app, &mut links),
@@ -56,6 +56,98 @@ pub fn draw(
     draw_status(frame, areas[1], app);
     draw_prompt(frame, areas[2], app);
     links
+}
+
+/// The index, with whichever panes are currently slid in beside it (§7).
+///
+/// The list is always there; the folders and the message come and go. A
+/// terminal is narrower than a window, and three permanent panes would spend
+/// most of it on borders — so `Left` and `Right` bring them in when they are
+/// wanted and put them away again.
+fn draw_index(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut App,
+    links: &mut Vec<crate::markdown::LinkSpan>,
+) {
+    // Below this there is not room for two panes, let alone three, and a
+    // 12-column list of subjects helps nobody.
+    const NARROW: u16 = 60;
+    let folders = app.folders_open && area.width >= NARROW;
+    let preview = app.preview && app.open.is_some() && area.width >= NARROW;
+
+    let mut constraints = Vec::new();
+    if folders {
+        constraints.push(Constraint::Length(22));
+    }
+    constraints.push(Constraint::Min(20));
+    if preview {
+        constraints.push(Constraint::Percentage(50));
+    }
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(constraints)
+        .split(area);
+
+    let mut next = 0;
+    if folders {
+        draw_folders(frame, columns[next], app);
+        next += 1;
+    }
+    draw_list(frame, columns[next], app);
+    next += 1;
+    if preview {
+        draw_message(frame, columns[next], app, links);
+    }
+}
+
+/// The folder pane: what is unread, where.
+fn draw_folders(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let focused = app.focus == crate::app::Focus::Folders;
+    let rows: Vec<ListItem> = app
+        .folders
+        .iter()
+        .map(|folder| {
+            // The count is the number that asks to be acted on, as it is in
+            // the window: unread, and nothing at all when there is none.
+            let count = if folder.unread > 0 {
+                format!(" {}", folder.unread)
+            } else {
+                String::new()
+            };
+            let width = area.width.saturating_sub(4) as usize;
+            let label = truncate(&folder.label, width.saturating_sub(count.len()));
+            ListItem::new(Line::from(vec![
+                Span::raw(format!(" {label}")),
+                Span::styled(count, Style::default().fg(theme::DIM)),
+            ]))
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select((!app.folders.is_empty()).then_some(app.folder_selected));
+    frame.render_stateful_widget(
+        List::new(rows)
+            // The border carries which pane has the keys; a title reading
+            // "folders" says the same thing whether or not it is listening.
+            .block(
+                Block::default()
+                    .borders(Borders::RIGHT)
+                    .border_style(if focused {
+                        Style::default().fg(theme::ACCENT)
+                    } else {
+                        Style::default().fg(theme::DIM)
+                    })
+                    .title(" folders "),
+            )
+            .highlight_style(if focused {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default().fg(theme::ACCENT)
+            }),
+        area,
+        &mut state,
+    );
 }
 
 fn draw_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -408,6 +500,9 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, keymap: &Keymap) {
         Action::Bottom,
         Action::Open,
         Action::Back,
+        Action::PaneLeft,
+        Action::PaneRight,
+        Action::FocusNext,
         Action::Thread,
         Action::Search,
         Action::ToggleRead,

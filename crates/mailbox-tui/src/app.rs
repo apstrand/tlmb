@@ -22,6 +22,43 @@ use mailbox_core::Workspace;
 
 use crate::keys::Action;
 
+/// Which of the three panes the keys act on while the index is showing (§7).
+///
+/// The terminal does not hold all three open the way the window does — a
+/// terminal is usually narrower, and a folder list permanently taking a
+/// quarter of it is a quarter of the subjects gone. They slide in when asked
+/// for and out again when done with, so the common case is the list alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Folders,
+    List,
+    Message,
+}
+
+/// One row of the folder pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderRow {
+    pub account: String,
+    /// The path the server uses, which is what a query has to name.
+    pub path: String,
+    /// What to show: the special use where there is one, else the leaf name.
+    pub label: String,
+    pub unread: u32,
+    pub total: u32,
+}
+
+impl FolderRow {
+    /// The query that shows this folder, quoted when the path needs it.
+    pub fn query(&self) -> String {
+        let path = if self.path.contains(' ') {
+            format!("\"{}\"", self.path)
+        } else {
+            self.path.clone()
+        };
+        format!("account:{} in:{}", self.account, path)
+    }
+}
+
 /// Which pane has the user's attention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -123,6 +160,15 @@ pub enum Write {
     MarkRead { id: String },
 }
 
+/// `inbox` as a label rather than a protocol word.
+fn title_case(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 /// A reversible move kept only for this TUI session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndoEntry {
@@ -175,6 +221,16 @@ pub struct App {
     pub no_accounts: bool,
     /// Which link is highlighted in [`View::Links`].
     pub link_selected: usize,
+    /// The folders, for the pane that slides in from the left.
+    pub folders: Vec<FolderRow>,
+    pub folder_selected: usize,
+    /// Whether that pane is showing.
+    pub folders_open: bool,
+    /// Whether the message is showing beside the list, rather than instead of
+    /// it. A preview is drawn but not driven until it is focused.
+    pub preview: bool,
+    /// Which pane the keys act on.
+    pub focus: Focus,
     /// Where `?` was pressed, so closing the help goes back there.
     ///
     /// Help is an overlay on whatever you were doing. Dropping you at the list
@@ -200,8 +256,59 @@ impl App {
             dirty: false,
             no_accounts: false,
             link_selected: 0,
+            folders: Vec::new(),
+            folder_selected: 0,
+            folders_open: false,
+            preview: false,
+            focus: Focus::List,
             help_return: View::List,
         }
+    }
+
+    /// The folder under the folder cursor.
+    pub fn current_folder(&self) -> Option<&FolderRow> {
+        self.folders.get(self.folder_selected)
+    }
+
+    /// Reads the folder pane's contents from the workspace.
+    ///
+    /// Inbox first, then the rest by account and path, so the folder someone
+    /// wants is the one the cursor starts on.
+    pub fn load_folders(&mut self, workspace: &Workspace) -> Result<()> {
+        let listing = workspace.folders()?;
+        let mut rows: Vec<FolderRow> = listing
+            .folders
+            .into_iter()
+            .filter(|f| f.selectable)
+            .map(|f| FolderRow {
+                label: match f.special_use.as_deref() {
+                    Some(use_name) => title_case(use_name),
+                    None => f.name.clone(),
+                },
+                account: f.account,
+                path: f.path,
+                unread: f.unread,
+                total: f.total,
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            let rank = |r: &FolderRow| {
+                if r.label.eq_ignore_ascii_case("inbox") {
+                    0
+                } else {
+                    1
+                }
+            };
+            rank(a)
+                .cmp(&rank(b))
+                .then_with(|| a.account.cmp(&b.account))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        self.folders = rows;
+        self.folder_selected = self
+            .folder_selected
+            .min(self.folders.len().saturating_sub(1));
+        Ok(())
     }
 
     /// The selected message's id, if it is unread.
@@ -387,12 +494,77 @@ impl App {
                 Effect::None
             }
 
+            // The panes slide: left opens the folders or closes the message,
+            // right shows the message beside the list and then focuses it.
+            // Nothing here is modal — the list stays where it was, and every
+            // one of these is reversible with the opposite arrow.
+            Action::PaneLeft => {
+                match self.focus {
+                    // Reading beside the list: close it and come back.
+                    Focus::Message if self.view == View::List => {
+                        self.preview = false;
+                        self.open = None;
+                        self.body_scroll = 0;
+                        self.focus = Focus::List;
+                    }
+                    // Already in the folders: left is the way out again.
+                    Focus::Folders => {
+                        self.folders_open = false;
+                        self.focus = Focus::List;
+                    }
+                    _ if self.view == View::List => {
+                        self.folders_open = true;
+                        self.focus = Focus::Folders;
+                    }
+                    _ => self.back(),
+                }
+                Effect::None
+            }
+            Action::PaneRight => {
+                if self.view != View::List {
+                    return Effect::None;
+                }
+                match self.focus {
+                    // Choosing a folder is what the pane is for.
+                    Focus::Folders => self.choose_folder(),
+                    // Shown but not driven; a second press hands it the keys.
+                    Focus::List if self.preview => {
+                        self.focus = Focus::Message;
+                        // Now it is being read rather than glanced at, and
+                        // §7 says a message read is read.
+                        match self.unread_selection() {
+                            Some(id) => Effect::Write(Write::MarkRead { id }),
+                            None => Effect::None,
+                        }
+                    }
+                    Focus::List if self.current().is_some() => {
+                        self.preview = true;
+                        self.body_scroll = 0;
+                        // A preview is a look, not a read: nothing is marked
+                        // until the message is actually focused. Arrowing
+                        // down a list with a preview open would otherwise
+                        // mark the whole mailbox read on the way past.
+                        Effect::None
+                    }
+                    _ => Effect::None,
+                }
+            }
+            Action::FocusNext => {
+                self.focus = match self.focus {
+                    Focus::Folders => Focus::List,
+                    Focus::List if self.preview => Focus::Message,
+                    Focus::List => Focus::List,
+                    Focus::Message => Focus::List,
+                };
+                Effect::None
+            }
+
             Action::Down => {
-                self.move_by(1);
+                self.step_by(1);
                 Effect::None
             }
             Action::Up => {
-                self.move_by(-1);
+                self.step_by(-1);
                 Effect::None
             }
             Action::PageDown => {
@@ -414,11 +586,11 @@ impl App {
             }
 
             Action::ScrollDown => {
-                self.body_scroll = self.body_scroll.saturating_add(1);
+                self.scroll_body(1);
                 Effect::None
             }
             Action::ScrollUp => {
-                self.body_scroll = self.body_scroll.saturating_sub(1);
+                self.scroll_body(-1);
                 Effect::None
             }
 
@@ -428,6 +600,9 @@ impl App {
                         Some(url) => Effect::OpenUrl(url.clone()),
                         None => Effect::None,
                     };
+                }
+                if self.view == View::List && self.focus == Focus::Folders {
+                    return self.choose_folder();
                 }
                 if self.view == View::List && self.current().is_some() {
                     self.view = View::Message;
@@ -556,6 +731,58 @@ impl App {
                 }
             }
         }
+    }
+
+    fn scroll_body(&mut self, delta: isize) {
+        self.body_scroll = if delta < 0 {
+            self.body_scroll.saturating_sub(delta.unsigned_abs() as u16)
+        } else {
+            self.body_scroll.saturating_add(delta as u16)
+        };
+    }
+
+    /// One step, in whichever pane the keys are pointed at.
+    fn step_by(&mut self, delta: isize) {
+        if self.view == View::List {
+            match self.focus {
+                Focus::Folders => {
+                    if self.folders.is_empty() {
+                        self.folder_selected = 0;
+                        return;
+                    }
+                    let next = self.folder_selected as isize + delta;
+                    self.folder_selected = next.clamp(0, self.folders.len() as isize - 1) as usize;
+                    return;
+                }
+                // Reading beside the list: the thing being moved through is
+                // the text, as it is when the message has the screen.
+                Focus::Message => {
+                    self.scroll_body(delta);
+                    return;
+                }
+                Focus::List => {}
+            }
+        }
+        self.move_by(delta);
+    }
+
+    /// Selects the folder under the cursor and puts the pane away.
+    ///
+    /// The pane closes because it was a means to a listing: leaving it open
+    /// would spend a quarter of a narrow terminal on a question already
+    /// answered. `Left` brings it back.
+    fn choose_folder(&mut self) -> Effect {
+        let Some(folder) = self.current_folder() else {
+            return Effect::None;
+        };
+        self.query = folder.query();
+        self.folders_open = false;
+        self.focus = Focus::List;
+        self.selected = 0;
+        self.preview = false;
+        self.open = None;
+        self.dirty = true;
+        Effect::None
     }
 
     fn move_by(&mut self, delta: isize) {

@@ -667,3 +667,155 @@ fn losing_the_open_message_returns_to_the_listing() {
     );
     assert_eq!(app.body_scroll, 0);
 }
+
+// ---- the panes that slide in and out (§7) ----
+//
+// The window keeps three panes open; a terminal is narrower, so the folders
+// and the message come in when the arrows ask for them and go away again.
+// What is checked here is that every one of those moves is reversible and
+// that the list underneath never loses its place.
+
+fn app_with_folders(count: usize) -> App {
+    let mut app = app_with(count);
+    app.folders = vec![
+        mailbox_tui::app::FolderRow {
+            account: "test".into(),
+            path: "INBOX".into(),
+            label: "Inbox".into(),
+            unread: 3,
+            total: 10,
+        },
+        mailbox_tui::app::FolderRow {
+            account: "test".into(),
+            path: "Some Folder".into(),
+            label: "Some Folder".into(),
+            unread: 0,
+            total: 2,
+        },
+    ];
+    app
+}
+
+/// The index opens on the mail, not on a list of places mail could be.
+#[test]
+fn the_folder_pane_starts_shut() {
+    let app = app_with_folders(5);
+    assert!(!app.folders_open);
+    assert!(!app.preview);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::List);
+}
+
+/// Left opens the folders and points the keys at them; left again puts them
+/// away. Nothing in between disturbs the list.
+#[test]
+fn left_opens_the_folder_pane_and_left_again_closes_it() {
+    let mut app = app_with_folders(5);
+    app.selected = 3;
+
+    app.handle(Action::PaneLeft);
+    assert!(app.folders_open);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::Folders);
+
+    // Up and down now walk folders, and the message cursor stays put.
+    app.handle(Action::Down);
+    assert_eq!(app.folder_selected, 1);
+    assert_eq!(app.selected, 3, "the message cursor moved with the folders");
+
+    app.handle(Action::PaneLeft);
+    assert!(!app.folders_open);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::List);
+    assert_eq!(app.selected, 3);
+}
+
+/// Choosing a folder is what the pane is for, so it puts itself away.
+#[test]
+fn choosing_a_folder_files_the_pane_away_and_asks_for_that_folder() {
+    let mut app = app_with_folders(5);
+    app.handle(Action::PaneLeft);
+    app.handle(Action::Down);
+    app.handle(Action::Open);
+
+    assert!(!app.folders_open, "the pane stayed open after choosing");
+    assert_eq!(app.focus, mailbox_tui::app::Focus::List);
+    // A path with a space has to survive into the query as one term.
+    assert_eq!(app.query, r#"account:test in:"Some Folder""#);
+    assert!(app.dirty, "the listing was not asked to reload");
+    assert_eq!(app.selected, 0);
+}
+
+/// Right shows the message beside the list without handing it the keys, so
+/// arrowing down the list keeps moving the list.
+#[test]
+fn right_previews_the_message_and_right_again_focuses_it() {
+    let mut app = app_with_folders(5);
+    app.selected = 1;
+
+    app.handle(Action::PaneRight);
+    assert!(app.preview);
+    assert_eq!(
+        app.focus,
+        mailbox_tui::app::Focus::List,
+        "the preview took the keys"
+    );
+    assert_eq!(
+        app.view,
+        View::List,
+        "the list was replaced rather than shared"
+    );
+
+    // Still driving the list.
+    app.handle(Action::Down);
+    assert_eq!(app.selected, 2);
+
+    app.handle(Action::PaneRight);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::Message);
+    // Now down scrolls the message instead of moving the list.
+    let before = app.selected;
+    app.handle(Action::Down);
+    assert_eq!(app.selected, before, "the list moved while reading");
+    assert_eq!(app.body_scroll, 1);
+}
+
+/// A glance is not a read. Marking every message seen on the way past is the
+/// exact thing the window's dwell exists to prevent.
+#[test]
+fn a_preview_does_not_mark_read_until_it_is_focused() {
+    let mut app = app_with_folders(5);
+    app.selected = 1; // `id01`, unread in the fixture.
+
+    assert_eq!(app.handle(Action::PaneRight), Effect::None);
+    match app.handle(Action::PaneRight) {
+        Effect::Write(mailbox_tui::app::Write::MarkRead { id }) => assert_eq!(id, "id01"),
+        other => panic!("focusing the preview did not mark it read: {other:?}"),
+    }
+}
+
+/// Left closes the message and gives the list back, which is what makes the
+/// arrows a loop rather than a one-way trip.
+#[test]
+fn left_closes_the_preview_and_returns_to_the_list() {
+    let mut app = app_with_folders(5);
+    app.handle(Action::PaneRight);
+    app.handle(Action::PaneRight);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::Message);
+
+    app.handle(Action::PaneLeft);
+    assert!(!app.preview);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::List);
+    assert!(app.open.is_none());
+}
+
+/// Tab is the other way across, for fingers that expect it.
+#[test]
+fn tab_moves_between_the_panes_that_are_open() {
+    let mut app = app_with_folders(5);
+    // With nothing open there is nowhere to go, and that is not an error.
+    app.handle(Action::FocusNext);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::List);
+
+    app.handle(Action::PaneRight);
+    app.handle(Action::FocusNext);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::Message);
+    app.handle(Action::FocusNext);
+    assert_eq!(app.focus, mailbox_tui::app::Focus::List);
+}

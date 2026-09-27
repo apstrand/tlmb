@@ -53,6 +53,12 @@ pub enum Action {
     Snooze,
     /// Copy the selected link to the clipboard.
     Yank,
+    /// Slide the folder pane in, or close the message beside the list (§7).
+    PaneLeft,
+    /// Show the message beside the list, then focus it.
+    PaneRight,
+    /// Move the focus between the panes that are open.
+    FocusNext,
     Sync,
     Help,
     /// Scroll a message body without moving the selection.
@@ -93,6 +99,9 @@ impl Action {
             Action::Sync => "sync now",
             Action::Help => "help",
             Action::ScrollDown => "scroll down",
+            Action::PaneLeft => "folders / close message",
+            Action::PaneRight => "preview / focus message",
+            Action::FocusNext => "switch pane",
             Action::ScrollUp => "scroll up",
         }
     }
@@ -149,6 +158,11 @@ impl Keymap {
             ("y", Action::Yank),
             ("@", Action::Sync),
             ("?", Action::Help),
+            // The arrows slide the panes in and out; `h` and `l` keep their
+            // mutt meanings, so nobody's fingers have to relearn anything.
+            ("Left", Action::PaneLeft),
+            ("Right", Action::PaneRight),
+            ("Tab", Action::FocusNext),
             ("C-d", Action::ScrollDown),
             ("C-u", Action::ScrollUp),
             (" ", Action::ScrollDown),

@@ -52,6 +52,10 @@ pub fn run(opts: SessionOptions, tracer: Tracer, clock: Clock) -> Result<()> {
 
     let mut app = App::new();
     app.reload(&workspace)?;
+    // The folder pane's contents, read once here and again on every reload.
+    // It stays shut until `Left` asks for it: §7 opens on the mail, not on a
+    // list of places mail could be.
+    let _ = app.load_folders(&workspace);
     if !unknown.is_empty() {
         // Said rather than swallowed: a typo in `[keys]` that silently does
         // nothing is a rebinding the user believes is live.
@@ -179,6 +183,9 @@ fn event_loop(
                 app.status = format!("could not reload the list: {e}");
                 app.dirty = false;
             }
+            // The counts beside the folders are unread counts, and a reload
+            // is usually a reload because one of them changed.
+            let _ = app.load_folders(workspace);
             needs_redraw = true;
         }
 
@@ -307,7 +314,23 @@ fn handle_key(
     }
 
     let effect = app.handle(action);
-    if action == Action::Open || action == Action::Thread {
+    // The preview follows the cursor: the point of it is to arrow down a list
+    // and see each message, so a move with it open reloads it too.
+    let moved_with_preview = app.preview
+        && matches!(
+            action,
+            Action::Down
+                | Action::Up
+                | Action::PageDown
+                | Action::PageUp
+                | Action::Top
+                | Action::Bottom
+        );
+    if action == Action::Open
+        || action == Action::Thread
+        || action == Action::PaneRight
+        || moved_with_preview
+    {
         // A row can name a message that is no longer there: something else
         // moved or expunged it between the last reload and this keystroke.
         // That is a stale listing, not a failure — say so, put the listing
