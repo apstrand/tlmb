@@ -262,6 +262,13 @@ nav#folders {
 }
 
 .folder.is-current { background: var(--accent-soft); color: var(--accent); }
+/* Where the message would land if you let go now. */
+.folder.is-drop-target {
+    background: var(--accent-soft);
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+.message.is-dragging { opacity: .45; }
 .folder .count { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 /* The count is unread mail, so it reads as something to do rather than as a
    dimension of the folder. */

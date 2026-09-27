@@ -43,6 +43,8 @@ const state = {
     readTimer: 0,
     /// Which of the three panes the arrows are acting on.
     focusPane: "list",
+    /// The message being dragged, if one is.
+    dragging: null,
 };
 
 // ---- talking to the server ----
@@ -149,6 +151,23 @@ function drawList() {
         );
         if (marks.trim()) row.querySelector(".date").prepend(span("marks", marks + " "));
 
+        // Dragging a message to a folder files it — the mouse's version of
+        // `mv`. The id travels as plain text so a drop can be acted on
+        // without trusting anything held in this page's variables between
+        // the pick-up and the let-go.
+        row.draggable = true;
+        row.addEventListener("dragstart", (event) => {
+            event.dataTransfer.setData("text/plain", message.id);
+            event.dataTransfer.effectAllowed = "move";
+            row.classList.add("is-dragging");
+            // Dragging a message that is not the one under the cursor should
+            // move that message, not the selected one.
+            state.dragging = message.id;
+        });
+        row.addEventListener("dragend", () => {
+            row.classList.remove("is-dragging");
+            state.dragging = null;
+        });
         row.addEventListener("click", () => {
             // Clicking the message already under the cursor is a second,
             // deliberate look at it. The dwell exists to keep a cursor passing
@@ -682,6 +701,38 @@ function folderStats(records) {
     return lines.join("\n");
 }
 
+/**
+ * Makes a folder row a place a message can be dropped.
+ *
+ * The drop target is the folder's own path rather than its special use, for
+ * the same reason undo records the path: it is where the message actually
+ * has to land. A message can only be dropped into a folder of its own
+ * account — a move across accounts is a copy and a delete, which is not what
+ * dragging looks like it does, so it is refused rather than half-done.
+ */
+function acceptDrops(node, path, account) {
+    node.addEventListener("dragover", (event) => {
+        if (!state.dragging) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        node.classList.add("is-drop-target");
+    });
+    node.addEventListener("dragleave", () => node.classList.remove("is-drop-target"));
+    node.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        node.classList.remove("is-drop-target");
+        const id = event.dataTransfer.getData("text/plain") || state.dragging;
+        if (!id) return;
+        const message = state.messages.find((m) => m.id === id);
+        if (account && message && message.account !== account) {
+            fail(new Error(`${message.account} and ${account} are different accounts`));
+            return;
+        }
+        if (message && message.folder === path) return;
+        await moveTo(id, path);
+    });
+}
+
 /** The address behind an account's short name, for the hovers. */
 function addressFor(account) {
     return accountRecords.find((a) => a.id === account)?.address ?? account;
@@ -755,6 +806,7 @@ function folderButton(label, query, total = 0, unread = 0, scope) {
     button.title = scope
         ? `${addressFor(scope.account)} — ${scope.path}: ${unread} unread, ${total} message${total === 1 ? "" : "s"}`
         : `${unread} unread, ${total} message${total === 1 ? "" : "s"}`;
+    if (scope) acceptDrops(button, scope.path, scope.account);
     button.addEventListener("click", () => {
         el("search").value = query;
         state.activeFolder = scope;
