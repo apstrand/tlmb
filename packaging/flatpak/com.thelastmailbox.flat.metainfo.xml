@@ -34,6 +34,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.8" date="2026-09-26">
+      <description>
+        <p>Fixes marking mail read in a multi-account mailbox, syncs when the
+        window opens and in the background, and moves adding an account into
+        the accounts dialog.</p>
+      </description>
+    </release>
     <release version="0.1.7" date="2026-09-24">
       <description>
         <p>Adds OAuth2 sign-in to the hosted client, a keyboard shortcut list,
