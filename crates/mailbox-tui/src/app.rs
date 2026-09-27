@@ -32,7 +32,14 @@ use crate::keys::Action;
 pub enum Focus {
     Folders,
     List,
-    Message,
+}
+
+/// What is open beside the message list, if anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    None,
+    Folders,
+    Preview,
 }
 
 /// One row of the folder pane.
@@ -233,11 +240,12 @@ pub struct App {
     /// The folders, for the pane that slides in from the left.
     pub folders: Vec<FolderRow>,
     pub folder_selected: usize,
-    /// Whether that pane is showing.
-    pub folders_open: bool,
-    /// Whether the message is showing beside the list, rather than instead of
-    /// it. A preview is drawn but not driven until it is focused.
-    pub preview: bool,
+    /// Which pane is open beside the list, if either.
+    ///
+    /// Never both. A terminal showing folders, list and message at once is
+    /// three narrow columns; and the two are wanted at different moments —
+    /// one to choose what to read, the other to read it.
+    pub side: Side,
     /// Which pane the keys act on.
     pub focus: Focus,
     /// Where `?` was pressed, so closing the help goes back there.
@@ -267,8 +275,7 @@ impl App {
             link_selected: 0,
             folders: Vec::new(),
             folder_selected: 0,
-            folders_open: false,
-            preview: false,
+            side: Side::None,
             focus: Focus::List,
             help_return: View::List,
         }
@@ -547,25 +554,33 @@ impl App {
             // right shows the message beside the list and then focuses it.
             // Nothing here is modal — the list stays where it was, and every
             // one of these is reversible with the opposite arrow.
+            // Left walks out of a pane; right walks in, and then through.
+            // Neither is modal and neither can strand you: from the list,
+            // left is always the folders and right is always the message.
             Action::PaneLeft => {
-                match self.focus {
+                if self.view != View::List {
+                    self.back();
+                    return Effect::None;
+                }
+                match self.side {
+                    // Already as far left as there is. Doing nothing is the
+                    // honest answer — closing the folders here would make the
+                    // same key mean "open" and "close" one press apart.
+                    Side::Folders => {}
                     // Reading beside the list: close it and come back.
-                    Focus::Message if self.view == View::List => {
-                        self.preview = false;
+                    Side::Preview => {
+                        self.side = Side::None;
                         self.open = None;
                         self.body_scroll = 0;
                         self.focus = Focus::List;
                     }
-                    // Already in the folders: left is the way out again.
-                    Focus::Folders => {
-                        self.folders_open = false;
-                        self.focus = Focus::List;
-                    }
-                    _ if self.view == View::List => {
-                        self.folders_open = true;
+                    Side::None => {
+                        self.side = Side::Folders;
                         self.focus = Focus::Folders;
+                        // The list already shows the folder under the cursor,
+                        // so opening the pane shows what it is pointing at.
+                        return self.show_selected_folder();
                     }
-                    _ => self.back(),
                 }
                 Effect::None
             }
@@ -573,48 +588,52 @@ impl App {
                 if self.view != View::List {
                     return Effect::None;
                 }
-                match self.focus {
-                    // Choosing a folder is what the pane is for.
-                    Focus::Folders => self.choose_folder(),
-                    // Shown but not driven; a second press hands it the keys.
-                    Focus::List if self.preview => {
-                        self.focus = Focus::Message;
-                        // Now it is being read rather than glanced at, and
-                        // §7 says a message read is read.
+                match self.side {
+                    // The list has been following the cursor all along, so
+                    // leaving the pane is all that is left to do.
+                    Side::Folders => {
+                        self.side = Side::None;
+                        self.focus = Focus::List;
+                        Effect::None
+                    }
+                    // Beside the list, then instead of it.
+                    Side::Preview => {
+                        self.side = Side::None;
+                        self.view = View::Message;
+                        self.body_scroll = 0;
                         match self.unread_selection() {
                             Some(id) => Effect::Write(Write::MarkRead { id }),
                             None => Effect::None,
                         }
                     }
-                    Focus::List if self.current().is_some() => {
-                        self.preview = true;
+                    Side::None if self.current().is_some() => {
+                        self.side = Side::Preview;
+                        self.focus = Focus::List;
                         self.body_scroll = 0;
-                        // A preview is a look, not a read: nothing is marked
-                        // until the message is actually focused. Arrowing
-                        // down a list with a preview open would otherwise
-                        // mark the whole mailbox read on the way past.
                         Effect::None
                     }
-                    _ => Effect::None,
+                    Side::None => Effect::None,
                 }
             }
+
+            // Tab crosses to the other pane when there is one to cross to.
             Action::FocusNext => {
-                self.focus = match self.focus {
-                    Focus::Folders => Focus::List,
-                    Focus::List if self.preview => Focus::Message,
-                    Focus::List => Focus::List,
-                    Focus::Message => Focus::List,
-                };
+                if self.view == View::List && self.side == Side::Folders {
+                    self.focus = match self.focus {
+                        Focus::Folders => Focus::List,
+                        Focus::List => Focus::Folders,
+                    };
+                }
                 Effect::None
             }
 
             Action::Down => {
                 self.step_by(1);
-                Effect::None
+                self.follow_folder_cursor()
             }
             Action::Up => {
                 self.step_by(-1);
-                Effect::None
+                self.follow_folder_cursor()
             }
             Action::PageDown => {
                 self.move_by(self.page_size as isize);
@@ -650,8 +669,13 @@ impl App {
                         None => Effect::None,
                     };
                 }
+                // Enter in the folders is done choosing: the list is already
+                // showing them, so this puts the pane away and hands the keys
+                // back to the messages.
                 if self.view == View::List && self.focus == Focus::Folders {
-                    return self.choose_folder();
+                    self.side = Side::None;
+                    self.focus = Focus::List;
+                    return Effect::None;
                 }
                 if self.view == View::List && self.current().is_some() {
                     self.view = View::Message;
@@ -790,45 +814,43 @@ impl App {
         };
     }
 
+    /// Re-points the list when the move was one through the folders.
+    fn follow_folder_cursor(&mut self) -> Effect {
+        if self.view == View::List && self.focus == Focus::Folders {
+            return self.show_selected_folder();
+        }
+        Effect::None
+    }
+
     /// One step, in whichever pane the keys are pointed at.
     fn step_by(&mut self, delta: isize) {
-        if self.view == View::List {
-            match self.focus {
-                Focus::Folders => {
-                    if self.folders.is_empty() {
-                        self.folder_selected = 0;
-                        return;
-                    }
-                    let next = self.folder_selected as isize + delta;
-                    self.folder_selected = next.clamp(0, self.folders.len() as isize - 1) as usize;
-                    return;
-                }
-                // Reading beside the list: the thing being moved through is
-                // the text, as it is when the message has the screen.
-                Focus::Message => {
-                    self.scroll_body(delta);
-                    return;
-                }
-                Focus::List => {}
+        if self.view == View::List && self.focus == Focus::Folders {
+            if self.folders.is_empty() {
+                self.folder_selected = 0;
+                return;
             }
+            let next = self.folder_selected as isize + delta;
+            self.folder_selected = next.clamp(0, self.folders.len() as isize - 1) as usize;
+            return;
         }
         self.move_by(delta);
     }
 
-    /// Selects the folder under the cursor and puts the pane away.
+    /// Points the message list at the folder under the cursor.
     ///
-    /// The pane closes because it was a means to a listing: leaving it open
-    /// would spend a quarter of a narrow terminal on a question already
-    /// answered. `Left` brings it back.
-    fn choose_folder(&mut self) -> Effect {
+    /// Run on every move rather than on a keypress that commits: moving down
+    /// the folders *is* choosing between them, and a list that only catches
+    /// up when you press something is a list you cannot browse with.
+    fn show_selected_folder(&mut self) -> Effect {
         let Some(folder) = self.current_folder() else {
             return Effect::None;
         };
-        self.query = folder.query();
-        self.folders_open = false;
-        self.focus = Focus::List;
+        let query = folder.query();
+        if query == self.query {
+            return Effect::None;
+        }
+        self.query = query;
         self.selected = 0;
-        self.preview = false;
         self.open = None;
         self.dirty = true;
         Effect::None

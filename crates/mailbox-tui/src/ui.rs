@@ -35,6 +35,7 @@ pub fn draw(
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1), // what is showing, and what the keys do
             Constraint::Min(1),    // the content
             Constraint::Length(1), // status
             Constraint::Length(1), // prompt
@@ -45,17 +46,103 @@ pub fn draw(
     // can actually see rather than by a guess.
     app.page_size = (areas[0].height as usize).saturating_sub(2).max(1);
 
+    draw_header(frame, areas[0], app);
     let mut links = Vec::new();
     match app.view {
-        View::List => draw_index(frame, areas[0], app, &mut links),
-        View::Message => draw_message(frame, areas[0], app, &mut links),
-        View::Thread => draw_thread(frame, areas[0], app),
-        View::Links => draw_links(frame, areas[0], app, &mut links),
-        View::Help => draw_help(frame, areas[0], keymap),
+        View::List => draw_index(frame, areas[1], app, &mut links),
+        View::Message => draw_message(frame, areas[1], app, &mut links),
+        View::Thread => draw_thread(frame, areas[1], app),
+        View::Links => draw_links(frame, areas[1], app, &mut links),
+        View::Help => draw_help(frame, areas[1], keymap),
     }
-    draw_status(frame, areas[1], app);
-    draw_prompt(frame, areas[2], app);
+    draw_status(frame, areas[2], app);
+    draw_prompt(frame, areas[3], app);
     links
+}
+
+/// What is on screen, and what the keys will do to it.
+///
+/// A pane that slides in and out is quick to move through and easy to lose
+/// your place in: the arrows mean different things depending on what is open,
+/// and nothing on screen used to say which. This is that line — the left half
+/// names what is showing, the right half names the keys that apply to it.
+fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    use crate::app::{Focus, Side};
+
+    let (showing, keys) = match app.view {
+        View::Message => (
+            format!(
+                "message · {}",
+                app.open
+                    .as_ref()
+                    .map(|m| m.summary.subject.as_str())
+                    .unwrap_or("(none)")
+            ),
+            "← back   ↑↓ scroll   o links   r reply   ? keys".to_string(),
+        ),
+        View::Thread => (
+            "thread".to_string(),
+            "← back   ↑↓ move   ? keys".to_string(),
+        ),
+        View::Links => (
+            "links".to_string(),
+            "↑↓ choose   Enter open   y copy   ← back".to_string(),
+        ),
+        View::Help => ("keys".to_string(), "any key closes".to_string()),
+        View::List => match (app.side, app.focus) {
+            (Side::Folders, Focus::Folders) => (
+                format!(
+                    "folders · {}",
+                    app.current_folder().map(|f| f.label.as_str()).unwrap_or("")
+                ),
+                "↑↓ folder   → messages   Tab list   ? keys".to_string(),
+            ),
+            (Side::Folders, Focus::List) => (
+                "folders + messages".to_string(),
+                "↑↓ message   Tab folders   → messages   ? keys".to_string(),
+            ),
+            (Side::Preview, _) => (
+                "messages + preview".to_string(),
+                "↑↓ message   → open   ← close   ? keys".to_string(),
+            ),
+            (Side::None, _) => (
+                format!(
+                    "messages · {}",
+                    if app.query.is_empty() {
+                        "all mail"
+                    } else {
+                        &app.query
+                    }
+                ),
+                "← folders   → preview   Enter open   / search   ? keys".to_string(),
+            ),
+        },
+    };
+
+    // The keys go on the right and are dropped first: what is showing matters
+    // more than the reminder, and a narrow terminal cannot have both.
+    let width = area.width as usize;
+    let gap = 2;
+    let keys = if showing.chars().count() + gap + keys.chars().count() <= width {
+        keys
+    } else {
+        String::new()
+    };
+    let left = truncate(&showing, width.saturating_sub(keys.chars().count() + gap));
+    let pad = width.saturating_sub(left.chars().count() + keys.chars().count());
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!(" {left}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ".repeat(pad.saturating_sub(1))),
+            Span::styled(keys, Style::default().fg(theme::DIM)),
+        ]))
+        .style(Style::default().bg(theme::HEADER_BG)),
+        area,
+    );
 }
 
 /// The index, with whichever panes are currently slid in beside it (§7).
@@ -73,8 +160,9 @@ fn draw_index(
     // Below this there is not room for two panes, let alone three, and a
     // 12-column list of subjects helps nobody.
     const NARROW: u16 = 60;
-    let folders = app.folders_open && area.width >= NARROW;
-    let preview = app.preview && app.open.is_some() && area.width >= NARROW;
+    let wide = area.width >= NARROW;
+    let folders = wide && app.side == crate::app::Side::Folders;
+    let preview = wide && app.side == crate::app::Side::Preview && app.open.is_some();
 
     let mut constraints = Vec::new();
     if folders {
@@ -101,7 +189,9 @@ fn draw_index(
         // folder pane draws, and coloured the same way to say which side the
         // keys are on.
         let pane = columns[next];
-        let focused = app.focus == crate::app::Focus::Message;
+        // The preview is never the focused pane: right opens it full
+        // screen rather than handing it the keys here.
+        let focused = false;
         frame.render_widget(
             Block::default()
                 .borders(Borders::LEFT)

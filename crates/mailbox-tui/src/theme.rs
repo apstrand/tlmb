@@ -10,6 +10,9 @@ pub const UNREAD: Color = Color::Blue;
 pub const FLAGGED: Color = Color::Yellow;
 pub const SENDER: Color = Color::Cyan;
 pub const DIM: Color = Color::DarkGray;
+/// The header's background — a band, not a colour of its own, so it reads as
+/// part of the frame rather than as something that happened.
+pub const HEADER_BG: Color = Color::Indexed(236);
 pub const ACCENT: Color = Color::Green;
 pub const WARN: Color = Color::Yellow;
 

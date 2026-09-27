@@ -316,7 +316,7 @@ fn handle_key(
     let effect = app.handle(action);
     // The preview follows the cursor: the point of it is to arrow down a list
     // and see each message, so a move with it open reloads it too.
-    let moved_with_preview = app.preview
+    let moved_with_preview = app.side == crate::app::Side::Preview
         && matches!(
             action,
             Action::Down
