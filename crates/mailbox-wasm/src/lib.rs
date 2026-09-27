@@ -371,10 +371,7 @@ impl HostedMailbox {
                 } else {
                     mailbox_core::imap::Credential::Password(value.to_string())
                 };
-                mailbox_core::credentials::install(
-                    account_id,
-                    kind,
-                );
+                mailbox_core::credentials::install(account_id, kind);
             }
             let (database, files) =
                 decode_checkpoint(checkpoints.get(account_id).map(Vec::as_slice))?;
