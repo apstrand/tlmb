@@ -328,6 +328,13 @@ pub struct Status {
     pub accounts: Vec<AccountStatus>,
     /// Total size of `meta.db` plus `blobs/`, in bytes.
     pub store_bytes: u64,
+    /// Where the per-account stores live, when they live on a disk.
+    ///
+    /// `None` in the browser, whose store is the origin's and has no path to
+    /// name. Present so an interface can answer "where is my mail?" without
+    /// making the user reconstruct it from `XDG_DATA_HOME` and an account id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_path: Option<String>,
 }
 
 /// A local write that could not be pushed, reported by `mailbox status` (§5.3).

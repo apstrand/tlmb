@@ -460,6 +460,7 @@ impl Session {
                 coverage: self.coverage()?,
             }],
             store_bytes: self.store.disk_usage(),
+            store_path: crate::workspace::store_path(),
         })
     }
 

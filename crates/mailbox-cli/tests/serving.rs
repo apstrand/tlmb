@@ -673,10 +673,34 @@ fn the_page_declares_where_it_may_load_from() {
     // Nothing is fetched from anywhere but here — a mail client that phones a
     // CDN on every page load is a mail client that leaks when you read (§2).
     assert!(!body.contains("//cdn"), "{body}");
-    assert!(
-        !body.contains("https://"),
-        "the page references an outside origin: {body}"
-    );
+    for attribute in ["src=\"http", "src='http", "@import", "url(http"] {
+        assert!(
+            !body.contains(attribute),
+            "the page fetches from an outside origin ({attribute}): {body}"
+        );
+    }
+    // `<link>` fetches; `<a>` does not. A stylesheet or icon from elsewhere
+    // loads itself the moment the page opens and so is forbidden outright,
+    // while a link in the about box is followed only when someone clicks it
+    // — and with `referrer: no-referrer` set above, it carries nothing when
+    // they do.
+    for link in body.match_indices("<link") {
+        let tag = &body[link.0..body[link.0..].find('>').map_or(body.len(), |e| link.0 + e)];
+        assert!(
+            !tag.contains("http"),
+            "a subresource is loaded from an outside origin: {tag}"
+        );
+    }
+    // And the only outside origins left are links someone has to choose.
+    for hit in body.match_indices("https://") {
+        let before = &body[..hit.0];
+        let tag = before.rfind('<').map(|i| &before[i..]).unwrap_or("");
+        assert!(
+            tag.starts_with("<a "),
+            "an outside origin outside an <a>: …{}",
+            &body[hit.0.saturating_sub(80)..(hit.0 + 60).min(body.len())]
+        );
+    }
 
     for asset in ["/style.css", "/mailbox.js"] {
         let (status, head, _) = s.get(asset, &format!("Cookie: mailbox_token={}\r\n", s.token));

@@ -463,6 +463,7 @@ impl Workspace {
         Ok(Status {
             accounts,
             store_bytes,
+            store_path: store_path(),
         })
     }
 
@@ -556,6 +557,18 @@ fn sort_rows(rows: &mut [MessageSummary], sort: Sort) {
 }
 
 /// Every account in the workspace, for callers that only need the names.
+/// Where the stores live, for an interface that offers to say so.
+///
+/// `None` where there is no filesystem to name — the browser build keeps its
+/// store in the origin, which is not a path and not somewhere anyone can go
+/// and look.
+pub fn store_path() -> Option<String> {
+    if cfg!(target_arch = "wasm32") {
+        return None;
+    }
+    Some(crate::paths::state_dir().display().to_string())
+}
+
 pub fn account_ids(workspace: &Workspace) -> Vec<String> {
     workspace
         .accounts

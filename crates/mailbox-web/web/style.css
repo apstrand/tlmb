@@ -135,7 +135,29 @@ button.icon { padding: .35rem .55rem; }
 #host { margin-left: auto; }
 #host, #version { flex: none; }
 /* Last in the bar, and quieter than the rest: it is reference, not news. */
-#version { opacity: .6; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#version {
+    opacity: .6;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    /* A button, because it opens the about box — but it has to sit in the bar
+       like the text beside it, not like a control. */
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+#version:hover, #version:focus-visible { opacity: 1; text-decoration: underline; }
+.about-version { font-size: 1.1rem; font-weight: 600; margin: .2rem 0 .6rem; }
+.about-build {
+    margin: 0 0 1rem;
+    padding: .6rem .7rem;
+    background: var(--bg-sunken);
+    border-radius: var(--radius);
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+}
 #version:empty { display: none; }
 
 #update { margin-left: auto; display: flex; align-items: center; gap: .5rem; }
@@ -157,6 +179,14 @@ button.icon { padding: .35rem .55rem; }
 @media (prefers-reduced-motion: reduce) {
     .spinner { animation: none; }
 }
+
+/* `hidden` is only `display: none` in the browser's own stylesheet, so any
+   rule here that sets `display` beats it — which is how a hidden flex row
+   stays on screen. Said once, with the weight to win, rather than remembered
+   at each of the places that set `display`. The `:not([hidden])` and
+   `#thing[hidden]` rules further down predate this and are now belt and
+   braces. */
+[hidden] { display: none !important; }
 
 /* ---- the three panes ---- */
 

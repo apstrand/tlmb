@@ -1201,11 +1201,45 @@ el("host").textContent = hostedBackend
     ? "browser store"
     : window.__MAILBOX_SHELL__ === "gui" ? "local store" : location.host;
 
+/**
+ * What the store is, on hover: where it is and how much of it there is.
+ *
+ * Asked for once the mailbox is up rather than drawn from the listing, because
+ * the size is a property of the disk and not of the messages on screen.
+ */
+async function describeStore() {
+    try {
+        const status = await api("/api/status");
+        const messages = (status.accounts ?? []).reduce((n, a) => n + a.messages, 0);
+        const lines = [
+            hostedBackend
+                ? "Kept in this browser's storage, on this device only."
+                : status.store_path ?? "On this machine.",
+            `${size(status.store_bytes ?? 0)} on disk`,
+            `${messages} message${messages === 1 ? "" : "s"} in ${
+                (status.accounts ?? []).length} account${
+                (status.accounts ?? []).length === 1 ? "" : "s"}`,
+        ];
+        el("host").title = lines.join("\n");
+    } catch {
+        // The status call is a nicety; a failure has already been reported
+        // by whatever else needed the server.
+    }
+}
+
 // Which build this is, at the end of the status bar. A screenshot of a bug
 // carries the version with it this way, and the commit behind the tooltip is
 // what turns "0.1.6" into a build somebody can check out.
 el("version").textContent = pageConfig.dataset.version || "";
-el("version").title = pageConfig.dataset.build || "";
+
+// The stamp is a button into the about box: the full build detail, the one
+// link this client has, and — where the platform can — the update controls.
+el("about-version").textContent = pageConfig.dataset.version || "";
+el("about-build").textContent = pageConfig.dataset.build || "";
+el("version").addEventListener("click", () => {
+    if (!el("about-window").open) el("about-window").showModal();
+});
+el("about-close").addEventListener("click", () => el("about-window").close());
 
 // ---- the first launch (§9) ----
 //
@@ -1270,6 +1304,8 @@ async function start() {
     loadAccounts();
     loadIdentities();
     reload();
+
+    describeStore();
 
     // Mail that arrived while the window was shut is the mail someone opened
     // it for, so the pass starts with the window rather than waiting to be
@@ -1649,6 +1685,62 @@ function drawUpdate(status) {
     box.hidden = false;
 }
 
+/**
+ * The same update state, in the about box.
+ *
+ * The button does whatever there is to do: install what the portal found,
+ * restart into what it installed, or — when there is nothing — ask again and
+ * say so. Only the portal actually decides whether a build is newer (see
+ * mailbox-ui's update.rs); this never claims to have checked by itself.
+ */
+function drawAboutUpdate(status) {
+    const box = el("about-update");
+    const check = el("about-check");
+    const note = el("about-update-note");
+    if (!shellIpc || status.state === "unsupported") {
+        box.hidden = true;
+        return;
+    }
+    box.hidden = false;
+    check.dataset.state = status.state;
+    check.disabled = status.state === "installing";
+    if (status.state === "available") {
+        check.textContent = "Install update";
+        note.textContent = "A new version is available.";
+    } else if (status.state === "ready") {
+        check.textContent = "Restart";
+        note.textContent = "The new version is installed.";
+    } else if (status.state === "installing") {
+        check.textContent = "Installing…";
+        note.textContent = `${status.percent}%`;
+    } else if (status.state === "failed") {
+        check.textContent = "Try again";
+        note.textContent = `Update failed: ${status.message}`;
+    } else {
+        check.textContent = "Check for updates";
+        note.textContent = "";
+    }
+}
+
+async function aboutCheck() {
+    const state = el("about-check").dataset.state;
+    if (state === "available" || state === "ready" || state === "failed") {
+        await updateAction();
+        return;
+    }
+    // Nothing pending: ask the portal where it has got to and say so. It
+    // watches on its own, so this reports rather than triggers.
+    try {
+        const status = await shellIpc.invoke("update_status");
+        drawAboutUpdate(status);
+        if (status.state === "current") {
+            el("about-update-note").textContent = "This is the newest version the remote offers.";
+        }
+    } catch (e) {
+        el("about-update-note").textContent = String(e.message ?? e);
+    }
+}
+
 async function updateAction() {
     const action = el("update-action");
     if (action.dataset.state === "ready") {
@@ -1670,10 +1762,16 @@ async function updateAction() {
     await shellIpc.invoke("update_install").catch(fail);
 }
 
+function showUpdate(status) {
+    drawUpdate(status);
+    drawAboutUpdate(status);
+}
+
 if (shellIpc) {
-    window.addEventListener("mailbox-update", (event) => drawUpdate(event.detail));
+    window.addEventListener("mailbox-update", (event) => showUpdate(event.detail));
     el("update-action").addEventListener("click", () => updateAction());
-    shellIpc.invoke("update_status").then(drawUpdate, () => {});
+    el("about-check").addEventListener("click", () => aboutCheck());
+    shellIpc.invoke("update_status").then(showUpdate, () => {});
 }
 
 start();

@@ -285,8 +285,23 @@
   <!-- Which build this is. Filled from the page config; the full detail —
        commit, date, tag — is the tooltip, since the bar has room for one
        line and a bug report needs the rest. -->
-  <span id="version" title=""></span>
+  <button type="button" id="version" title="About this build"></button>
 </footer>
+
+<!-- What build this is, in full, plus the one link worth having in a mail
+     client that deliberately has no others. The update controls are the same
+     ones the status bar shows and appear only where the platform has them
+     (see mailbox-ui's update.rs). -->
+<dialog id="about-window" aria-label="About">
+  <div class="dialog-heading"><h2>The Last Mailbox</h2><button type="button" id="about-close" class="text">Close</button></div>
+  <p id="about-version" class="about-version"></p>
+  <pre id="about-build" class="about-build"></pre>
+  <p><a id="about-site" href="https://thelastmailbox.com" target="_blank" rel="noreferrer noopener">thelastmailbox.com</a></p>
+  <div id="about-update" class="setup-actions" hidden>
+    <button type="button" id="about-check">Check for updates</button>
+    <span id="about-update-note" class="setup-note" role="status"></span>
+  </div>
+</dialog>
 
 <script type="module" src="mailbox.js"></script>
 </body>
