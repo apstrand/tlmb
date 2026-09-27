@@ -41,6 +41,8 @@ const state = {
     inFlight: 0,
     /// The pending "this has been read" timer, cancelled when the cursor moves.
     readTimer: 0,
+    /// Which of the three panes the arrows are acting on.
+    focusPane: "list",
 };
 
 // ---- talking to the server ----
@@ -757,6 +759,8 @@ function folderButton(label, query, total = 0, unread = 0, scope) {
         el("search").value = query;
         state.activeFolder = scope;
         state.listLimit = 100;
+        // The folder was a means to the messages; the arrows follow them.
+        state.focusPane = "list";
         run(query);
         showPane("list");
         if (hostedBackend && scope) syncNow({ account: scope.account, folders: [scope.path] });
@@ -961,16 +965,21 @@ el("compose-cc-toggle").addEventListener("click", () => {
 // frees `g` to be the top of the list, as it is everywhere else `g` appears.
 
 const keys = {
+    // The letters act on the message list wherever you are, as they do in the
+    // terminal. The arrows are spatial: they move between the panes and then
+    // within whichever one you are in.
     j: () => move(1),
-    ArrowDown: () => move(1),
     k: () => move(-1),
-    ArrowUp: () => move(-1),
+    ArrowDown: () => step(1),
+    ArrowUp: () => step(-1),
+    ArrowRight: () => focusPane(PANE_RIGHT[state.focusPane]),
+    ArrowLeft: () => focusPane(PANE_LEFT[state.focusPane]),
     g: () => select(0),
     Home: () => select(0),
     G: () => select(state.messages.length - 1),
     End: () => select(state.messages.length - 1),
-    PageDown: () => move(pageRows()),
-    PageUp: () => move(-pageRows()),
+    PageDown: () => page(1),
+    PageUp: () => page(-1),
     s: () => withSelected((m) => flag(m.id, m.flags.includes("seen")
         ? { remove: ["seen"] } : { add: ["seen"] })),
     F: () => withSelected((m) => flag(m.id, m.flags.includes("flagged")
@@ -1014,6 +1023,79 @@ function move(delta) {
 
 function withSelected(run) {
     if (state.selected) run(state.selected);
+}
+
+// ---- moving between the panes (§7) ----
+//
+// Left and right walk across the three panes; up and down then act on
+// whichever one you are in — folders, messages, or the message itself. The
+// letters keep acting on the list from anywhere, so `j` and `d` do not change
+// meaning depending on where the focus happens to be.
+
+const PANE_RIGHT = { folders: "list", list: "reader", reader: "reader" };
+const PANE_LEFT = { reader: "list", list: "folders", folders: "folders" };
+
+/** The folder rows the arrows visit: groups and folders, as drawn, skipping
+ *  anything inside a group that is folded shut. */
+function folderRows() {
+    return [...el("folder-view").querySelectorAll("summary, .folder")]
+        .filter((node) => node.offsetParent !== null);
+}
+
+function focusPane(name) {
+    if (!name) return;
+    state.focusPane = name;
+    // Narrow, the panes are a stack rather than a row, so moving to one has
+    // to bring it on screen before anything in it can take focus.
+    showPane(name);
+    if (name === "folders") {
+        const rows = folderRows();
+        const at = rows.indexOf(document.activeElement);
+        // Try from where the folder cursor was, and keep trying: a row that
+        // was drawn a moment ago may have been replaced by a redraw landing
+        // between the key and here, and focus falling through to the document
+        // leaves the arrows doing nothing at all.
+        for (const row of rows.slice(at >= 0 ? at : 0).concat(rows)) {
+            row.focus();
+            if (document.activeElement === row) return;
+        }
+        el("folder-view").focus?.();
+    } else if (name === "list") {
+        listEl.focus();
+    } else {
+        readerEl.focus();
+    }
+}
+
+/** One step down or up, in whichever pane has the focus. */
+function step(delta) {
+    if (state.focusPane === "folders") {
+        const rows = folderRows();
+        const at = rows.indexOf(document.activeElement);
+        const next = rows[Math.min(Math.max((at < 0 ? 0 : at) + delta, 0), rows.length - 1)];
+        next?.focus();
+        next?.scrollIntoView({ block: "nearest" });
+        return;
+    }
+    if (state.focusPane === "reader") {
+        // A line of the message, not a message: in the reader the thing being
+        // moved through is the text.
+        readerEl.scrollBy({ top: delta * 60 });
+        return;
+    }
+    move(delta);
+}
+
+function page(direction) {
+    if (state.focusPane === "reader") {
+        readerEl.scrollBy({ top: direction * readerEl.clientHeight * 0.9 });
+        return;
+    }
+    if (state.focusPane === "folders") {
+        step(direction * 5);
+        return;
+    }
+    move(direction * pageRows());
 }
 
 document.addEventListener("keydown", (event) => {
@@ -1073,6 +1155,13 @@ function showPane(name) {
 el("back").addEventListener("click", () => {
     showPane(PANE_ABOVE[document.body.dataset.pane] ?? "folders");
 });
+
+// Clicking in a pane is the other way of choosing it, and the arrows should
+// pick up where the mouse left off rather than somewhere else.
+for (const [pane, node] of [["folders", el("folders")], ["list", el("list-pane")], ["reader", readerEl]]) {
+    node.addEventListener("focusin", () => { state.focusPane = pane; });
+    node.addEventListener("mousedown", () => { state.focusPane = pane; });
+}
 
 // ---- starting up ----
 

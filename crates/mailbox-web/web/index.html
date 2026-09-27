@@ -179,7 +179,7 @@
       <button id="folders-unified" class="text is-selected" role="tab" aria-selected="true">Unified</button>
       <button id="folders-tree" class="text" role="tab" aria-selected="false">Tree</button>
     </div>
-    <div id="folder-view">
+    <div id="folder-view" tabindex="-1">
       <button class="folder is-current" data-query="">Inbox</button>
     </div>
   </nav>
@@ -200,7 +200,7 @@
     <button id="load-more" class="text" hidden>Load more headers</button>
   </section>
 
-  <article id="reader" aria-label="Message" aria-live="polite">
+  <article id="reader" aria-label="Message" aria-live="polite" tabindex="0">
     <p class="empty">No message selected</p>
   </article>
 </main>
