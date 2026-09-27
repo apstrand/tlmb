@@ -230,6 +230,12 @@
   </form>
 </dialog>
 
+<!-- The app's own right-click menu. In the desktop window the webview's menu
+     is a browser's — back, forward, reload — which means nothing in a mail
+     app; here the menu says what can be done to the thing under the pointer,
+     and names the key that does it. -->
+<div id="context-menu" role="menu" hidden></div>
+
 <dialog id="help-window" aria-label="Keyboard help">
   <div class="dialog-heading"><h2>Keyboard shortcuts</h2><button type="button" id="help-close" class="text">Close</button></div>
   <dl class="shortcut-list">

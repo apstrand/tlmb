@@ -269,6 +269,41 @@ nav#folders {
     outline-offset: -2px;
 }
 .message.is-dragging { opacity: .45; }
+
+/* The right-click menu. Floating, so it is placed in script; everything else
+   about it is a list of buttons. */
+#context-menu {
+    position: fixed;
+    z-index: 30;
+    min-width: 13rem;
+    padding: .25rem;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgb(0 0 0 / .18);
+}
+#context-menu button {
+    display: flex;
+    justify-content: space-between;
+    gap: 1.5rem;
+    width: 100%;
+    padding: .35rem .55rem;
+    border: 0;
+    border-radius: var(--radius);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+#context-menu button:hover, #context-menu button:focus-visible {
+    background: var(--accent-soft);
+    color: var(--accent);
+    outline: none;
+}
+#context-menu .key { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+#context-menu button:hover .key, #context-menu button:focus-visible .key { color: inherit; }
+#context-menu hr { margin: .25rem .3rem; border: 0; border-top: 1px solid var(--line); }
 .folder .count { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 /* The count is unread mail, so it reads as something to do rather than as a
    dimension of the folder. */

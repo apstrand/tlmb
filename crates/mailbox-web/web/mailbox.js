@@ -957,10 +957,10 @@ function compose(draft) {
     }
 }
 
-async function replyTo(mode) {
-    if (!state.selected) return;
+async function replyTo(mode, message = state.selected) {
+    if (!message) return;
     try {
-        const params = new URLSearchParams({ id: state.selected.id, mode });
+        const params = new URLSearchParams({ id: message.id, mode });
         compose(await api(`/api/reply?${params}`));
     } catch (e) {
         fail(e);
@@ -1174,6 +1174,10 @@ document.addEventListener("keydown", (event) => {
     const typing =
         event.target instanceof Element &&
         event.target.matches("input, textarea, select");
+    if (event.key === "Escape" && !menuEl.hidden) {
+        closeMenu();
+        return;
+    }
     if (event.key === "Escape") {
         if (typing) event.target.blur();
         else if (state.query) { el("search").value = ""; run(""); }
@@ -1187,6 +1191,112 @@ document.addEventListener("keydown", (event) => {
         action();
     }
 });
+
+// ---- the right-click menu (§7) ----
+//
+// The desktop window's own menu is a browser's — back, forward, reload — for
+// a program with no pages to go back to. This replaces it on the things that
+// have actions, and names the key beside each one, so the menu teaches the
+// keyboard rather than competing with it.
+//
+// It does not replace the menu on text. Selecting a passage and reaching for
+// copy is the one thing the browser's menu is for, so the reader, the inputs
+// and the compose window keep theirs.
+
+const menuEl = el("context-menu");
+
+/** What can be done to a message, and the key that does it. */
+function messageMenu(message) {
+    const seen = message.flags.includes("seen");
+    const flagged = message.flags.includes("flagged");
+    return [
+        ["Open", "Enter", () => select(state.messages.indexOf(message))],
+        [seen ? "Mark unread" : "Mark read", "s",
+            () => flag(message.id, seen ? { remove: ["seen"] } : { add: ["seen"] })],
+        [flagged ? "Unflag" : "Flag", "F",
+            () => flag(message.id, flagged ? { remove: ["flagged"] } : { add: ["flagged"] })],
+        null,
+        ["Reply", "r", () => replyTo("sender", message)],
+        ["Reply all", "R", () => replyTo("all", message)],
+        ["Forward", "f", () => replyTo("forward", message)],
+        null,
+        ["Archive", "a", () => moveTo(message.id, "archive")],
+        ["Move to trash", "d", () => moveTo(message.id, "trash")],
+        ["Mark spam", "S", () => moveTo(message.id, "junk")],
+        ["Snooze until tomorrow", "z", () => snooze(message.id, "tomorrow")],
+    ];
+}
+
+/** What can be done to a folder. */
+function folderMenu(button) {
+    const scope = button.dataset.query;
+    return [
+        ["Show messages", "Space", () => button.click()],
+        ["Sync this folder", "@", () => {
+            button.click();
+            syncNow(state.activeFolder
+                ? { account: state.activeFolder.account, folders: [state.activeFolder.path] }
+                : {});
+        }],
+        null,
+        ["Copy search for this folder", "", () => navigator.clipboard?.writeText(scope)],
+    ];
+}
+
+function openMenu(items, x, y) {
+    menuEl.replaceChildren(...items.map((item) => {
+        if (!item) {
+            const rule = document.createElement("hr");
+            return rule;
+        }
+        const [label, key, run] = item;
+        const entry = document.createElement("button");
+        entry.type = "button";
+        entry.setAttribute("role", "menuitem");
+        entry.append(span("label", label), span("key", key));
+        entry.addEventListener("click", () => { closeMenu(); run(); });
+        return entry;
+    }));
+    menuEl.hidden = false;
+    // Placed after it is measurable, and nudged back on screen when the
+    // pointer was near an edge.
+    const box = menuEl.getBoundingClientRect();
+    menuEl.style.left = `${Math.min(x, window.innerWidth - box.width - 8)}px`;
+    menuEl.style.top = `${Math.min(y, window.innerHeight - box.height - 8)}px`;
+    menuEl.querySelector("button")?.focus();
+}
+
+function closeMenu() {
+    menuEl.hidden = true;
+    menuEl.replaceChildren();
+}
+
+document.addEventListener("contextmenu", (event) => {
+    const row = event.target.closest?.(".message");
+    const folder = event.target.closest?.(".folder");
+    if (row) {
+        const message = state.messages[Number(row.dataset.index)];
+        if (!message) return;
+        event.preventDefault();
+        openMenu(messageMenu(message), event.clientX, event.clientY);
+        return;
+    }
+    if (folder) {
+        event.preventDefault();
+        openMenu(folderMenu(folder), event.clientX, event.clientY);
+        return;
+    }
+    // Everywhere else the browser's menu is the right one — except in the
+    // desktop window, where it offers to navigate a program that has nowhere
+    // to navigate to. Text keeps its menu even there, since copy is the whole
+    // reason anyone opens it.
+    const text = event.target.closest?.("#reader, input, textarea, #compose-window");
+    if (window.__MAILBOX_SHELL__ === "gui" && !text) event.preventDefault();
+});
+
+for (const name of ["click", "scroll", "blur"]) {
+    window.addEventListener(name, () => { if (!menuEl.hidden) closeMenu(); }, true);
+}
 
 // ---- panes, on a screen too narrow for three ----
 
