@@ -679,18 +679,20 @@ fn app_with_folders(count: usize) -> App {
     let mut app = app_with(count);
     app.folders = vec![
         mailbox_tui::app::FolderRow {
-            account: "test".into(),
+            account: Some("test".into()),
             path: "INBOX".into(),
             label: "Inbox".into(),
             unread: 3,
             total: 10,
+            indent: false,
         },
         mailbox_tui::app::FolderRow {
-            account: "test".into(),
+            account: Some("test".into()),
             path: "Some Folder".into(),
             label: "Some Folder".into(),
             unread: 0,
             total: 2,
+            indent: false,
         },
     ];
     app
@@ -818,4 +820,46 @@ fn tab_moves_between_the_panes_that_are_open() {
     assert_eq!(app.focus, mailbox_tui::app::Focus::Message);
     app.handle(Action::FocusNext);
     assert_eq!(app.focus, mailbox_tui::app::Focus::List);
+}
+
+/// Three accounts each have an inbox, and three rows reading "Inbox" is true
+/// and useless for choosing between them. A folder several accounts share
+/// gets a row that spans them, with the accounts indented underneath.
+#[test]
+fn a_shared_folder_is_one_row_with_the_accounts_under_it() {
+    use mailbox_tui::app::FolderRow;
+
+    let rows = [
+        FolderRow {
+            account: None,
+            path: "INBOX".into(),
+            label: "Inbox (unified)".into(),
+            unread: 5,
+            total: 30,
+            indent: false,
+        },
+        FolderRow {
+            account: Some("home".into()),
+            path: "INBOX".into(),
+            label: "home".into(),
+            unread: 2,
+            total: 10,
+            indent: true,
+        },
+        FolderRow {
+            account: Some("work".into()),
+            path: "Some Folder".into(),
+            label: "work".into(),
+            unread: 3,
+            total: 20,
+            indent: true,
+        },
+    ];
+
+    // The spanning row asks for the folder by name, which is every account's
+    // copy at once; a child names its own account.
+    assert_eq!(rows[0].query(), "in:INBOX");
+    assert_eq!(rows[1].query(), "account:home in:INBOX");
+    // And a path with a space survives as one term either way.
+    assert_eq!(rows[2].query(), r#"account:work in:"Some Folder""#);
 }

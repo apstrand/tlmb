@@ -38,24 +38,33 @@ pub enum Focus {
 /// One row of the folder pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderRow {
-    pub account: String,
+    /// The account this row is for, or `None` for one that spans them all.
+    pub account: Option<String>,
     /// The path the server uses, which is what a query has to name.
     pub path: String,
-    /// What to show: the special use where there is one, else the leaf name.
+    /// What to show.
     pub label: String,
     pub unread: u32,
     pub total: u32,
+    /// Drawn under the row above, which is the row it belongs to.
+    pub indent: bool,
 }
 
 impl FolderRow {
     /// The query that shows this folder, quoted when the path needs it.
+    ///
+    /// A row spanning accounts asks for the folder by name, which without an
+    /// `account:` beside it is every account's copy at once (§6.2).
     pub fn query(&self) -> String {
         let path = if self.path.contains(' ') {
             format!("\"{}\"", self.path)
         } else {
             self.path.clone()
         };
-        format!("account:{} in:{}", self.account, path)
+        match &self.account {
+            Some(account) => format!("account:{account} in:{path}"),
+            None => format!("in:{path}"),
+        }
     }
 }
 
@@ -276,34 +285,69 @@ impl App {
     /// wants is the one the cursor starts on.
     pub fn load_folders(&mut self, workspace: &Workspace) -> Result<()> {
         let listing = workspace.folders()?;
-        let mut rows: Vec<FolderRow> = listing
-            .folders
-            .into_iter()
-            .filter(|f| f.selectable)
-            .map(|f| FolderRow {
-                label: match f.special_use.as_deref() {
-                    Some(use_name) => title_case(use_name),
-                    None => f.name.clone(),
-                },
-                account: f.account,
-                path: f.path,
-                unread: f.unread,
-                total: f.total,
-            })
-            .collect();
-        rows.sort_by(|a, b| {
-            let rank = |r: &FolderRow| {
-                if r.label.eq_ignore_ascii_case("inbox") {
-                    0
-                } else {
-                    1
-                }
+
+        // Grouped by what they are called, not by which account has them:
+        // "Inbox" is one idea that three accounts happen to implement, and a
+        // flat list of it is three rows reading "Inbox".
+        let mut groups: Vec<(String, Vec<mailbox_api::Folder>)> = Vec::new();
+        for folder in listing.folders.into_iter().filter(|f| f.selectable) {
+            let label = match folder.special_use.as_deref() {
+                Some(use_name) => title_case(use_name),
+                None => folder.name.clone(),
             };
-            rank(a)
-                .cmp(&rank(b))
-                .then_with(|| a.account.cmp(&b.account))
-                .then_with(|| a.path.cmp(&b.path))
+            match groups.iter_mut().find(|(name, _)| *name == label) {
+                Some((_, members)) => members.push(folder),
+                None => groups.push((label, vec![folder])),
+            }
+        }
+
+        // Inbox first — it is where the mail someone is waiting for arrives —
+        // and the rest by name.
+        groups.sort_by(|a, b| {
+            let rank = |name: &str| usize::from(!name.eq_ignore_ascii_case("inbox"));
+            rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.0.cmp(&b.0))
         });
+
+        let mut rows = Vec::new();
+        for (label, mut members) in groups {
+            members.sort_by(|a, b| a.account.cmp(&b.account).then_with(|| a.path.cmp(&b.path)));
+            if members.len() == 1 {
+                // Only one account has it, so there is nothing to span and a
+                // parent row would be a heading over a single item.
+                let folder = &members[0];
+                rows.push(FolderRow {
+                    account: Some(folder.account.clone()),
+                    path: folder.path.clone(),
+                    label,
+                    unread: folder.unread,
+                    total: folder.total,
+                    indent: false,
+                });
+                continue;
+            }
+            // The row that spans them, then the accounts under it. The parent
+            // asks for the folder by name, which without an `account:` beside
+            // it is every account's copy at once (§6.2) — the unified view.
+            rows.push(FolderRow {
+                account: None,
+                path: members[0].path.clone(),
+                label: format!("{label} (unified)"),
+                unread: members.iter().map(|f| f.unread).sum(),
+                total: members.iter().map(|f| f.total).sum(),
+                indent: false,
+            });
+            for folder in members {
+                rows.push(FolderRow {
+                    label: folder.account.clone(),
+                    account: Some(folder.account),
+                    path: folder.path,
+                    unread: folder.unread,
+                    total: folder.total,
+                    indent: true,
+                });
+            }
+        }
+
         self.folders = rows;
         self.folder_selected = self
             .folder_selected

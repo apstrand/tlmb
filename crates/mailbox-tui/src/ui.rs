@@ -97,7 +97,27 @@ fn draw_index(
     draw_list(frame, columns[next], app);
     next += 1;
     if preview {
-        draw_message(frame, columns[next], app, links);
+        // A rule between the list and the message, matching the one the
+        // folder pane draws, and coloured the same way to say which side the
+        // keys are on.
+        let pane = columns[next];
+        let focused = app.focus == crate::app::Focus::Message;
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::LEFT)
+                .border_style(if focused {
+                    Style::default().fg(theme::ACCENT)
+                } else {
+                    Style::default().fg(theme::DIM)
+                }),
+            pane,
+        );
+        let inner = Rect {
+            x: pane.x + 1,
+            width: pane.width.saturating_sub(1),
+            ..pane
+        };
+        draw_message(frame, inner, app, links);
     }
 }
 
@@ -115,10 +135,24 @@ fn draw_folders(frame: &mut Frame<'_>, area: Rect, app: &App) {
             } else {
                 String::new()
             };
+            // The accounts sit under the row they belong to, which is what
+            // makes three rows reading "Inbox" into one folder with three
+            // accounts in it.
+            let lead = if folder.indent { "   " } else { " " };
             let width = area.width.saturating_sub(4) as usize;
-            let label = truncate(&folder.label, width.saturating_sub(count.len()));
+            let label = truncate(
+                &folder.label,
+                width.saturating_sub(count.len() + lead.len()),
+            );
             ListItem::new(Line::from(vec![
-                Span::raw(format!(" {label}")),
+                Span::styled(
+                    format!("{lead}{label}"),
+                    if folder.indent {
+                        Style::default().fg(theme::DIM)
+                    } else {
+                        Style::default()
+                    },
+                ),
                 Span::styled(count, Style::default().fg(theme::DIM)),
             ]))
         })
@@ -188,12 +222,19 @@ fn draw_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let mut state = ListState::default();
     state.select(Some(app.selected));
 
+    // The cursor is reversed where the keys are and merely marked where they
+    // are not. Two panes both showing a solid cursor is two panes both
+    // claiming the arrows, which is the state someone cannot read their way
+    // out of.
+    let focused = app.view != View::List || app.focus == crate::app::Focus::List;
     frame.render_stateful_widget(
-        List::new(items).highlight_style(
+        List::new(items).highlight_style(if focused {
             Style::default()
                 .add_modifier(Modifier::REVERSED)
-                .add_modifier(Modifier::BOLD),
-        ),
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::ACCENT)
+        }),
         area,
         &mut state,
     );
