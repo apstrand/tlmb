@@ -754,10 +754,25 @@ function renderFolders() {
         if (f.special_use) (uses.get(f.special_use) ?? uses.set(f.special_use, []).get(f.special_use)).push(f);
         else (names.get(f.name) ?? names.set(f.name, []).get(f.name)).push(f);
     }
-    const used = [...uses].sort((a, b) => (useNames[a[0]] ?? a[0]).localeCompare(useNames[b[0]]));
-    const ordinary = [...names].sort((a, b) => a[0].localeCompare(b[0]));
+    // The inbox is where the mail someone is waiting for arrives, so it goes
+    // first however it sorts; the trash is where mail goes to be forgotten,
+    // so it goes down with the rest rather than sitting beside the inbox.
+    const DEMOTED = new Set(["trash"]);
+    const used = [...uses]
+        .filter(([use]) => !DEMOTED.has(use))
+        .sort((a, b) =>
+            Number(b[0] === "inbox") - Number(a[0] === "inbox")
+            || (useNames[a[0]] ?? a[0]).localeCompare(useNames[b[0]] ?? b[0]));
+    const demoted = [...uses]
+        .filter(([use]) => DEMOTED.has(use))
+        .map(([use, fs]) => [useNames[use] ?? use, fs, `use:${use}`, `in:${use}`]);
+    const ordinary = [...names]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([name, fs]) => [name, fs, `name:${name}`, `in:${name.includes(" ") ? `"${name}"` : name}`]);
     const nodes = used.map(([use, fs]) => folderDetails(useNames[use] ?? use, fs, `use:${use}`, `in:${use}`));
-    if (ordinary.length) {
+    // Sorted together, so the trash takes its place by name among them.
+    const others = [...demoted, ...ordinary].sort((a, b) => a[0].localeCompare(b[0]));
+    if (others.length) {
         // A heading someone can put away. The folders under it are the long
         // tail — a provider's own machinery, old labels — and on an account
         // with forty of them they push the inbox off the screen.
@@ -767,11 +782,11 @@ function renderFolders() {
         other.open = folderOpenState.get(`${folderLayout}:${OTHER_FOLDERS_KEY}`) ?? false;
         const heading = document.createElement("summary");
         heading.textContent = "Other folders";
-        const unread = ordinary.reduce((n, [, fs]) => n + fs.reduce((m, f) => m + f.unread, 0), 0);
+        const unread = others.reduce((n, [, fs]) => n + fs.reduce((m, f) => m + f.unread, 0), 0);
         heading.append(span("count", unread ? String(unread) : ""));
         if (unread > 0) heading.classList.add("has-unread");
-        other.append(heading, ...ordinary.map(([name, fs]) =>
-            folderDetails(name, fs, `name:${name}`, `in:${name.includes(" ") ? `"${name}"` : name}`)));
+        other.append(heading, ...others.map(([label, fs, key, query]) =>
+            folderDetails(label, fs, key, query)));
         nodes.push(other);
     }
     view.replaceChildren(...nodes);

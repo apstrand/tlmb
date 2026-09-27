@@ -302,9 +302,14 @@ impl App {
         }
 
         // Inbox first — it is where the mail someone is waiting for arrives —
-        // and the rest by name.
+        // and trash last, being where mail goes to be forgotten. The rest by
+        // name between them. The window orders its nav the same way.
         groups.sort_by(|a, b| {
-            let rank = |name: &str| usize::from(!name.eq_ignore_ascii_case("inbox"));
+            let rank = |name: &str| match name {
+                n if n.eq_ignore_ascii_case("inbox") => 0,
+                n if n.eq_ignore_ascii_case("trash") => 2,
+                _ => 1,
+            };
             rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.0.cmp(&b.0))
         });
 
