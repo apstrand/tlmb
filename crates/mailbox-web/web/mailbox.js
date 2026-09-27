@@ -91,6 +91,11 @@ async function reload() {
         el("error").textContent = "";
 
         const previous = state.selected?.id;
+        // Where the selection was, not just what it was on. A message that is
+        // gone — deleted, archived, filed — took its id with it, and landing
+        // back at the top of the list is how someone loses their place in a
+        // mailbox they were working down.
+        const previousAt = state.messages.findIndex((m) => m.id === previous);
         state.messages = (listing.messages ?? []).filter((message) => !pendingMoves.has(message.id));
         state.partial = Boolean(listing.partial);
         el("list-coverage").hidden = !(state.partial || state.unloadedFolders);
@@ -98,9 +103,15 @@ async function reload() {
 
         const same = state.messages.findIndex((m) => m.id === previous);
         // Keep the cursor on the same message where one exists, so a refresh
-        // does not move the selection out from under someone mid-read.
-        if (state.messages.length) select(same >= 0 ? same : 0, { pane: false, cachedOnly: true });
-        else clearReader();
+        // does not move the selection out from under someone mid-read; and
+        // where it does not, keep the *place*, which is the next message down
+        // — or the new last one, when the list just lost its end.
+        if (state.messages.length) {
+            const at = same >= 0
+                ? same
+                : Math.min(Math.max(previousAt, 0), state.messages.length - 1);
+            select(at, { pane: false, cachedOnly: true });
+        } else clearReader();
     } catch (e) {
         if (seq === state.listSeq) fail(e);
     }
@@ -136,7 +147,14 @@ function drawList() {
         );
         if (marks.trim()) row.querySelector(".date").prepend(span("marks", marks + " "));
 
-        row.addEventListener("click", () => select(index));
+        row.addEventListener("click", () => {
+            // Clicking the message already under the cursor is a second,
+            // deliberate look at it. The dwell exists to keep a cursor passing
+            // through from marking a mailbox read; a click is not passing
+            // through, so it does not have to wait.
+            if (state.selected?.id === message.id) markRead(message);
+            else select(index);
+        });
         return row;
     }));
 
@@ -224,29 +242,36 @@ function startReadDwell(message, seq) {
     clearTimeout(state.readTimer);
     if (message.flags.includes("seen")) return;
 
-    state.readTimer = setTimeout(async () => {
+    state.readTimer = setTimeout(() => {
         // Still the same message. Moving on cancels the timer, but a reply
         // that arrived late could have moved the cursor since.
         if (seq !== state.openSeq) return;
-        try {
-            await post("/api/flag", { ids: [message.id], add: ["seen"],
-                account: message.account, folder: message.folder });
-            // The row, not the whole listing: reloading here would move things
-            // under someone who is in the middle of reading.
-            message.flags = [...message.flags, "seen"];
-            for (const row of listEl.children) {
-                if (state.messages[Number(row.dataset.index)]?.id === message.id) {
-                    row.classList.remove("unread");
-                }
-            }
-            // The folder counts are unread counts, so one of them just went
-            // down. The nav, unlike the listing, can be redrawn from under
-            // someone without moving what they are reading.
-            await loadFolders();
-        } catch (e) {
-            fail(e);
-        }
+        markRead(message);
     }, READ_DWELL_MS);
+}
+
+/** Marks one message seen and repaints only what that changed. */
+async function markRead(message) {
+    if (message.flags.includes("seen")) return;
+    clearTimeout(state.readTimer);
+    try {
+        await post("/api/flag", { ids: [message.id], add: ["seen"],
+            account: message.account, folder: message.folder });
+        // The row, not the whole listing: reloading here would move things
+        // under someone who is in the middle of reading.
+        message.flags = [...message.flags, "seen"];
+        for (const row of listEl.children) {
+            if (state.messages[Number(row.dataset.index)]?.id === message.id) {
+                row.classList.remove("unread");
+            }
+        }
+        // The folder counts are unread counts, so one of them just went
+        // down. The nav, unlike the listing, can be redrawn from under
+        // someone without moving what they are reading.
+        await loadFolders();
+    } catch (e) {
+        fail(e);
+    }
 }
 
 function clearReader() {
