@@ -294,6 +294,7 @@ async function dispatch(path, options, generation) {
     const route = url.pathname.replace(/^\/api\//, "");
     const value = body(options);
     switch (`${options.method ?? "GET"} ${route}`) {
+        case "POST body": return fetchBody(value);
         case "GET accounts": return core("accounts");
         case "GET ls": return core("ls", {
             query: url.searchParams.get("q") || undefined,
@@ -359,6 +360,32 @@ async function discover(address) {
     }
     if (!response.ok) throw new Error(result.error || `Server discovery failed with HTTP ${response.status}.`);
     return result;
+}
+
+/**
+ * Fetches one message's body now, for the reader's "Download now".
+ *
+ * `show` already tries this when a message is opened, so reaching here means
+ * that attempt did not happen or did not work — usually because the browser
+ * was offline at the time. Trying again is the whole point of the button.
+ */
+async function fetchBody(args) {
+    const shown = await core("show", { id: args.id, cached: true });
+    const message = shown.message;
+    if (!message) return { downloaded: false };
+    const current = await context();
+    const account = current.config.accounts?.[message.account];
+    if (!account) return { downloaded: false };
+    await exec(
+        { ...current, config: { ...current.config, accounts: { [message.account]: account } } },
+        "ensure_body",
+        { id: args.id },
+        true,
+        account,
+        true,
+    );
+    const after = await core("show", { id: args.id, cached: true });
+    return { downloaded: Boolean(after.message?.body) };
 }
 
 async function show(args, generation) {

@@ -530,6 +530,34 @@ fn flags_can_be_set_and_are_visible_to_the_next_read() {
     assert_eq!(read["messages"].as_array().unwrap().len(), 1, "{read:#}");
 }
 
+/// §5.1 fetches bodies lazily, so a message opened from outside the prefetch
+/// window has headers and no body. The page used to report that as though it
+/// were permanent; it now offers to fetch it, and this is the route behind
+/// that offer. The fixture's mail has no server to fetch from, which is the
+/// other answer it has to give honestly rather than by hanging.
+#[test]
+fn a_body_can_be_asked_for_by_name() {
+    let s = Serving::start();
+    let id = s.first_id();
+
+    let (status, body) = s.post("/api/body", &format!(r#"{{"id":"{id}"}}"#));
+    assert_eq!(status, 200, "{body:#}");
+    assert!(body["downloaded"].is_boolean(), "{body:#}");
+
+    // And an id nobody has is a 404 in the contract's shape, not a 500.
+    let (status, body) = s.post("/api/body", r#"{"id":"ffffffff"}"#);
+    assert_eq!(status, 404, "{body:#}");
+    assert_eq!(body["error"]["code"], "not_found", "{body:#}");
+
+    // A request with no id is the caller's mistake and is named as one.
+    let (status, body) = s.post("/api/body", "{}");
+    assert_eq!(status, 400, "{body:#}");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("id"),
+        "{body:#}"
+    );
+}
+
 /// The page asks this while its own sync request is still in flight, so it
 /// has to be answerable on another connection and must not wait on the
 /// workspace lock. Idle is the state worth pinning down here: a running pass

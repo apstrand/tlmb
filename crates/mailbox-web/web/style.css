@@ -270,6 +270,21 @@ nav#folders {
 }
 .message.is-dragging { opacity: .45; }
 
+/* Stands in for the body frame while the body is still on the server. */
+.body-missing {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin: .8rem 1rem;
+    padding: .8rem .9rem;
+    background: var(--bg-sunken);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+}
+.body-missing .note { flex: 1; min-width: 12rem; }
+
 /* The right-click menu. Floating, so it is placed in script; everything else
    about it is a list of buttons. */
 #context-menu {

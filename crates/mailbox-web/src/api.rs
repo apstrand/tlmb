@@ -120,6 +120,7 @@ pub fn handle(
         ("POST", "flag") => flag(request, session, tracer, clock),
         ("POST", "move") => move_to(request, session, tracer, clock),
         ("POST", "snooze") => snooze(request, session, tracer, clock),
+        ("POST", "body") => fetch_body(request, session, tracer, clock),
         ("POST", "sync") => sync(request, workspace, session, tracer, clock, progress),
         // Read while a sync is still running, from another connection.
         ("GET", "sync/progress") => Ok(Response::json(200, &progress.snapshot())),
@@ -447,6 +448,35 @@ fn snooze(
             &serde_json::json!({ "woke": workspace.unsnooze(&refs)? }),
         )),
     }
+}
+
+/// Fetches one message's body now, rather than when a sync next gets to it.
+///
+/// §5.1 fetches bodies lazily, so a message opened from outside the prefetch
+/// window has headers and no body — a normal state, and one the page used to
+/// report as though it were permanent. This is the "fetch it then" the
+/// reader's note now offers, and it is the same call the terminal makes when
+/// a message is opened.
+fn fetch_body(
+    request: &Request,
+    session: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+) -> Result<Response> {
+    let body = body(request)?;
+    let id = body
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| Error::usage("give an `id` to fetch"))?;
+
+    let mut workspace = writable(session, tracer, clock)?;
+    // Routed to the account that owns it, like every other write.
+    let (account, resolved) = workspace.locate(&IdRef::parse(id))?;
+    let downloaded = workspace.sessions_mut()[account].ensure_body(&resolved)?;
+    Ok(Response::json(
+        200,
+        &serde_json::json!({ "downloaded": downloaded }),
+    ))
 }
 
 fn sync(

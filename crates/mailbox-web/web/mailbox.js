@@ -329,7 +329,10 @@ function drawReader(message) {
         parts.push(remoteNotice(message));
     }
 
-    parts.push(bodyFrame(message));
+    // A message opened from outside the prefetch window has headers and no
+    // body yet (§5.1). That is a normal state and a temporary one, so it says
+    // so and offers to finish the job rather than reading like a failure.
+    parts.push(message.body ? bodyFrame(message) : missingBody(message));
 
     const attachments = (message.attachments ?? []).filter((a) => a.is_attachment);
     if (attachments.length) {
@@ -377,6 +380,47 @@ function actions(message) {
 }
 
 /** The body, in a frame that can do nothing but display it. */
+/**
+ * The panel shown in place of a body that is not here yet.
+ *
+ * In the page rather than in the body frame, because the frame is sandboxed
+ * without scripts — which is what makes it safe to render someone else's
+ * HTML in, and also what stops a button in it from doing anything.
+ */
+function missingBody(message) {
+    const box = document.createElement("div");
+    box.className = "body-missing";
+
+    const note = span("note", "The body has not been downloaded yet.");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Download now";
+
+    button.addEventListener("click", async () => {
+        button.disabled = true;
+        note.textContent = "Downloading…";
+        try {
+            const { downloaded } = await post("/api/body", { id: message.id });
+            if (!downloaded) {
+                // No server placement, or the server no longer has it. Saying
+                // which is better than a button that does nothing twice.
+                note.textContent = "The server has no copy of this message to fetch.";
+                return;
+            }
+            // Re-open it: the reader draws from the message it was given, and
+            // that one still has no body on it.
+            const at = state.messages.findIndex((m) => m.id === message.id);
+            if (at >= 0) await select(at, { pane: false });
+        } catch (error) {
+            note.textContent = `Could not download it — ${error.message ?? error}`;
+            button.disabled = false;
+        }
+    });
+
+    box.append(note, button);
+    return box;
+}
+
 function bodyFrame(message) {
     const frame = document.createElement("iframe");
     frame.className = "body";
