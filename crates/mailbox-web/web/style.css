@@ -271,6 +271,15 @@ nav#folders {
 #list-pane { border-right: 1px solid var(--line); }
 
 #list-coverage { margin: .5rem .7rem; color: var(--text-dim); font-size: .85rem; }
+/* The filters sit above the list they narrow, quiet until one is on. */
+#filters {
+    display: flex;
+    gap: .25rem;
+    padding: .4rem .5rem;
+    border-bottom: 1px solid var(--line);
+}
+#filters button { font-size: .8rem; padding: .2rem .5rem; border-radius: var(--radius); }
+#filters button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 
 ol#list { margin: 0; padding: 0; list-style: none; }
 ol#list:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

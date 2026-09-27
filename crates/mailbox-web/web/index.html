@@ -185,6 +185,15 @@
   </nav>
 
   <section id="list-pane" aria-label="Messages">
+    <!-- Filters are query terms with a button on them: pressing one writes
+         `is:unread` into the search box, so what the list is showing is
+         always readable in one place and typing it by hand lights the same
+         button. -->
+    <div id="filters" role="group" aria-label="Filter messages">
+      <button type="button" id="filter-unread" class="text" aria-pressed="false">Unread</button>
+      <button type="button" id="filter-flagged" class="text" aria-pressed="false">Flagged</button>
+      <button type="button" id="filter-attachment" class="text" aria-pressed="false">Attachments</button>
+    </div>
     <p id="list-coverage" hidden>Only downloaded mail is shown. Open a folder or load more to include older messages.</p>
     <ol id="list" role="listbox" aria-label="Messages" tabindex="0"></ol>
     <p id="list-empty" class="empty" hidden>No messages</p>

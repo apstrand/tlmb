@@ -622,6 +622,18 @@ function folderDetails(label, records, key, aggregateQuery) {
     const total = records.reduce((n, f) => n + f.total, 0);
     const unread = records.reduce((n, f) => n + f.unread, 0);
     const labelNode = span("name", label);
+    // Space selects the group rather than folding it (the disclosure's own
+    // default). Folding is what the triangle and Enter are for; Space on a
+    // folder should show its mail, which is what Space does on every row
+    // below it.
+    if (aggregateQuery) {
+        summary.tabIndex = 0;
+        summary.addEventListener("keydown", (event) => {
+            if (event.key !== " ") return;
+            event.preventDefault();
+            selectFolderQuery(aggregateQuery);
+        });
+    }
     // §7: the count is the number that asks to be acted on. A folder with
     // nothing unread shows nothing — a grey 4134 beside Trash is a number
     // nobody has ever needed at a glance. It waits in the hover, with the
@@ -680,7 +692,8 @@ function renderFolders() {
     if (folderLayout === "tree") {
         const byAccount = new Map();
         for (const f of records) (byAccount.get(f.account) ?? byAccount.set(f.account, []).get(f.account)).push(f);
-        view.replaceChildren(...[...byAccount].sort().map(([account, fs]) => folderDetails(account, fs, `account:${account}`)));
+        view.replaceChildren(...[...byAccount].sort().map(([account, fs]) =>
+            folderDetails(account, fs, `account:${account}`, `account:${account}`)));
         return;
     }
     const uses = new Map(), names = new Map();
@@ -704,7 +717,8 @@ function renderFolders() {
         const unread = ordinary.reduce((n, [, fs]) => n + fs.reduce((m, f) => m + f.unread, 0), 0);
         heading.append(span("count", unread ? String(unread) : ""));
         if (unread > 0) heading.classList.add("has-unread");
-        other.append(heading, ...ordinary.map(([name, fs]) => folderDetails(name, fs, `name:${name}`)));
+        other.append(heading, ...ordinary.map(([name, fs]) =>
+            folderDetails(name, fs, `name:${name}`, `in:${name.includes(" ") ? `"${name}"` : name}`)));
         nodes.push(other);
     }
     view.replaceChildren(...nodes);
@@ -1067,7 +1081,53 @@ function run(query) {
     for (const button of el("folders").children) {
         button.classList.toggle("is-current", button.dataset.query === query);
     }
+    drawFilters();
     reload();
+}
+
+/**
+ * The filters, which are query terms wearing buttons (§6.2).
+ *
+ * Deliberately not a second kind of state. Pressing one edits the search box,
+ * so there is one answer to "why am I seeing these messages" and it is
+ * visible; and a term typed by hand lights its own button. It also means a
+ * filter composes with a folder for free — `account:x in:INBOX is:unread` is
+ * just a query.
+ */
+const FILTERS = [
+    ["filter-unread", "is:unread"],
+    ["filter-flagged", "is:flagged"],
+    ["filter-attachment", "has:attachment"],
+];
+
+function queryTerms(text) {
+    return text.trim().split(/\s+/).filter(Boolean);
+}
+
+function drawFilters() {
+    const terms = queryTerms(el("search").value).map((t) => t.toLowerCase());
+    for (const [id, token] of FILTERS) {
+        const on = terms.includes(token);
+        el(id).classList.toggle("is-selected", on);
+        el(id).setAttribute("aria-pressed", on ? "true" : "false");
+    }
+}
+
+function toggleFilter(token) {
+    const terms = queryTerms(el("search").value);
+    const at = terms.findIndex((t) => t.toLowerCase() === token);
+    if (at >= 0) terms.splice(at, 1);
+    else terms.push(token);
+    const next = terms.join(" ");
+    el("search").value = next;
+    // A filter narrows what is already on screen, so the folder stays the
+    // folder: `load-more` and the per-folder sync still know where they are.
+    state.listLimit = 100;
+    run(next);
+}
+
+for (const [id, token] of FILTERS) {
+    el(id).addEventListener("click", () => toggleFilter(token));
 }
 
 el("search-form").addEventListener("submit", (event) => {
