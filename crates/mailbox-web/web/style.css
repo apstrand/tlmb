@@ -24,7 +24,8 @@
     --danger: #c0392b;
 
     --pane-folders: 15rem;
-    --pane-list: 24rem;
+    /* The narrowest the message list gets, not its width — see `main`. */
+    --pane-list: 22rem;
     --radius: 7px;
 }
 
@@ -161,7 +162,17 @@ button.icon { padding: .35rem .55rem; }
 
 main {
     display: grid;
-    grid-template-columns: var(--pane-folders) var(--pane-list) 1fr;
+    /* The list shares the extra width rather than donating all of it to the
+       reader. Fixed at 24rem, a wide window gave the list the same cramped
+       two lines of subject it had at 1024px and spent everything it gained on
+       a column of body text already wider than is comfortable to read. One
+       part list to two parts reader, and the list never narrower than a
+       subject and a date. `minmax(0, …)` on the reader so a long unbroken
+       header cannot push the grid wider than the window. */
+    grid-template-columns:
+        var(--pane-folders)
+        minmax(var(--pane-list), 1fr)
+        minmax(0, 2fr);
     min-height: 0;
 }
 

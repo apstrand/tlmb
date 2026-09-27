@@ -463,9 +463,48 @@ const flag = (id, spec) =>
     }, "changed");
 
 const pendingMoves = new Set();
+/**
+ * Moves this window can put back, newest last — the terminal's undo (§7).
+ *
+ * Held in the page and nowhere else, like the terminal holds it in its
+ * session: it is a courtesy for the thing you just did by mistake, not a
+ * history of the mailbox. Reloading loses it, which is the same promise the
+ * terminal makes by forgetting on quit.
+ */
+const undoStack = [];
+
+/** Deep enough for a wrong move a few messages ago, shallow enough to end. */
+const UNDO_DEPTH = 20;
+
+/** Puts back the last message that was filed. */
+async function undoLast() {
+    const last = undoStack.pop();
+    if (!last) {
+        say("nothing to undo");
+        return;
+    }
+    try {
+        await post("/api/move", { ids: [last.id], folder: last.folder,
+            account: last.account, source_folder: last.movedTo });
+        say(`restored to ${last.folder}`);
+        await Promise.all([reload(), loadFolders()]);
+    } catch (error) {
+        // It goes back on the stack: the move did not happen, so the thing
+        // that needs undoing still does.
+        undoStack.push(last);
+        fail(error);
+    }
+}
+
 async function moveTo(id, folder) {
     const index = state.messages.findIndex((message) => message.id === id);
     const message = state.messages[index];
+    // Where it was, recorded before it goes. The folder's own path, not the
+    // special use it was filed under, because that is where it has to land.
+    if (message) {
+        undoStack.push({ id, account: message.account, folder: message.folder, movedTo: folder });
+        if (undoStack.length > UNDO_DEPTH) undoStack.shift();
+    }
     const request = post("/api/move", { ids: [id], folder,
         account: message?.account, source_folder: message?.folder,
         unread: message ? !message.flags.includes("seen") : false });
@@ -487,6 +526,8 @@ async function moveTo(id, folder) {
         await Promise.all([reload(), loadFolders()]);
     } catch (error) {
         pendingMoves.delete(id);
+        const at = undoStack.findIndex((entry) => entry.id === id);
+        if (at >= 0) undoStack.splice(at, 1);
         await reload();
         fail(error);
     }
@@ -898,31 +939,55 @@ el("compose-cc-toggle").addEventListener("click", () => {
 });
 
 // ---- what the keyboard does (§7, the terminal's muscle memory) ----
+//
+// The same letters as the terminal, because §7 asks for one set of muscle
+// memory rather than two. They are `mailbox-tui`'s `Keymap::vim` defaults, and
+// where the two used to differ the terminal wins: `s` marks read rather than
+// archiving, `a` archives, `f` forwards, `F` flags, and sync is `@` — which
+// frees `g` to be the top of the list, as it is everywhere else `g` appears.
 
 const keys = {
     j: () => move(1),
     ArrowDown: () => move(1),
     k: () => move(-1),
     ArrowUp: () => move(-1),
-    u: () => withSelected((m) => flag(m.id, m.flags.includes("seen")
+    g: () => select(0),
+    Home: () => select(0),
+    G: () => select(state.messages.length - 1),
+    End: () => select(state.messages.length - 1),
+    PageDown: () => move(pageRows()),
+    PageUp: () => move(-pageRows()),
+    s: () => withSelected((m) => flag(m.id, m.flags.includes("seen")
         ? { remove: ["seen"] } : { add: ["seen"] })),
-    f: () => withSelected((m) => flag(m.id, m.flags.includes("flagged")
+    F: () => withSelected((m) => flag(m.id, m.flags.includes("flagged")
         ? { remove: ["flagged"] } : { add: ["flagged"] })),
-    s: () => withSelected((m) => moveTo(m.id, "archive")),
+    a: () => withSelected((m) => moveTo(m.id, "archive")),
     d: () => withSelected((m) => moveTo(m.id, "trash")),
+    S: () => withSelected((m) => moveTo(m.id, "junk")),
+    u: () => undoLast(),
     z: () => withSelected((m) => snooze(m.id, "tomorrow")),
     "/": () => el("search").focus(),
     m: () => compose(null),
     r: () => replyTo("sender"),
     R: () => replyTo("all"),
-    // `f` is flag in the terminal, so forwarding takes the next letter along
-    // rather than stealing it.
-    F: () => replyTo("forward"),
-    // Sync has a button; `g` is the convenience, and `r` belongs to reply
-    // the way it does in the terminal.
-    g: () => syncNow(),
+    f: () => replyTo("forward"),
+    "@": () => syncNow(),
     "?": () => { if (!el("help-window").open) el("help-window").showModal(); },
 };
+
+/**
+ * How far a page moves: what is actually on screen, as the terminal does it.
+ *
+ * Measured from a real row rather than assumed, so it is right at any zoom
+ * and with any font. One row of overlap, so the message you were looking at
+ * when you pressed the key is still there to orient by.
+ */
+function pageRows() {
+    const row = listEl.firstElementChild;
+    const height = row?.getBoundingClientRect().height ?? 0;
+    if (!height) return 10;
+    return Math.max(1, Math.floor(listEl.clientHeight / height) - 1);
+}
 
 el("help").addEventListener("click", () => el("help-window").showModal());
 el("help-close").addEventListener("click", () => el("help-window").close());
