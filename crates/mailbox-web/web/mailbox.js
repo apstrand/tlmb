@@ -519,14 +519,49 @@ async function loadFolders() {
 }
 
 let folderLayout = "unified";
-const folderOpenState = new Map();
+/** Whether "Other folders" is open. Sits beside the per-folder state. */
+const OTHER_FOLDERS_KEY = "other";
+
+/**
+ * Which folder groups are folded open, remembered between visits.
+ *
+ * Kept in this browser and nowhere else: it is a convenience of the window
+ * someone is sitting at, not a property of the mailbox, and it should not
+ * follow them to another machine or need the store to be written to. Every
+ * access is guarded — a private window can refuse all three of these.
+ */
+const FOLDER_STATE_KEY = "mailbox.folders.open";
+
+const folderOpenState = new Map(readFolderOpenState());
+
+function readFolderOpenState() {
+    try {
+        return Object.entries(JSON.parse(localStorage.getItem(FOLDER_STATE_KEY) ?? "{}"));
+    } catch {
+        return [];
+    }
+}
+
+function saveFolderOpenState() {
+    try {
+        localStorage.setItem(FOLDER_STATE_KEY, JSON.stringify(Object.fromEntries(folderOpenState)));
+    } catch {
+        // No storage, or a browser that refuses it. The nav still works; it
+        // just starts folded the way it always did.
+    }
+}
 const useNames = { inbox: "Inbox", sent: "Sent", drafts: "Drafts", trash: "Trash", junk: "Junk", archive: "Archive", all: "All mail", flagged: "Flagged", important: "Important" };
 
 function rememberFolderOpenState() {
     for (const details of el("folder-view").querySelectorAll("details[data-folder-key]")) {
         folderOpenState.set(`${folderLayout}:${details.dataset.folderKey}`, details.open);
     }
+    saveFolderOpenState();
 }
+
+// Folding a group is worth remembering the moment it happens, not only when
+// something else redraws the nav — the next redraw may be the page reopening.
+el("folder-view").addEventListener("toggle", rememberFolderOpenState, true);
 
 function selectFolderQuery(query) {
     el("search").value = query;
@@ -546,6 +581,11 @@ function folderDetails(label, records, key, aggregateQuery) {
     const total = records.reduce((n, f) => n + f.total, 0);
     const unread = records.reduce((n, f) => n + f.unread, 0);
     const labelNode = span("name", label);
+    // §7: the count is the number that asks to be acted on. A folder with
+    // nothing unread shows nothing — a grey 4134 beside Trash is a number
+    // nobody has ever needed at a glance. It waits in the hover, with the
+    // rest of what is worth knowing about the folder.
+    summary.title = folderStats(records);
     if (aggregateQuery) {
         labelNode.classList.add("summary-link");
         labelNode.title = "Show this folder across all accounts";
@@ -553,11 +593,43 @@ function folderDetails(label, records, key, aggregateQuery) {
             event.preventDefault(); event.stopPropagation(); selectFolderQuery(aggregateQuery);
         });
     }
-    summary.append(labelNode, span("count", unread ? String(unread) : String(total)));
+    summary.append(labelNode, span("count", unread ? String(unread) : ""));
+    if (unread > 0) summary.classList.add("has-unread");
     details.append(summary, ...records
         .slice().sort((a, b) => a.account.localeCompare(b.account) || a.path.localeCompare(b.path))
-        .map((f) => folderButton(`${f.account} · ${f.name}`, `account:${f.account} in:${f.path.includes(" ") ? `"${f.path}"` : f.path}`, f.total, f.unread, { account: f.account, path: f.path })));
+        // A leaf under "Inbox" does not need to say "Inbox" again — the row
+        // above it does. What it adds is which account's inbox it is, and in
+        // the tree, where the account is the heading, which folder.
+        .map((f) => folderButton(
+            folderLayout === "tree" ? f.name : f.account,
+            `account:${f.account} in:${f.path.includes(" ") ? `"${f.path}"` : f.path}`,
+            f.total, f.unread, { account: f.account, path: f.path })));
     return details;
+}
+
+/**
+ * What a folder is worth saying on hover: what it is called on the server,
+ * whose it is, and how much is in it.
+ *
+ * The server's own path, because a folder shown under its special use is
+ * shown under a name the server may never have used — someone looking for
+ * "Archive" on their provider needs to know it is called "[Gmail]/All Mail".
+ */
+function folderStats(records) {
+    const lines = records
+        .slice()
+        .sort((a, b) => a.account.localeCompare(b.account) || a.path.localeCompare(b.path))
+        .map((f) => {
+            const who = addressFor(f.account);
+            const counts = `${f.unread} unread, ${f.total} message${f.total === 1 ? "" : "s"}`;
+            return `${who} — ${f.path}: ${counts}`;
+        });
+    return lines.join("\n");
+}
+
+/** The address behind an account's short name, for the hovers. */
+function addressFor(account) {
+    return accountRecords.find((a) => a.id === account)?.address ?? account;
 }
 
 function renderFolders() {
@@ -579,8 +651,20 @@ function renderFolders() {
     const ordinary = [...names].sort((a, b) => a[0].localeCompare(b[0]));
     const nodes = used.map(([use, fs]) => folderDetails(useNames[use] ?? use, fs, `use:${use}`, `in:${use}`));
     if (ordinary.length) {
-        const heading = document.createElement("h3"); heading.textContent = "Other folders";
-        nodes.push(heading, ...ordinary.map(([name, fs]) => folderDetails(name, fs, `name:${name}`)));
+        // A heading someone can put away. The folders under it are the long
+        // tail — a provider's own machinery, old labels — and on an account
+        // with forty of them they push the inbox off the screen.
+        const other = document.createElement("details");
+        other.className = "other-folders";
+        other.dataset.folderKey = OTHER_FOLDERS_KEY;
+        other.open = folderOpenState.get(`${folderLayout}:${OTHER_FOLDERS_KEY}`) ?? false;
+        const heading = document.createElement("summary");
+        heading.textContent = "Other folders";
+        const unread = ordinary.reduce((n, [, fs]) => n + fs.reduce((m, f) => m + f.unread, 0), 0);
+        heading.append(span("count", unread ? String(unread) : ""));
+        if (unread > 0) heading.classList.add("has-unread");
+        other.append(heading, ...ordinary.map(([name, fs]) => folderDetails(name, fs, `name:${name}`)));
+        nodes.push(other);
     }
     view.replaceChildren(...nodes);
 }
@@ -608,7 +692,12 @@ function folderButton(label, query, total = 0, unread = 0, scope) {
     // question, so it waits in the hover beside it.
     button.append(span("count", unread > 0 ? String(unread) : ""));
     if (unread > 0) button.classList.add("has-unread");
-    button.title = `${scope?.account ? scope.account + ": " : ""}${unread} unread, ${total} message${total === 1 ? "" : "s"}`;
+    // The address rather than the short name, and the folder's own path on
+    // the server — both are things the row is too narrow to show and someone
+    // occasionally needs exactly.
+    button.title = scope
+        ? `${addressFor(scope.account)} — ${scope.path}: ${unread} unread, ${total} message${total === 1 ? "" : "s"}`
+        : `${unread} unread, ${total} message${total === 1 ? "" : "s"}`;
     button.addEventListener("click", () => {
         el("search").value = query;
         state.activeFolder = scope;

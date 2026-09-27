@@ -185,6 +185,17 @@ nav#folders {
 #folder-view summary .count { color: var(--text-dim); font-weight: 400; }
 #folder-view details > .folder { margin-left: .65rem; width: calc(100% - .65rem); }
 #folder-view h3 { margin: 1rem .5rem .3rem; font-size: .8rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+/* "Other folders" is a heading that happens to fold, so it reads as the
+   heading it replaced rather than as another folder. */
+.other-folders { margin-top: 1rem !important; }
+.other-folders > summary {
+    font-size: .8rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.other-folders > summary.has-unread .count { color: var(--text); }
+#folder-view summary.has-unread .count { color: var(--text); font-weight: 600; }
 .folder-tabs button { border-radius: var(--radius) var(--radius) 0 0; }
 .account-row { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(10rem, 1.5fr) minmax(9rem, 1fr) auto; gap: .7rem; align-items: center; padding: .6rem 0; border-bottom: 1px solid var(--line); }
 .account-row .address, .account-row .server { color: var(--text-dim); font-size: .9rem; }
