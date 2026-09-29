@@ -4,6 +4,8 @@ struct AccountsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(MailboxStore.self) private var store
     @State private var adding = false
+    @AppStorage(SwipeAction.leftKey) private var swipeLeft = SwipeAction.leftDefault
+    @AppStorage(SwipeAction.rightKey) private var swipeRight = SwipeAction.rightDefault
 
     var body: some View {
         NavigationStack {
@@ -33,6 +35,14 @@ struct AccountsView: View {
                     adding = true
                 } label: {
                     Label("Add account", systemImage: "plus")
+                }
+                Section("Swipe") {
+                    Picker("Swipe left", selection: $swipeLeft) {
+                        ForEach(SwipeAction.allCases) { Text($0.title).tag($0) }
+                    }
+                    Picker("Swipe right", selection: $swipeRight) {
+                        ForEach(SwipeAction.allCases) { Text($0.title).tag($0) }
+                    }
                 }
             }
             .navigationTitle("Accounts")

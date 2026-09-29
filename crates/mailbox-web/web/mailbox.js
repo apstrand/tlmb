@@ -143,12 +143,17 @@ function drawList() {
             (message.flags.includes("flagged") ? "★" : "") +
             (message.has_attachment ? " \u{1F4CE}" : "");
 
-        row.append(
+        // The text sits on a layer of its own so that a swipe can slide it
+        // aside and show what letting go will do underneath.
+        const content = document.createElement("div");
+        content.className = "row";
+        content.append(
             span("from", sender(message)),
             span("date", shortDate(message.date)),
             span("subject", message.subject || "(no subject)"),
             span("preview", message.preview ?? ""),
         );
+        row.append(content);
         if (marks.trim()) row.querySelector(".date").prepend(span("marks", marks + " "));
 
         // Dragging a message to a folder files it — the mouse's version of
@@ -168,7 +173,13 @@ function drawList() {
             row.classList.remove("is-dragging");
             state.dragging = null;
         });
-        row.addEventListener("click", () => {
+        row.addEventListener("click", (event) => {
+            // The click a finger makes on lifting at the end of a swipe is
+            // not a request to open the message it just filed away.
+            if (performance.now() - swipe.endedAt < 400) {
+                event.preventDefault();
+                return;
+            }
             // Clicking the message already under the cursor is a second,
             // deliberate look at it. The dwell exists to keep a cursor passing
             // through from marking a mailbox read; a click is not passing
@@ -1273,6 +1284,211 @@ document.addEventListener("keydown", (event) => {
         action();
     }
 });
+
+// ---- swiping a message (§7) ----
+//
+// A finger on a touch screen, or two on a trackpad, slides a row sideways and
+// shows what letting go will do. Past a third of the row it does it; short of
+// that the row springs back, so a swipe that was really a wobble on the way
+// to scrolling changes nothing. The mouse is left out: it drags a message to
+// a folder, and one gesture should not mean two things.
+//
+// What each direction does is `[gui]` in the config, chosen from the help
+// window: left deletes and right marks read unless someone says otherwise.
+
+const SWIPE_ACTIONS = {
+    delete: { title: "Delete", tone: "danger", moves: true,
+        label: () => "Delete", run: (m) => moveTo(m.id, "trash") },
+    archive: { title: "Archive", tone: "archive", moves: true,
+        label: () => "Archive", run: (m) => moveTo(m.id, "archive") },
+    spam: { title: "Mark spam", tone: "spam", moves: true,
+        label: () => "Spam", run: (m) => moveTo(m.id, "junk") },
+    "mark-read": { title: "Mark read", tone: "read",
+        label: () => "Read",
+        // Filtered to unread mail, reading it is what takes it off the list.
+        run: (m) => markRead(m).then(() => { if (hidesRead(state.query)) reload(); }) },
+    "toggle-read": { title: "Toggle read", tone: "read",
+        label: (m) => m.flags.includes("seen") ? "Unread" : "Read",
+        run: (m) => flag(m.id, m.flags.includes("seen") ? { remove: ["seen"] } : { add: ["seen"] }) },
+    flag: { title: "Toggle flag", tone: "flag",
+        label: (m) => m.flags.includes("flagged") ? "Unflag" : "Flag",
+        run: (m) => flag(m.id, m.flags.includes("flagged") ? { remove: ["flagged"] } : { add: ["flagged"] }) },
+};
+
+const swipe = {
+    left: "delete",
+    right: "mark-read",
+    /** The row under the gesture: a pointer id, or "wheel" for a trackpad. */
+    source: null,
+    row: null,
+    message: null,
+    startX: 0,
+    startY: 0,
+    /** How far the gesture has gone, before any resistance is applied. */
+    dx: 0,
+    wheelTimer: 0,
+    /** A trackpad keeps sending momentum after a swipe has acted on a row. */
+    wheelQuietUntil: 0,
+    /** When the last swipe ended, so the click a lifted finger makes is ignored. */
+    endedAt: -Infinity,
+};
+
+/** How far a row has to go before letting go acts on it. */
+function swipeThreshold(row) {
+    return Math.min(row.clientWidth * 0.33, 160);
+}
+
+/** Starts a gesture on a row, holding on to the message rather than its index. */
+function startSwipe(source, row) {
+    Object.assign(swipe, { source, row, dx: 0,
+        message: state.messages[Number(row.dataset.index)] ?? null });
+}
+
+function dragSwipe(dx) {
+    const { row, message } = swipe;
+    const direction = dx < 0 ? "left" : "right";
+    const action = SWIPE_ACTIONS[swipe[direction]];
+    swipe.dx = dx;
+    row.classList.add("is-swiping");
+    row.classList.remove("swipe-settle");
+    row.dataset.swipe = direction;
+    row.dataset.tone = action?.tone ?? "";
+    row.dataset.swipeLabel = action && message ? action.label(message) : "";
+    row.classList.toggle("will-act", Boolean(action) && Math.abs(dx) >= swipeThreshold(row));
+    // A direction set to nothing still gives a little, so the row does not
+    // feel stuck, but never far enough to look like it will do something.
+    row.style.setProperty("--swipe-x", `${action ? dx : dx / 6}px`);
+}
+
+function endSwipe() {
+    const { row, dx, message } = swipe;
+    swipe.source = null;
+    swipe.row = null;
+    swipe.message = null;
+    if (!row?.classList.contains("is-swiping")) return;
+    swipe.endedAt = performance.now();
+
+    const action = SWIPE_ACTIONS[swipe[dx < 0 ? "left" : "right"]];
+    // A row that a reload replaced mid-gesture is no longer a promise about
+    // which message is under the finger.
+    const acts = Boolean(action && message) && row.isConnected
+        && Math.abs(dx) >= swipeThreshold(row);
+    row.classList.add("swipe-settle");
+    if (acts && action.moves) {
+        // Off the edge, and left there: the reload after the move takes the
+        // row away, and bringing it back first would look like a refusal.
+        row.style.setProperty("--swipe-x", `${Math.sign(dx) * row.clientWidth}px`);
+    } else {
+        row.style.setProperty("--swipe-x", "0px");
+        setTimeout(() => settleRow(row), 200);
+    }
+    if (acts) action.run(message);
+}
+
+function settleRow(row) {
+    if (swipe.row === row) return;
+    row.classList.remove("is-swiping", "swipe-settle", "will-act");
+    delete row.dataset.swipe;
+    delete row.dataset.tone;
+    delete row.dataset.swipeLabel;
+    row.style.removeProperty("--swipe-x");
+}
+
+function cancelSwipe() {
+    swipe.dx = 0;
+    endSwipe();
+}
+
+listEl.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" || swipe.source === "wheel") return;
+    const row = event.target.closest?.(".message");
+    if (!row) return;
+    // A new touch always starts afresh. The last gesture's end can be lost —
+    // a reload that replaced its row takes the captured pointer with it —
+    // and waiting for it would leave every later swipe doing nothing.
+    const stale = swipe.row;
+    startSwipe(event.pointerId, row);
+    if (stale && stale !== row) settleRow(stale);
+    swipe.startX = event.clientX;
+    swipe.startY = event.clientY;
+});
+
+listEl.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== swipe.source) return;
+    const dx = event.clientX - swipe.startX;
+    const dy = event.clientY - swipe.startY;
+    if (!swipe.row.classList.contains("is-swiping")) {
+        // Mostly vertical is a scroll, and the list is the browser's to move.
+        if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
+            swipe.source = null;
+            swipe.row = null;
+            swipe.message = null;
+            return;
+        }
+        if (Math.abs(dx) < 10) return;
+        swipe.row.setPointerCapture?.(event.pointerId);
+    }
+    dragSwipe(dx);
+});
+
+listEl.addEventListener("pointerup", (event) => {
+    if (event.pointerId === swipe.source) endSwipe();
+});
+listEl.addEventListener("pointercancel", (event) => {
+    if (event.pointerId === swipe.source) cancelSwipe();
+});
+
+// Two fingers sideways on a trackpad arrive as horizontal wheel events, with
+// no "fingers lifted" at the end: the gesture is over when they stop coming.
+listEl.addEventListener("wheel", (event) => {
+    if (swipe.source !== null && swipe.source !== "wheel") return;
+    if (swipe.source === null) {
+        if (performance.now() < swipe.wheelQuietUntil) return;
+        if (Math.abs(event.deltaX) < 2 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+        const row = event.target.closest?.(".message");
+        if (!row) return;
+        startSwipe("wheel", row);
+    }
+    event.preventDefault();
+    dragSwipe(swipe.dx - event.deltaX);
+    clearTimeout(swipe.wheelTimer);
+    swipe.wheelTimer = setTimeout(() => {
+        endSwipe();
+        swipe.wheelQuietUntil = performance.now() + 400;
+    }, 160);
+}, { passive: false });
+
+async function loadSwipeSettings() {
+    try {
+        const gui = await api("/api/settings");
+        if (gui.swipe_left) swipe.left = gui.swipe_left;
+        if (gui.swipe_right) swipe.right = gui.swipe_right;
+    } catch {
+        // The defaults, which are what an unset config means anyway.
+    }
+    for (const select of [el("swipe-left"), el("swipe-right")]) {
+        select.replaceChildren(
+            ...Object.entries(SWIPE_ACTIONS).map(([value, action]) => new Option(action.title, value)),
+            new Option("Nothing", "none"),
+        );
+        select.value = swipe[select.dataset.direction];
+    }
+}
+
+for (const select of [el("swipe-left"), el("swipe-right")]) {
+    select.addEventListener("change", async () => {
+        const direction = select.dataset.direction;
+        swipe[direction] = select.value;
+        try {
+            await post("/api/settings", { [`swipe_${direction}`]: select.value });
+            say(`swipe ${direction}: ${select.selectedOptions[0]?.textContent.toLowerCase()}`);
+        } catch (e) {
+            fail(e);
+        }
+    });
+}
+
+loadSwipeSettings();
 
 // ---- the right-click menu (§7) ----
 //

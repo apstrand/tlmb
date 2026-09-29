@@ -337,8 +337,28 @@ async function dispatch(path, options, generation) {
         case "POST accounts/test": return test(value);
         case "POST accounts": return add(value);
         case "POST accounts/edit": return editAccount(value);
+        case "GET settings": return guiSettings();
+        case "POST settings": return saveGuiSettings(value);
         default: throw new Error(`hosted backend has no ${options.method ?? "GET"} ${route}`);
     }
+}
+
+/** `[gui]` from the served config, kept beside it in this browser's storage. */
+const GUI_DEFAULTS = { swipe_left: "delete", swipe_right: "mark-read" };
+
+async function guiSettings() {
+    const settings = await loadSettings();
+    return { ...GUI_DEFAULTS, ...settings.gui };
+}
+
+async function saveGuiSettings(changes) {
+    const settings = await loadSettings();
+    const gui = { ...GUI_DEFAULTS, ...settings.gui };
+    for (const key of Object.keys(GUI_DEFAULTS)) {
+        if (typeof changes?.[key] === "string") gui[key] = changes[key];
+    }
+    await saveSettings({ ...settings, gui });
+    return gui;
 }
 
 async function discover(address) {

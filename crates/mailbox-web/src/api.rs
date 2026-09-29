@@ -16,8 +16,11 @@
 //! line typed in a terminal, and the two interfaces served from here do not
 //! have one. Without them a browser or a desktop window is a mail client that
 //! can only be started by someone who did not need it. They are the only
-//! routes that write the config, and the only ones a non-loopback server
-//! refuses: see `setup_allowed` in `server`.
+//! routes a non-loopback server refuses: see `setup_allowed` in `server`.
+//!
+//! The one other route that writes the config is `settings`, which holds the
+//! interface's own preferences — what a swipe does. It carries nothing a
+//! passer-by could learn from, so it is served wherever the page is.
 
 use std::sync::Mutex;
 
@@ -133,6 +136,8 @@ pub fn handle(
             edit_account(request, workspace, session, tracer, clock, setup_allowed)
         }
         ("POST", "accounts/test") => test_account(request, tracer, setup_allowed),
+        ("GET", "settings") => settings(session),
+        ("POST", "settings") => save_settings(request, session),
         ("GET", _) | ("POST", _) => Err(Error::not_found("route", path)),
         _ => Err(Error::usage(format!(
             "{} is not a method this serves",
@@ -703,6 +708,44 @@ fn try_settings(
         tracer.clone(),
         VERIFY_TIMEOUT,
     )
+}
+
+fn config_path(session: &SessionOptions) -> std::path::PathBuf {
+    session
+        .config_path
+        .clone()
+        .unwrap_or_else(mailbox_core::paths::config_file)
+}
+
+/// The interface's preferences, from `[gui]` in the config.
+fn settings(session: &SessionOptions) -> Result<Response> {
+    let config = mailbox_core::config::Config::load(&config_path(session))?;
+    Ok(Response::json(200, &serde_json::to_value(config.gui)?))
+}
+
+/// Changes the fields sent and leaves the rest of the config as it was.
+fn save_settings(request: &Request, session: &SessionOptions) -> Result<Response> {
+    let changes = body(request)?;
+    let path = config_path(session);
+    let mut config = mailbox_core::config::Config::load(&path)?;
+    for (key, slot) in [
+        ("swipe_left", &mut config.gui.swipe_left),
+        ("swipe_right", &mut config.gui.swipe_right),
+    ] {
+        let Some(value) = changes.get(key) else {
+            continue;
+        };
+        let value = value.as_str().unwrap_or_default();
+        if !mailbox_core::config::SWIPE_ACTIONS.contains(&value) {
+            return Err(Error::usage(format!(
+                "`{value}` is not something a swipe can do; one of {}",
+                mailbox_core::config::SWIPE_ACTIONS.join(", ")
+            )));
+        }
+        *slot = value.to_string();
+    }
+    config.save(&path)?;
+    Ok(Response::json(200, &serde_json::to_value(config.gui)?))
 }
 
 /// Why this server will not take a password.

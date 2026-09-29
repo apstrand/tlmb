@@ -638,6 +638,10 @@ offline    = "recent"                # none | recent | full
 [pair]
 relay = "https://pair.mailbox.example"
 
+[gui]                                 # the browser and desktop windows
+swipe_left  = "delete"                # delete | archive | spam | mark-read |
+swipe_right = "mark-read"             #   toggle-read | flag | none
+
 [keys]                                # optional keymap overrides
 archive = "e"
 ```

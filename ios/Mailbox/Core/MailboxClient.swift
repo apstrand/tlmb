@@ -97,6 +97,10 @@ final class MailboxClient: @unchecked Sendable {
         let _: Envelope = try decode("rm", ["ids": ids])
     }
 
+    func spam(ids: [String]) throws {
+        let _: Envelope = try decode("spam", ["ids": ids])
+    }
+
     func sync(full: Bool = false) throws -> SyncReply {
         try decode("sync", ["full": full])
     }

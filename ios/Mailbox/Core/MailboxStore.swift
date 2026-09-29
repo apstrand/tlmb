@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -64,21 +65,56 @@ final class MailboxStore {
         mutate([message.id]) { try MailboxClient.shared.trash(ids: $0) }
     }
 
+    func spam(_ message: MessageSummary) {
+        mutate([message.id]) { try MailboxClient.shared.spam(ids: $0) }
+    }
+
+    func markRead(_ message: MessageSummary) {
+        guard message.isUnread else { return }
+        restyle(message, "+seen")
+    }
+
     func toggleRead(_ message: MessageSummary) {
-        let change = message.isUnread ? "+seen" : "-seen"
-        mutate([message.id]) { try MailboxClient.shared.flag(ids: $0, changes: [change]) }
+        restyle(message, message.isUnread ? "+seen" : "-seen")
     }
 
     func toggleFlagged(_ message: MessageSummary) {
-        let change = message.isFlagged ? "-flagged" : "+flagged"
-        mutate([message.id]) { try MailboxClient.shared.flag(ids: $0, changes: [change]) }
+        restyle(message, message.isFlagged ? "-flagged" : "+flagged")
+    }
+
+    /// Runs a swipe's action on a message.
+    func perform(_ action: SwipeAction, on message: MessageSummary) {
+        switch action {
+        case .delete: trash(message)
+        case .archive: archive(message)
+        case .spam: spam(message)
+        case .markRead: markRead(message)
+        case .toggleRead: toggleRead(message)
+        case .flag: toggleFlagged(message)
+        }
+    }
+
+    /// A flag change, shown on the row where it is rather than by taking the
+    /// row away: a message marked read is still in the inbox. The reload
+    /// afterwards is what drops it from a list filtered to `is:unread`.
+    private func restyle(_ message: MessageSummary, _ change: String) {
+        if let at = messages.firstIndex(where: { $0.id == message.id }) {
+            let name = String(change.dropFirst())
+            messages[at].flags.removeAll { $0 == name }
+            if change.hasPrefix("+") { messages[at].flags.append(name) }
+        }
+        write { try MailboxClient.shared.flag(ids: [message.id], changes: [change]) }
     }
 
     private func mutate(_ ids: [String], _ work: @escaping ([String]) throws -> Void) {
         messages.removeAll { ids.contains($0.id) }
+        write { try work(ids) }
+    }
+
+    private func write(_ work: @escaping () throws -> Void) {
         Task {
             do {
-                try work(ids)
+                try work()
                 try await reload()
             } catch {
                 lastError = error.localizedDescription
@@ -142,6 +178,63 @@ final class MailboxStore {
         Task {
             try? await Task.sleep(for: .seconds(2.5))
             if !syncing { banner = nil }
+        }
+    }
+}
+
+/// What a swipe across a message row does. The same choices, and the same
+/// defaults, as the web interface: left deletes, right marks read.
+enum SwipeAction: String, CaseIterable, Identifiable {
+    case delete, archive, spam, markRead = "mark-read", toggleRead = "toggle-read", flag
+
+    var id: String { rawValue }
+
+    static let leftDefault = SwipeAction.delete
+    static let rightDefault = SwipeAction.markRead
+
+    /// The settings keys the two directions are stored under.
+    static let leftKey = "swipe.left"
+    static let rightKey = "swipe.right"
+
+    var title: String {
+        switch self {
+        case .delete: "Delete"
+        case .archive: "Archive"
+        case .spam: "Spam"
+        case .markRead: "Mark read"
+        case .toggleRead: "Toggle read"
+        case .flag: "Flag"
+        }
+    }
+
+    /// The label on the row, which can say which way a toggle will go.
+    func label(for message: MessageSummary) -> String {
+        switch self {
+        case .toggleRead: message.isUnread ? "Read" : "Unread"
+        case .flag: message.isFlagged ? "Unflag" : "Flag"
+        case .markRead: "Read"
+        default: title
+        }
+    }
+
+    func systemImage(for message: MessageSummary) -> String {
+        switch self {
+        case .delete: "trash"
+        case .archive: "archivebox"
+        case .spam: "xmark.bin"
+        case .markRead: "envelope.open"
+        case .toggleRead: message.isUnread ? "envelope.open" : "envelope.badge"
+        case .flag: "flag"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .delete: .red
+        case .archive: .teal
+        case .spam: .brown
+        case .markRead, .toggleRead: .indigo
+        case .flag: .orange
         }
     }
 }

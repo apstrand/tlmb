@@ -246,6 +246,8 @@ nav#folders {
 .shortcut-list { display: grid; grid-template-columns: 6rem 1fr; gap: .45rem .8rem; margin: 1rem 0 0; }
 .shortcut-list dt { font-family: ui-monospace, monospace; color: var(--accent); }
 .shortcut-list dd { margin: 0; }
+#help-window h3 { margin: 1.2rem 0 .5rem; font-size: 1rem; }
+.swipe-settings { display: grid; grid-template-columns: 6rem 1fr; gap: .45rem .8rem; align-items: center; }
 #account-edit-form { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
 @media (max-width: 40rem) { .account-row { grid-template-columns: 1fr auto; } .account-row .address, .account-row .server { grid-column: 1; } }
 
@@ -342,16 +344,55 @@ ol#list { margin: 0; padding: 0; list-style: none; }
 ol#list:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 li.message {
-    padding: .5rem .7rem;
+    position: relative;
+    overflow: hidden;
     border-bottom: 1px solid var(--line);
     cursor: pointer;
+    /* Vertical drags scroll the list; horizontal ones are a swipe. */
+    touch-action: pan-y;
+}
+
+/* The row's text on a layer of its own, which is what a swipe slides. */
+li.message > .row {
+    position: relative;
+    z-index: 1;
+    padding: .5rem .7rem;
     display: grid;
     grid-template-columns: 1fr auto;
     gap: 0 .5rem;
+    background: var(--bg);
+    transform: translateX(var(--swipe-x, 0));
 }
 
-li.message:hover { background: var(--bg-sunken); }
-li.message[aria-selected="true"] { background: var(--accent-soft); }
+li.message:hover > .row { background: var(--bg-sunken); }
+li.message[aria-selected="true"] > .row { background: var(--accent-soft); }
+
+/* ---- swiping ---- */
+
+li.message.is-swiping { --swipe-tone: var(--text-dim); background: var(--swipe-tone); }
+li.message[data-tone="danger"] { --swipe-tone: var(--danger); }
+li.message[data-tone="archive"] { --swipe-tone: #1f8a82; }
+li.message[data-tone="spam"] { --swipe-tone: #8a5a2b; }
+li.message[data-tone="read"] { --swipe-tone: var(--accent); }
+li.message[data-tone="flag"] { --swipe-tone: var(--flagged); }
+li.message.swipe-settle > .row { transition: transform .18s ease-out; }
+
+/* What letting go will do, in the space the row slid out of. */
+li.message.is-swiping::before {
+    content: attr(data-swipe-label);
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #fff;
+    font-weight: 600;
+    opacity: .55;
+    transition: opacity .12s;
+}
+li.message.is-swiping.will-act::before { opacity: 1; }
+li.message[data-swipe="left"]::before { right: 1rem; }
+li.message[data-swipe="right"]::before { left: 1rem; }
+/* Short of the line it is only a preview, and says so by being quieter. */
+li.message.is-swiping:not(.will-act) { background: color-mix(in srgb, var(--swipe-tone) 55%, var(--bg)); }
 
 li.message .from { font-weight: 500; }
 li.message.unread .from,
@@ -379,8 +420,8 @@ li.message .marks { color: var(--flagged); }
 /* §7: one list, a colour per account, only when there is more than one. */
 li.message.multi-account {
     border-left: 3px solid hsl(var(--account-hue) 55% 48%);
-    padding-left: calc(.7rem - 3px);
 }
+li.message.multi-account > .row { padding-left: calc(.7rem - 3px); }
 
 @media (prefers-color-scheme: dark) {
     li.message.multi-account {

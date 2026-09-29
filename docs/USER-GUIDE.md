@@ -44,6 +44,14 @@ account.
 On a narrow screen only one pane is shown. The back arrow walks from the reader
 to the list and then to folders.
 
+On a touch screen, or with two fingers on a trackpad, swipe a message in the
+list: left moves it to the trash and right marks it read. Past about a third of
+the row the label brightens and letting go does it; short of that the row
+springs back. **Help** has a *Swipe* section for choosing what each direction
+does — delete, archive, spam, mark read, toggle read, flag, or nothing — which
+is saved as `[gui]` `swipe_left` and `swipe_right` in `config.toml`. The iPhone
+app has the same choice under **Accounts**.
+
 The action row above a message has the unsurprising operations: mark read or
 unread, flag, reply, archive, delete, spam, and snooze. Archive, delete, and
 spam move the message to the server folder carrying that role; if a server has

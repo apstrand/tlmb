@@ -658,6 +658,43 @@ fn malformed_writes_are_rejected_by_name() {
     );
 }
 
+/// What a swipe does is `[gui]` in the config, because the desktop window's
+/// origin changes every launch and the page's own storage would not keep it.
+#[test]
+fn swipe_settings_default_and_are_kept_in_the_config() {
+    let s = Serving::start();
+
+    let gui = s.api("/api/settings");
+    assert_eq!(gui["swipe_left"], "delete", "{gui:#}");
+    assert_eq!(gui["swipe_right"], "mark-read", "{gui:#}");
+
+    let (status, body) = s.post("/api/settings", r#"{"swipe_left":"archive"}"#);
+    assert_eq!(status, 200, "{body:#}");
+    assert_eq!(body["swipe_left"], "archive", "{body:#}");
+    assert_eq!(
+        body["swipe_right"], "mark-read",
+        "the other side is left alone"
+    );
+
+    let written = std::fs::read_to_string(&s.config).expect("config");
+    let config: mailbox_core::config::Config = toml::from_str(&written).expect("parses");
+    assert_eq!(config.gui.swipe_left, "archive");
+    assert!(
+        !config.accounts.is_empty(),
+        "saving a setting keeps the accounts"
+    );
+
+    let (status, body) = s.post("/api/settings", r#"{"swipe_right":"explode"}"#);
+    assert_eq!(status, 400, "{body:#}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("explode"),
+        "{body:#}"
+    );
+}
+
 /// There is no route that runs a command. Handing a browser an `argv` endpoint
 /// would make every future subcommand reachable from a page.
 #[test]

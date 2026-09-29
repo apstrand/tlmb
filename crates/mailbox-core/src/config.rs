@@ -31,6 +31,8 @@ pub struct Config {
     pub notify: Notify,
     #[serde(default)]
     pub pair: Pair,
+    #[serde(default)]
+    pub gui: Gui,
     /// Keymap overrides. Passed through to the TUI (M3) without interpretation
     /// here, so an unknown key is that frontend's problem to report.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -141,6 +143,52 @@ pub struct Pair {
     /// version does not fail to load on this one.
     #[serde(default)]
     pub relay: Option<String>,
+}
+
+/// What a swipe across a message row can do in the graphical interfaces.
+///
+/// `none` turns that direction off, for someone who keeps swiping by accident.
+pub const SWIPE_ACTIONS: &[&str] = &[
+    "delete",
+    "archive",
+    "spam",
+    "mark-read",
+    "toggle-read",
+    "flag",
+    "none",
+];
+
+/// The browser and desktop interfaces (§7).
+///
+/// Here rather than in the page's own storage: the desktop window is served
+/// from a new port on every launch, and a setting kept by origin would be
+/// forgotten each time it opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gui {
+    /// What swiping a message to the left does; one of [`SWIPE_ACTIONS`].
+    #[serde(default = "default_swipe_left")]
+    pub swipe_left: String,
+    /// What swiping a message to the right does.
+    #[serde(default = "default_swipe_right")]
+    pub swipe_right: String,
+}
+
+impl Default for Gui {
+    fn default() -> Self {
+        Gui {
+            swipe_left: default_swipe_left(),
+            swipe_right: default_swipe_right(),
+        }
+    }
+}
+
+fn default_swipe_left() -> String {
+    "delete".into()
+}
+
+fn default_swipe_right() -> String {
+    "mark-read".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

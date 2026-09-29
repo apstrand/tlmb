@@ -182,6 +182,10 @@ impl Mailbox {
         self.move_special(ids, "trash")
     }
 
+    pub fn spam(&self, ids: &[String]) -> Result<Value> {
+        self.move_special(ids, "junk")
+    }
+
     pub fn move_to(&self, ids: &[String], folder: &str) -> Result<Value> {
         let refs: Vec<IdRef> = ids.iter().cloned().map(IdRef::Id).collect();
         let written = self.with_ws_mut(|workspace| {
@@ -555,6 +559,10 @@ impl Mailbox {
             "rm" | "trash" => {
                 let a: IdsArgs = serde_from_value(args)?;
                 Ok(("rm", self.trash(&a.ids)?))
+            }
+            "spam" | "junk" => {
+                let a: IdsArgs = serde_from_value(args)?;
+                Ok(("mv", self.spam(&a.ids)?))
             }
             "move" => {
                 let a: MoveArgs = serde_from_value(args)?;
