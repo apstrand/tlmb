@@ -288,7 +288,6 @@ fn the_default_keymap_is_the_muscle_memory_the_spec_names() {
         ("/", Action::Search),
         ("t", Action::Tag),
         ("d", Action::Delete),
-        ("s", Action::ToggleRead),
         ("a", Action::Archive),
         ("m", Action::Compose),
         ("r", Action::Reply),
@@ -302,6 +301,29 @@ fn the_default_keymap_is_the_muscle_memory_the_spec_names() {
             "`{key}` should be {action:?}"
         );
     }
+}
+
+/// Triage under one hand: `w` is read-and-next, and `a`, `s`, `d` send the
+/// message to the archive, spam and trash — so `wasd` works an inbox through.
+#[test]
+fn triage_is_on_wasd() {
+    let map = Keymap::vim();
+    for (key, action) in [
+        ("w", Action::MarkRead),
+        ("a", Action::Archive),
+        ("s", Action::Spam),
+        ("d", Action::Delete),
+        ("f", Action::ToggleFlagged),
+        ("F", Action::Forward),
+        ("W", Action::ToggleRead),
+    ] {
+        assert_eq!(
+            map.action(key),
+            Some(action),
+            "`{key}` should be {action:?}"
+        );
+    }
+    assert_eq!(Keymap::emacs().action("w"), Some(Action::MarkRead));
 }
 
 /// The mutt-derived letters are muscle memory and stay put; only movement and
@@ -324,7 +346,7 @@ fn the_emacs_keymap_keeps_the_mutt_letters() {
 #[test]
 fn an_override_replaces_rather_than_adds() {
     let mut map = Keymap::vim();
-    assert_eq!(map.action("s"), Some(Action::ToggleRead));
+    assert_eq!(map.action("s"), Some(Action::Spam));
 
     let overrides = [("archive".to_string(), "e".to_string())]
         .into_iter()
@@ -337,7 +359,7 @@ fn an_override_replaces_rather_than_adds() {
         None,
         "the old archive binding should be gone"
     );
-    assert_eq!(map.action("s"), Some(Action::ToggleRead));
+    assert_eq!(map.action("s"), Some(Action::Spam));
 }
 
 /// A typo in `[keys]` that silently does nothing is a rebinding the user
@@ -414,6 +436,7 @@ fn every_action_has_a_key_and_a_description() {
         Action::Search,
         Action::Thread,
         Action::ToggleRead,
+        Action::MarkRead,
         Action::ToggleFlagged,
         Action::Tag,
         Action::Archive,
@@ -645,6 +668,54 @@ fn moving_the_cursor_marks_nothing() {
         assert_eq!(app.handle(Action::Down), Effect::None);
         assert_eq!(app.handle(Action::Up), Effect::None);
     }
+}
+
+// ---- `w`: read, and on to the next ----
+
+#[test]
+fn w_marks_read_and_moves_down() {
+    use mailbox_tui::app::Write;
+    let mut app = app_with(3);
+    app.handle(Action::Down);
+
+    assert_eq!(
+        app.handle(Action::MarkRead),
+        Effect::Write(Write::MarkRead { id: "id01".into() })
+    );
+    assert_eq!(app.selected, 2, "the cursor goes on to the next message");
+}
+
+#[test]
+fn w_on_a_read_message_only_moves() {
+    let mut app = app_with(3);
+    assert_eq!(app.handle(Action::MarkRead), Effect::None);
+    assert_eq!(app.selected, 1);
+}
+
+/// In a list of unread mail the message leaves when it is read, and the next
+/// one moves up into its row: stepping down as well would skip it.
+#[test]
+fn w_stays_put_in_a_list_filtered_to_unread() {
+    use mailbox_tui::app::Write;
+    let mut app = app_with(3);
+    app.query = "in:INBOX is:unread".into();
+    app.handle(Action::Down);
+
+    assert_eq!(
+        app.handle(Action::MarkRead),
+        Effect::Write(Write::MarkRead { id: "id01".into() })
+    );
+    assert_eq!(app.selected, 1);
+}
+
+#[test]
+fn w_in_a_message_goes_back_to_the_list_on_the_next_one() {
+    let mut app = app_with(3);
+    app.handle(Action::Open);
+    app.handle(Action::MarkRead);
+    assert_eq!(app.view, View::List);
+    assert!(app.open.is_none());
+    assert_eq!(app.selected, 1);
 }
 
 // ---- a listing that went stale under someone ----

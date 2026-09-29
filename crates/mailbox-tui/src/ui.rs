@@ -636,6 +636,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, keymap: &Keymap) {
         Action::FocusNext,
         Action::Thread,
         Action::Search,
+        Action::MarkRead,
         Action::ToggleRead,
         Action::Undo,
         Action::ToggleFlagged,

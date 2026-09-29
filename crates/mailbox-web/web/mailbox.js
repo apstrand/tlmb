@@ -1070,10 +1070,10 @@ el("compose-cc-toggle").addEventListener("click", () => {
 // ---- what the keyboard does (§7, the terminal's muscle memory) ----
 //
 // The same letters as the terminal, because §7 asks for one set of muscle
-// memory rather than two. They are `mailbox-tui`'s `Keymap::vim` defaults, and
-// where the two used to differ the terminal wins: `s` marks read rather than
-// archiving, `a` archives, `f` forwards, `F` flags, and sync is `@` — which
-// frees `g` to be the top of the list, as it is everywhere else `g` appears.
+// memory rather than two. They are `mailbox-tui`'s `Keymap::vim` defaults:
+// triage sits on `wasd` — `w` marks read and moves on, `a` archives, `s` is
+// spam, `d` is trash — `f` flags, `F` forwards, `W` toggles read, and sync is
+// `@`, which frees `g` to be the top of the list, as it is everywhere else.
 
 const keys = {
     // The letters act on the message list wherever you are, as they do in the
@@ -1091,20 +1091,21 @@ const keys = {
     End: () => select(state.messages.length - 1),
     PageDown: () => page(1),
     PageUp: () => page(-1),
-    s: () => withSelected((m) => flag(m.id, m.flags.includes("seen")
-        ? { remove: ["seen"] } : { add: ["seen"] })),
-    F: () => withSelected((m) => flag(m.id, m.flags.includes("flagged")
-        ? { remove: ["flagged"] } : { add: ["flagged"] })),
+    w: () => withSelected(readAndNext),
     a: () => withSelected((m) => moveTo(m.id, "archive")),
+    s: () => withSelected((m) => moveTo(m.id, "junk")),
     d: () => withSelected((m) => moveTo(m.id, "trash")),
-    S: () => withSelected((m) => moveTo(m.id, "junk")),
+    f: () => withSelected((m) => flag(m.id, m.flags.includes("flagged")
+        ? { remove: ["flagged"] } : { add: ["flagged"] })),
+    W: () => withSelected((m) => flag(m.id, m.flags.includes("seen")
+        ? { remove: ["seen"] } : { add: ["seen"] })),
     u: () => undoLast(),
     z: () => withSelected((m) => snooze(m.id, "tomorrow")),
     "/": () => el("search").focus(),
     m: () => compose(null),
     r: () => replyTo("sender"),
     R: () => replyTo("all"),
-    f: () => replyTo("forward"),
+    F: () => replyTo("forward"),
     "@": () => syncNow(),
     "?": () => { if (!el("help-window").open) el("help-window").showModal(); },
 };
@@ -1134,6 +1135,28 @@ function move(delta) {
 
 function withSelected(run) {
     if (state.selected) run(state.selected);
+}
+
+/** True when the list shows only unread mail, so reading takes a message out. */
+function hidesRead(query) {
+    return queryTerms(query).some((term) =>
+        ["is:unread", "is:unseen"].includes(term.toLowerCase()));
+}
+
+/**
+ * `w`, for "wait": done with this one for now, on to the next.
+ *
+ * In a list filtered to unread mail the message leaves when it is read and
+ * the next one moves up into its place, so the cursor stays where it is;
+ * stepping down as well would skip a message.
+ */
+function readAndNext(message) {
+    if (hidesRead(state.query)) {
+        markRead(message).then(reload);
+        return;
+    }
+    markRead(message);
+    move(1);
 }
 
 // ---- moving between the panes (§7) ----
@@ -1270,18 +1293,18 @@ function messageMenu(message) {
     const flagged = message.flags.includes("flagged");
     return [
         ["Open", "Enter", () => select(state.messages.indexOf(message))],
-        [seen ? "Mark unread" : "Mark read", "s",
+        [seen ? "Mark unread" : "Mark read", seen ? "W" : "w",
             () => flag(message.id, seen ? { remove: ["seen"] } : { add: ["seen"] })],
-        [flagged ? "Unflag" : "Flag", "F",
+        [flagged ? "Unflag" : "Flag", "f",
             () => flag(message.id, flagged ? { remove: ["flagged"] } : { add: ["flagged"] })],
         null,
         ["Reply", "r", () => replyTo("sender", message)],
         ["Reply all", "R", () => replyTo("all", message)],
-        ["Forward", "f", () => replyTo("forward", message)],
+        ["Forward", "F", () => replyTo("forward", message)],
         null,
         ["Archive", "a", () => moveTo(message.id, "archive")],
         ["Move to trash", "d", () => moveTo(message.id, "trash")],
-        ["Mark spam", "S", () => moveTo(message.id, "junk")],
+        ["Mark spam", "s", () => moveTo(message.id, "junk")],
         ["Snooze until tomorrow", "z", () => snooze(message.id, "tomorrow")],
     ];
 }

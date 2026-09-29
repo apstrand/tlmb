@@ -112,19 +112,29 @@ def mail(page):
 
     page.click("#help")
     shortcuts = page.eval("document.querySelector('#help-window').textContent")
-    for text in ("Next message", "Archive", "Move to trash", "Toggle read", "Write message"):
+    for text in ("Next message", "Mark read, then next", "Archive", "Mark spam",
+                 "Move to trash", "Toggle read", "Compose message"):
         check(f"shortcut help names {text}", text in shortcuts)
     page.shot(f"{EVIDENCE}/guide-shortcuts.png")
     page.click("#help-close")
 
     # Exercise the actions the guide calls out, not merely their labels.
     before = page.eval("document.querySelector('#list li[aria-selected=true]').classList.contains('unread')")
-    page.key("u")
+    page.key("W", modifiers=8)  # Shift
     page.wait_for(
         f"document.querySelector('#list li[aria-selected=true]').classList.contains('unread') === {str(not before).lower()}",
-        what="u to toggle read state",
+        what="W to toggle read state",
     )
-    check("u toggles read state", True)
+    check("W toggles read state", True)
+
+    at = page.eval("document.querySelector('#list li[aria-selected=true]').dataset.index")
+    page.key("w")
+    page.wait_for(
+        f"document.querySelector('#list li[aria-selected=true]').dataset.index === '{int(at) + 1}'",
+        what="w to move on to the next message",
+    )
+    check("w marks read and moves to the next message",
+          not page.eval(f"document.querySelector('#list li[data-index=\"{at}\"]').classList.contains('unread')"))
 
     selected = page.eval("document.querySelector('#reader h1').textContent")
     page.key("d")
@@ -133,16 +143,16 @@ def mail(page):
     check("d moves the selected message to trash", selected in trashed, repr(trashed))
 
     selected = page.eval("document.querySelector('#reader h1').textContent")
-    page.key("s")
-    page.wait_for("document.querySelector('#status').textContent === 'moved to archive'", what="s to archive")
+    page.key("a")
+    page.wait_for("document.querySelector('#status').textContent === 'moved to archive'", what="a to archive")
     archived = [m["subject"] for m in api("api/ls?q=in%3Aarchive&limit=20")["messages"]]
-    check("s archives the selected message", selected in archived, repr(archived))
+    check("a archives the selected message", selected in archived, repr(archived))
 
     selected = page.eval("document.querySelector('#reader h1').textContent")
-    page.click_text("#reader .actions button", "Spam")
-    page.wait_for("document.querySelector('#status').textContent === 'moved to junk'", what="Spam action")
+    page.key("s")
+    page.wait_for("document.querySelector('#status').textContent === 'moved to junk'", what="s to mark spam")
     junk = [m["subject"] for m in api("api/ls?q=in%3Ajunk&limit=20")["messages"]]
-    check("Spam moves the selected message to junk", selected in junk, repr(junk))
+    check("s moves the selected message to junk", selected in junk, repr(junk))
 
 
 def main():

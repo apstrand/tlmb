@@ -310,6 +310,7 @@ fn handle_key(
         app.dirty = true;
         // Moving a message out of the current list should leave the cursor
         // where it was, pointing at whatever moved up into that row.
+        follow_with_preview(app, workspace)?;
         return Ok(false);
     }
 
@@ -352,7 +353,24 @@ fn handle_key(
             return Err(e);
         }
     }
-    apply_effect(app, workspace, opts, tracer, clock, tx, effect)
+    let quit = apply_effect(app, workspace, opts, tracer, clock, tx, effect)?;
+    if action == Action::MarkRead {
+        follow_with_preview(app, workspace)?;
+    }
+    Ok(quit)
+}
+
+/// Keeps the preview on the message the cursor lands on after a triage key.
+///
+/// The list is reloaded first rather than on the next tick: the message just
+/// moved or read may have left it, and the preview would otherwise go on
+/// showing it — or show it again — in place of the one that moved up.
+fn follow_with_preview(app: &mut App, workspace: &Workspace) -> Result<()> {
+    if app.side != crate::app::Side::Preview {
+        return Ok(());
+    }
+    app.reload(workspace)?;
+    load_open_message(app, workspace)
 }
 
 /// Filtering as you type (§7).

@@ -67,11 +67,17 @@ Press `?` or **Help** for the complete small list.
 
 ![Keyboard shortcut help](images/shortcuts.png)
 
-The ones worth remembering are `j`/`k` to move, `u` to toggle read, `s` to
-archive, `d` to trash, `r` to reply, `m` to write, `/` to search, and `g` to
-sync. There is no single-key spam shortcut; use **Spam** in the message action
-row. Keys do nothing while you are typing in a field, which saves a surprising
-amount of grief.
+Triage sits under the left hand: `w` marks the message read and moves to the
+next one ("wait"), `a` archives, `s` marks it spam, and `d` moves it to the
+trash — so `wasd` works through an inbox without looking. In a list filtered to
+unread mail, `w` stays put, because the message it read leaves the list and the
+next one moves up into its place. `f` flags, `W` toggles read, `u` undoes the
+last move.
+
+The others worth remembering are `j`/`k` to move, `r` to reply, `F` to
+forward, `m` to write, `/` to search, and `@` to sync. The terminal interface
+uses the same letters. Keys do nothing while you are typing in a field, which
+saves a surprising amount of grief.
 
 Downloaded mail remains readable offline. Run `mailbox sync --full` if you want
 all bodies and attachments cached rather than recent and opened mail only.

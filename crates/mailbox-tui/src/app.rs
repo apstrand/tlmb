@@ -766,6 +766,8 @@ impl App {
             },
             Action::Compose => Effect::Suspend(SuspendedTask::Compose),
 
+            Action::MarkRead => self.mark_read_and_advance(),
+
             // The store writes are performed by the shell, which owns the
             // session; the state machine only says what was asked for.
             Action::ToggleRead
@@ -879,6 +881,43 @@ impl App {
         // not teleport to the top.
         self.selected = next.clamp(0, last as isize) as usize;
         self.body_scroll = 0;
+    }
+
+    /// True when the list only shows unread mail, so that marking a message
+    /// read takes it out of the list.
+    pub fn hides_read(&self) -> bool {
+        self.query.split_whitespace().any(|term| {
+            term.eq_ignore_ascii_case("is:unread") || term.eq_ignore_ascii_case("is:unseen")
+        })
+    }
+
+    /// `w`: done with this one for now, on to the next.
+    ///
+    /// Back to the list when a message was open, since the next one is found
+    /// there. The cursor steps down unless the list is filtered to unread
+    /// mail: there the message leaves the list when it is read, the next one
+    /// moves up into its row, and stepping as well would skip it.
+    fn mark_read_and_advance(&mut self) -> Effect {
+        let Some(id) = self.target_id() else {
+            return Effect::None;
+        };
+        let unread = self
+            .messages
+            .iter()
+            .find(|m| m.id == id)
+            .or(self.open.as_ref().map(|detail| &detail.summary))
+            .is_some_and(|m| !m.flags.iter().any(|f| f == "seen"));
+        if self.view == View::Message {
+            self.back_to_list();
+        }
+        if !self.hides_read() {
+            self.move_by(1);
+        }
+        if unread {
+            Effect::Write(Write::MarkRead { id })
+        } else {
+            Effect::None
+        }
     }
 
     /// Which id the flag and move actions should act on.

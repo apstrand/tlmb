@@ -35,6 +35,11 @@ pub enum Action {
     /// Show the whole thread the selection belongs to.
     Thread,
     ToggleRead,
+    /// Mark read and move on to the next message (`w`, for "wait").
+    ///
+    /// Not a toggle: this is the triage key, and a key that sometimes marks
+    /// unread would undo the last pass through the inbox.
+    MarkRead,
     Undo,
     ToggleFlagged,
     Tag,
@@ -82,6 +87,7 @@ impl Action {
             Action::Search => "search",
             Action::Thread => "show thread",
             Action::ToggleRead => "toggle read",
+            Action::MarkRead => "mark read, then next",
             Action::Undo => "undo last action",
             Action::ToggleFlagged => "toggle flagged",
             Action::Tag => "tag",
@@ -141,16 +147,21 @@ impl Keymap {
             ("l", Action::Open),
             ("/", Action::Search),
             ("T", Action::Thread),
-            ("s", Action::ToggleRead),
-            ("F", Action::ToggleFlagged),
-            ("t", Action::Tag),
+            // Triage sits under the left hand, so a whole inbox can be worked
+            // through without moving it: `w` is done-for-now and on to the
+            // next, and `a`, `s` and `d` send the message away — each of which
+            // leaves the cursor on the one that moved up into its place.
+            ("w", Action::MarkRead),
             ("a", Action::Archive),
-            ("u", Action::Undo),
+            ("s", Action::Spam),
             ("d", Action::Delete),
-            ("S", Action::Spam),
+            ("f", Action::ToggleFlagged),
+            ("W", Action::ToggleRead),
+            ("t", Action::Tag),
+            ("u", Action::Undo),
             ("r", Action::Reply),
             ("R", Action::ReplyAll),
-            ("f", Action::Forward),
+            ("F", Action::Forward),
             ("m", Action::Compose),
             ("|", Action::Pipe),
             ("o", Action::Links),
@@ -219,7 +230,7 @@ impl Keymap {
     ///
     /// An override *replaces* every existing binding for that action rather
     /// than adding one. Someone who writes `archive = "e"` means archive is on
-    /// `e`, not that it is now on both `e` and `s` — and leaving the old key
+    /// `e`, not that it is now on both `e` and `a` — and leaving the old key
     /// live is how a rebinding silently fails to take effect.
     pub fn apply_overrides(
         &mut self,
