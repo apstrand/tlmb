@@ -9,12 +9,12 @@ does not.
 passwords, OAuth refresh tokens, and the §5.4 state key. A break here is a
 mailbox takeover, not a degraded feature.
 
-**Scope.** Commits `f08ceed` (PAKE) and `5508cd1` (relay), plus `c409ced` for
+**Scope.** Commits `a0852e6` (PAKE) and `264514b` (relay), plus `b976e9d` for
 the state-folder AEAD reuse. Roughly 1,300 lines, of which ~250 are load-bearing.
 
 ```sh
-git log --oneline e57bf9a..HEAD          # the six commits under review
-git diff e57bf9a..HEAD -- crates/mailbox-core/src/pair crates/mailbox-cli/src/relay.rs
+git log --oneline c70a3a9..HEAD          # the work under review
+git diff c70a3a9..HEAD -- crates/mailbox-core/src/pair crates/mailbox-cli/src/relay.rs
 ```
 
 ---
@@ -154,7 +154,7 @@ grep -n "state_secret\|STATE_SERVICE" crates/mailbox-core/src/credentials.rs
 
 ## What is already covered
 
-So a reviewer does not repeat it. All green as of `5508cd1`.
+So a reviewer does not repeat it. All green as of `86808d7`.
 
 ```sh
 cargo test -p mailbox-core --lib -- pair::pake     # 15: handshake, codes, SAS
