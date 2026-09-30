@@ -23,3 +23,9 @@ tauri = { version = "2", default-features = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = "0.18"
 glib = "0.18"
+
+# Where there is no portal, updates come from a signed manifest beside the
+# release. Not on Linux: a Flatpak cannot replace its own files, and the
+# portal is the supported way to update one (see `update.rs`).
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tauri-plugin-updater = "2"

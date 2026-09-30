@@ -14,6 +14,9 @@
 # Secrets:
 #   APPLE_CERTIFICATE          base64 of the Developer ID Application .p12
 #   APPLE_CERTIFICATE_PASSWORD its export password
+#   TAURI_SIGNING_PRIVATE_KEY  minisign private key from `tauri signer generate`;
+#                              its public half belongs in tauri.conf.json
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the passphrase that key was made with
 #   APPLE_SIGNING_IDENTITY     "Developer ID Application: … (TEAMID)"
 #   APPLE_API_KEY              App Store Connect key id, for notarization
 #   APPLE_API_ISSUER           its issuer UUID
@@ -103,6 +106,12 @@ jobs:
       # removes that file again.
       - name: Build and release
         env:
+          # The in-app updater will not unpack an archive whose signature
+          # does not verify against the key compiled into the app. Without
+          # this the build still publishes, just without a manifest for the
+          # updater to read (see packaging/macos/build.sh).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}

@@ -2337,13 +2337,16 @@ async function aboutCheck() {
         await updateAction();
         return;
     }
-    // Nothing pending: ask the portal where it has got to and say so. It
-    // watches on its own, so this reports rather than triggers.
+    // Nothing pending, so go and look. The Flatpak portal watches on its own
+    // and `update_check` is a no-op there; where updates come from a signed
+    // manifest instead, this is the fetch that asks.
+    el("about-update-note").textContent = "Checking…";
     try {
+        await shellIpc.invoke("update_check");
         const status = await shellIpc.invoke("update_status");
         drawAboutUpdate(status);
         if (status.state === "current") {
-            el("about-update-note").textContent = "This is the newest version the remote offers.";
+            el("about-update-note").textContent = "This is the newest version on offer.";
         }
     } catch (e) {
         el("about-update-note").textContent = String(e.message ?? e);

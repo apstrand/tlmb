@@ -147,6 +147,7 @@ mod tests {
         for needle in [
             "mailbox-update",
             "update_status",
+            "update_check",
             "update_install",
             "update_restart",
         ] {

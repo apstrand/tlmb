@@ -256,14 +256,64 @@ if [[ $release == 0 ]]; then
     exit 0
 fi
 
+# ---- what the in-app updater reads ----
+#
+# Tauri's updater fetches `latest.json`, compares its version with the running
+# one, and will not unpack the archive unless the detached signature verifies
+# against the public key compiled into the app. That signature is the whole
+# reason downloading a replacement for yourself is a reasonable thing to do,
+# so a build without the key publishes no manifest at all rather than one
+# nothing can check.
+#
+# The archive is made after notarization so it carries the stapled ticket: a
+# copy that lands on another machine has to launch without asking Apple.
+
+update_assets=()
+if [[ -n ${TAURI_SIGNING_PRIVATE_KEY:-} ]]; then
+    tarball="$work/Mailbox-$version-universal.app.tar.gz"
+    echo "packing $(basename "$tarball")"
+    # -C so the archive holds `Mailbox.app`, not the path it was built at.
+    tar -czf "$tarball" -C "$(dirname "$app")" "$(basename "$app")"
+
+    echo "signing the update archive"
+    # The CLI is the only thing that writes Tauri's flavour of minisign, and
+    # it reads the key from the environment so it never reaches a command line.
+    npx --yes @tauri-apps/cli@2 signer sign --file "$tarball"
+    signature=$(cat "$tarball.sig")
+
+    cat >"$work/latest.json" <<JSON
+{
+  "version": "$version",
+  "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "notes": "See https://github.com/$github/releases/tag/$tag",
+  "platforms": {
+    "darwin-universal": {
+      "signature": "$signature",
+      "url": "https://github.com/$github/releases/download/$tag/$(basename "$tarball")"
+    },
+    "darwin-aarch64": {
+      "signature": "$signature",
+      "url": "https://github.com/$github/releases/download/$tag/$(basename "$tarball")"
+    },
+    "darwin-x86_64": {
+      "signature": "$signature",
+      "url": "https://github.com/$github/releases/download/$tag/$(basename "$tarball")"
+    }
+  }
+}
+JSON
+    update_assets=("$tarball" "$work/latest.json")
+else
+    echo "no TAURI_SIGNING_PRIVATE_KEY — publishing without an update manifest"
+fi
+
 # ---- the release ----
 
-assets=("$zip_path")
+assets=("$zip_path" "${update_assets[@]}")
 [[ $dmg == 1 ]] && assets+=("$dmg_path")
 
 notes="Download Mailbox-$version-universal.dmg below, open it, and drag
-Mailbox to Applications. Universal: Apple silicon and Intel. The app does not
-update itself on macOS yet — a new version is a new download."
+Mailbox to Applications. Universal: Apple silicon and Intel."
 
 if [[ $dry_run == 1 ]]; then
     cat <<EOF

@@ -166,6 +166,130 @@ pub fn in_flatpak() -> bool {
     cfg!(target_os = "linux") && std::path::Path::new("/.flatpak-info").exists()
 }
 
+impl Tracker {
+    /// What a signed manifest said: a version newer than this one, or not.
+    ///
+    /// The manifest is the whole answer, unlike the portal's commits — the
+    /// updater has already compared versions by the time it reports.
+    pub fn found(&mut self, newer: bool) {
+        if matches!(self.status, Status::Installing { .. } | Status::Ready) {
+            return;
+        }
+        self.status = if newer {
+            Status::Available
+        } else {
+            Status::Current
+        };
+    }
+
+    /// How far the download has got, held below 100 for the same reason the
+    /// portal holds at 99: written is not the same as finished.
+    pub fn downloading(&mut self, percent: u32) {
+        self.status = Status::Installing {
+            percent: percent.min(99),
+        };
+    }
+
+    /// The download finished and was written; this process is still the old
+    /// one, so the only thing left is to restart into it.
+    pub fn installed(&mut self) {
+        self.status = Status::Ready;
+    }
+}
+
+/// Updating where there is no portal: macOS and Windows.
+///
+/// The app asks a manifest published beside the release whether there is a
+/// newer version, and Tauri's updater checks the signature before it will
+/// unpack anything — which is what makes downloading a replacement for
+/// yourself over the network a reasonable thing to do at all.
+///
+/// Nothing here is automatic. The check runs when the window opens and when
+/// the about box asks, and the download runs when someone presses the button;
+/// §2's posture is that the program does not talk to anyone the user did not
+/// ask it to talk to.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub mod store {
+    use super::Tracker;
+    use std::sync::{Arc, Mutex};
+    use tauri::AppHandle;
+    use tauri_plugin_updater::UpdaterExt;
+
+    /// Asks the manifest whether anything newer is published.
+    pub async fn check(app: AppHandle, tracker: Arc<Mutex<Tracker>>, changed: impl Fn()) {
+        let found = match app.updater() {
+            Ok(updater) => updater.check().await,
+            Err(e) => {
+                set(&tracker, |t| t.failed(e.to_string()));
+                changed();
+                return;
+            }
+        };
+        match found {
+            Ok(update) => set(&tracker, |t| t.found(update.is_some())),
+            // Being offline is not a failure worth colouring red: the answer
+            // is simply not known yet, and the next check will ask again.
+            Err(e) => set(&tracker, |t| t.failed(e.to_string())),
+        }
+        changed();
+    }
+
+    /// Downloads and writes the newer build, reporting progress as it goes.
+    pub async fn install(app: AppHandle, tracker: Arc<Mutex<Tracker>>, changed: impl Fn() + Clone) {
+        set(&tracker, |t| t.installing());
+        changed();
+
+        let update = match app.updater() {
+            Ok(updater) => updater.check().await,
+            Err(e) => return fail(&tracker, e.to_string(), changed),
+        };
+        let update = match update {
+            Ok(Some(update)) => update,
+            Ok(None) => {
+                set(&tracker, |t| t.found(false));
+                changed();
+                return;
+            }
+            Err(e) => return fail(&tracker, e.to_string(), changed),
+        };
+
+        // The progress callback outlives this scope, so it gets its own
+        // handles rather than borrowing the ones the rest of this uses.
+        let seen = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let on_chunk = {
+            let tracker = tracker.clone();
+            let changed = changed.clone();
+            move |chunk: usize, length: Option<u64>| {
+                // The manifest carries the length; without one there is no
+                // percentage to report and the bar stays where it is.
+                let done = seen.fetch_add(chunk as u64, std::sync::atomic::Ordering::SeqCst)
+                    + chunk as u64;
+                if let Some(length) = length.filter(|l| *l > 0) {
+                    set(&tracker, |t| t.downloading((done * 100 / length) as u32));
+                    changed();
+                }
+            }
+        };
+
+        match update.download_and_install(on_chunk, || {}).await {
+            Ok(()) => {
+                set(&tracker, |t| t.installed());
+                changed();
+            }
+            Err(e) => fail(&tracker, e.to_string(), changed),
+        }
+    }
+
+    fn fail(tracker: &Arc<Mutex<Tracker>>, message: String, changed: impl Fn()) {
+        set(tracker, |t| t.failed(message));
+        changed();
+    }
+
+    fn set(tracker: &Arc<Mutex<Tracker>>, edit: impl FnOnce(&mut Tracker)) {
+        edit(&mut tracker.lock().unwrap_or_else(|e| e.into_inner()));
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub mod portal {
     //! The D-Bus side: `CreateUpdateMonitor`, its two signals, `Update`, and

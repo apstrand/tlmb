@@ -21,5 +21,13 @@
       "icons/128x128@2x.png",
       "icons/icon.png"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/apstrand/tlmb/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

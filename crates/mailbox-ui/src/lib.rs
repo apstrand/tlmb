@@ -70,9 +70,18 @@ fn open_window(url: &str, port: u16) -> Result<()> {
     let webview_dir = mailbox_core::paths::state_dir().join("webview");
     let _ = std::fs::create_dir_all(&webview_dir);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // The updater reads a signed manifest published beside the release; it is
+    // what stands in for the Flatpak portal where there is no portal. Not
+    // registered on Linux, where a Flatpak cannot replace its own files.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             update_status,
+            update_check,
             update_install,
             update_restart
         ])
@@ -158,6 +167,27 @@ struct Updates {
 
 impl Updates {
     fn start(app: &AppHandle) -> Updates {
+        // Where there is no portal there may still be a signed manifest.
+        // Checked once as the window opens, and again whenever the about box
+        // asks — never on a timer, and never before someone has opened the
+        // program (§2).
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let tracker = Arc::new(Mutex::new(update::Tracker::watching()));
+            let updates = Updates {
+                tracker: tracker.clone(),
+                #[cfg(target_os = "linux")]
+                portal: None,
+            };
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let pushed = handle.clone();
+                update::store::check(handle.clone(), tracker, move || push_update_status(&pushed))
+                    .await;
+            });
+            return updates;
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         if !update::in_flatpak() {
             return Updates {
                 tracker: Arc::new(Mutex::new(update::Tracker::unsupported())),
@@ -165,21 +195,26 @@ impl Updates {
                 portal: None,
             };
         }
-        let tracker = Arc::new(Mutex::new(update::Tracker::watching()));
-        #[cfg(target_os = "linux")]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            let handle = app.clone();
-            let portal =
-                update::portal::Portal::start(tracker.clone(), move || push_update_status(&handle));
-            if portal.is_none() {
-                *tracker.lock().unwrap_or_else(|e| e.into_inner()) = update::Tracker::unsupported();
+            let tracker = Arc::new(Mutex::new(update::Tracker::watching()));
+            #[cfg(target_os = "linux")]
+            {
+                let handle = app.clone();
+                let portal = update::portal::Portal::start(tracker.clone(), move || {
+                    push_update_status(&handle)
+                });
+                if portal.is_none() {
+                    *tracker.lock().unwrap_or_else(|e| e.into_inner()) =
+                        update::Tracker::unsupported();
+                }
+                Updates { tracker, portal }
             }
-            Updates { tracker, portal }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = app;
-            Updates { tracker }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = app;
+                Updates { tracker }
+            }
         }
     }
 
@@ -218,7 +253,37 @@ fn update_install(app: AppHandle, updates: tauri::State<'_, Updates>) {
     if let Some(portal) = &updates.portal {
         portal.install(move || push_update_status(&app));
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let tracker = updates.tracker.clone();
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let pushed = handle.clone();
+            update::store::install(handle.clone(), tracker, move || push_update_status(&pushed))
+                .await;
+        });
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let _ = (app, updates);
+}
+
+/// Asks again, for the about box's "Check for updates".
+///
+/// The portal watches on its own and has nothing to be asked; a manifest has
+/// to be fetched, and this is the fetch.
+#[tauri::command]
+fn update_check(app: AppHandle, updates: tauri::State<'_, Updates>) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let tracker = updates.tracker.clone();
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let pushed = handle.clone();
+            update::store::check(handle.clone(), tracker, move || push_update_status(&pushed))
+                .await;
+        });
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = (app, updates);
 }
 
@@ -232,13 +297,29 @@ fn update_restart(
     updates: tauri::State<'_, Updates>,
 ) -> std::result::Result<(), String> {
     #[cfg(target_os = "linux")]
-    if let Some(portal) = &updates.portal {
-        portal.spawn_latest(&[""])?;
-        app.exit(0);
-        return Ok(());
+    {
+        if let Some(portal) = &updates.portal {
+            portal.spawn_latest(&[""])?;
+            app.exit(0);
+            return Ok(());
+        }
+        let _ = (&app, &updates);
+        Err("this build does not update itself".into())
     }
-    let _ = (app, updates);
-    Err("this build does not update itself".into())
+
+    // The updater wrote the new build in place; restarting is all that is
+    // left, and Tauri knows how to relaunch its own bundle.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let _ = updates;
+        app.restart();
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (app, updates);
+        Err("this build does not update itself".into())
+    }
 }
 
 /// Marks the page as the desktop shell so the status line can say "local
