@@ -144,11 +144,28 @@ impl Notifier {
                 // AppleScript has no argv, so the text has to be escaped into
                 // the script. Quotes and backslashes are the whole of what can
                 // break out of an AppleScript string literal.
-                let script = format!(
+                let notify = format!(
                     "display notification {} with title \"mailbox\" subtitle {}",
                     applescript_string(&notification.body),
                     applescript_string(&notification.summary),
                 );
+                // macOS draws the icon of whichever application *sent* the
+                // notification, and a bare `osascript` sends as itself — which
+                // is why the banner carried a generic script icon. Said inside
+                // a `tell` for our own bundle, the system attributes it to the
+                // app and uses the app's icon.
+                //
+                // Only our own bundle, and only when we are running from
+                // inside it: `tell application id` launches what it addresses,
+                // so doing this from a terminal would open the desktop app
+                // every time a sync found mail.
+                let script = match enclosing_bundle_id() {
+                    Some(id) => format!(
+                        "tell application id {} to {notify}",
+                        applescript_string(&id)
+                    ),
+                    None => notify,
+                };
                 Command::new(path).arg("-e").arg(script).status()
             }
             Notifier::Custom(command) => {
@@ -185,6 +202,48 @@ impl Notifier {
     }
 }
 
+/// The bundle identifier of the `.app` this process is running inside.
+///
+/// `None` anywhere else, which includes every Linux machine and a `mailbox`
+/// run from a terminal on macOS — a bare binary has no bundle, and no icon to
+/// be drawn with.
+#[cfg(target_os = "macos")]
+fn enclosing_bundle_id() -> Option<String> {
+    // …/Mailbox.app/Contents/MacOS/mailbox → …/Mailbox.app/Contents/Info.plist
+    let exe = std::env::current_exe().ok()?;
+    let contents = exe.parent()?.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    if contents.parent()?.extension()? != "app" {
+        return None;
+    }
+    let plist = std::fs::read_to_string(contents.join("Info.plist")).ok()?;
+    bundle_id_from_plist(&plist)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn enclosing_bundle_id() -> Option<String> {
+    None
+}
+
+/// The `CFBundleIdentifier` out of an `Info.plist`.
+///
+/// Scanned rather than parsed: this is one string out of a document we ship
+/// ourselves, and a plist parser is a dependency to carry on every platform
+/// for the sake of one lookup on one of them.
+///
+/// Compiled everywhere the tests run, so the shipped `Info.plist` is checked
+/// on the machines that build it as well as on the one platform that uses it.
+#[cfg(any(target_os = "macos", test))]
+fn bundle_id_from_plist(plist: &str) -> Option<String> {
+    let after = plist.split_once("<key>CFBundleIdentifier</key>")?.1;
+    let open = after.find("<string>")? + "<string>".len();
+    let close = after[open..].find("</string>")? + open;
+    let id = after[open..close].trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
 /// Escapes a string for an AppleScript literal.
 fn applescript_string(value: &str) -> String {
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
@@ -202,4 +261,46 @@ fn which(program: &str) -> Option<String> {
         .map(|dir| dir.join(program))
         .find(|candidate| candidate.is_file())
         .map(|p| p.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// macOS draws the icon of whichever application sent the notification, so
+    /// the identifier out of our own `Info.plist` is what turns a generic
+    /// script icon into the app's.
+    #[test]
+    fn the_bundle_identifier_is_read_out_of_a_plist() {
+        let plist = include_str!("../../../packaging/macos/Info.plist");
+        assert_eq!(
+            bundle_id_from_plist(plist).as_deref(),
+            Some("com.thelastmailbox.mailbox"),
+            "the shipped Info.plist no longer yields an identifier"
+        );
+    }
+
+    /// A plist without one is the ordinary case on every other platform, and
+    /// has to come back as "no bundle" rather than as a panic or an empty
+    /// `tell application id ""`.
+    #[test]
+    fn a_plist_without_an_identifier_yields_nothing() {
+        for plist in [
+            "",
+            "<plist><dict></dict></plist>",
+            "<key>CFBundleIdentifier</key>",
+            "<key>CFBundleIdentifier</key><string></string>",
+            "<key>CFBundleIdentifier</key><string>unterminated",
+        ] {
+            assert_eq!(bundle_id_from_plist(plist), None, "{plist:?}");
+        }
+    }
+
+    /// The text of a subject line reaches AppleScript as a literal, whatever
+    /// is in it: a quote or a backslash is the whole of what can break out.
+    #[test]
+    fn applescript_literals_are_escaped() {
+        assert_eq!(applescript_string(r#"a "b" c"#), r#""a \"b\" c""#);
+        assert_eq!(applescript_string(r"back\slash"), r#""back\\slash""#);
+    }
 }
