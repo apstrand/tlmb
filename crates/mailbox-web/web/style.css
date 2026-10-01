@@ -91,6 +91,11 @@ body {
 
 #search-form { flex: 1; display: flex; }
 
+/* Wide enough for the longest thing it says — "Syncing…" and "Stop sync",
+   which measure about 6.1rem here — so the label changing does not resize
+   the button under the pointer, nor shove its neighbours along the bar. */
+#sync { min-width: 6.5rem; }
+
 #search {
     width: 100%;
     padding: .4rem .7rem;
@@ -164,6 +169,17 @@ button.icon { padding: .35rem .55rem; }
 #update:not([hidden]) + #host { margin-left: 0; }
 #update button { padding: .1rem .5rem; font-size: 12px; }
 #update.is-failed #update-text { color: var(--danger); }
+
+/* Reserved whether or not it is spinning. A control that changes size when
+   it becomes busy moves everything beside it at the moment someone is
+   reaching for it — and with a sync every five minutes, repeatedly. */
+.spinner-slot {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: .85rem;
+}
 
 .spinner {
     width: .85rem;

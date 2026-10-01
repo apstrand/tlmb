@@ -32,7 +32,9 @@
   <button id="sync" class="text">Sync</button>
   <button id="accounts" class="text">Accounts</button>
   <button id="help" class="text" aria-label="Help">Help</button>
-  <span id="spinner" class="spinner" hidden aria-hidden="true"></span>
+  <!-- The slot holds the width whether or not the spinner is in it, so
+       starting a sync does not shove the buttons sideways. -->
+  <span class="spinner-slot"><span id="spinner" class="spinner" hidden aria-hidden="true"></span></span>
 </header>
 
 <!-- The first-launch state (§9). Not an error page: `serve` starts fine with
