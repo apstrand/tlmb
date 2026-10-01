@@ -169,16 +169,22 @@ sed "s/__VERSION__/$version/g" "$here/Info.plist" >"$app/Contents/Info.plist"
 # Classic, and still what a few Finder paths look at first.
 printf 'APPL????' >"$app/Contents/PkgInfo"
 
-# The icon is the same 1024px source the other packages scale from; macOS
-# wants every size in one .icns, and iconutil is the only thing that writes
-# one. @2x and the plain size below it are the same pixels under two names,
-# which is what a Retina display and a non-Retina one each ask for.
+# `icon-macos.png`, not the master square: Finder draws the pixels it is given,
+# so the rounded shape and the margin around it have to be in the file or the
+# app sits in the Dock as a square tile beside everything else's squircle.
+# `make-icon.sh` builds it from the master, and the master stays square because
+# iOS masks for itself and must not be handed a pre-rounded icon.
+#
+# macOS wants every size in one .icns, and iconutil is the only thing that
+# writes one. @2x and the plain size below it are the same pixels under two
+# names, which is what a Retina display and a non-Retina one each ask for.
+icon="$root/crates/mailbox-ui/icons/icon-macos.png"
 iconset="$work/mailbox.iconset"
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do
-    sips -z $size $size "$root/crates/mailbox-ui/icons/icon.png" \
+    sips -z $size $size "$icon" \
         --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    sips -z $((size * 2)) $((size * 2)) "$root/crates/mailbox-ui/icons/icon.png" \
+    sips -z $((size * 2)) $((size * 2)) "$icon" \
         --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/mailbox.icns"
