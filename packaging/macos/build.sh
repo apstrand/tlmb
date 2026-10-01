@@ -282,9 +282,10 @@ if [[ -n ${TAURI_SIGNING_PRIVATE_KEY:-} ]]; then
     tar -czf "$tarball" -C "$(dirname "$app")" "$(basename "$app")"
 
     echo "signing the update archive"
-    # The CLI is the only thing that writes Tauri's flavour of minisign, and
-    # it reads the key from the environment so it never reaches a command line.
-    npx --yes @tauri-apps/cli@2 signer sign --file "$tarball"
+    # The file is positional — there is no `--file`. The key and its password
+    # are read from the environment, so neither reaches a command line, and
+    # the signature is written beside the archive as `<archive>.sig`.
+    npx --yes @tauri-apps/cli@2 signer sign "$tarball"
     signature=$(cat "$tarball.sig")
 
     cat >"$work/latest.json" <<JSON
