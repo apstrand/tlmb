@@ -34,6 +34,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.14" date="2026-10-01">
+      <description>
+        <p>Gives the macOS app the rounded icon and margin the platform
+        expects, and fixes the signing step so the macOS release publishes its
+        packages and update manifest again.</p>
+      </description>
+    </release>
     <release version="0.1.13" date="2026-10-01">
       <description>
         <p>Carries the key the in-app updater checks signatures against, so
