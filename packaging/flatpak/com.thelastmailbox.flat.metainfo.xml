@@ -34,6 +34,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.12" date="2026-10-01">
+      <description>
+        <p>Fixes a window left open for days becoming unresponsive, opens and
+        saves attachments from the reader, folds a long recipient list instead
+        of letting it push the message off the pane, and publishes the macOS
+        release assets again.</p>
+      </description>
+    </release>
     <release version="0.1.11" date="2026-09-30">
       <description>
         <p>Adds swipe-to-file and wasd triage to the graphical interfaces, lets
