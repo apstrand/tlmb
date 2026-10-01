@@ -78,17 +78,24 @@ fn the_window_and_the_terminal_agree_on_their_keys() {
 /// The general check above catches a missing binding; this catches the case
 /// that actually happened, where both programs bound `s` and meant opposite
 /// things by it.
+///
+/// The row `w a s d` is the triage layer: read-and-on, archive, spam, trash,
+/// so an inbox can be worked through without the left hand moving. It
+/// displaced flag and forward onto `f` and `F`, and toggle-read onto `W`.
+/// Both programs took that change together, which is the point — the letters
+/// here are what they agreed on, not what either of them started with.
 #[test]
 fn the_dangerous_letters_mean_what_the_terminal_means() {
     let script = include_str!("../../mailbox-web/web/mailbox.js");
     for (key, expected) in [
-        ("s", "seen"), // toggle read, not archive
+        ("w", "readAndNext"), // read it and move on
         ("a", "archive"),
+        ("s", "junk"), // spam, not toggle-read — see the triage row above
         ("d", "trash"),
-        ("S", "junk"),
+        ("W", "seen"),
+        ("f", "flagged"),
+        ("F", "forward"),
         ("u", "undoLast"),
-        ("F", "flagged"),
-        ("f", "forward"),
     ] {
         let line =
             binding_line(script, key).unwrap_or_else(|| panic!("the window does not bind `{key}`"));
