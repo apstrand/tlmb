@@ -24,7 +24,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlGRkY2Qjk1RENDQTRDQTUKUldTbFRNcmNsV3YvbndSQWNMOFl0a2VWdUhLQnloRW9NckdBcXR4Y05CdytiV3krN3YycEFtWHEK",
       "endpoints": [
         "https://github.com/apstrand/tlmb/releases/latest/download/latest.json"
       ]
