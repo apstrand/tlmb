@@ -268,7 +268,13 @@ fi
 # The archive is made after notarization so it carries the stapled ticket: a
 # copy that lands on another machine has to launch without asking Apple.
 
-update_assets=()
+# Appended to rather than collected and expanded: macOS ships bash 3.2, where
+# `"${empty[@]}"` under `set -u` is an unbound variable rather than nothing at
+# all. That killed the 0.1.11 release after it had signed and notarized, so
+# nothing reached the release page.
+assets=("$zip_path")
+[[ $dmg == 1 ]] && assets+=("$dmg_path")
+
 if [[ -n ${TAURI_SIGNING_PRIVATE_KEY:-} ]]; then
     tarball="$work/Mailbox-$version-universal.app.tar.gz"
     echo "packing $(basename "$tarball")"
@@ -302,15 +308,12 @@ if [[ -n ${TAURI_SIGNING_PRIVATE_KEY:-} ]]; then
   }
 }
 JSON
-    update_assets=("$tarball" "$work/latest.json")
+    assets+=("$tarball" "$work/latest.json")
 else
     echo "no TAURI_SIGNING_PRIVATE_KEY — publishing without an update manifest"
 fi
 
 # ---- the release ----
-
-assets=("$zip_path" "${update_assets[@]}")
-[[ $dmg == 1 ]] && assets+=("$dmg_path")
 
 notes="Download Mailbox-$version-universal.dmg below, open it, and drag
 Mailbox to Applications. Universal: Apple silicon and Intel."
