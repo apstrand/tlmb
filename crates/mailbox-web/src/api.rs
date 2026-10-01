@@ -849,6 +849,75 @@ fn edit_account(
 /// frame navigation cannot set a header, so it carries the cookie. That is
 /// safe here in a way it would not be for a write — no other origin can frame
 /// it (`frame-ancestors 'self'`) or read it (no CORS), and it changes nothing.
+/// One attachment's bytes, for opening or saving.
+///
+/// Navigated to rather than fetched, like the body document, so the browser
+/// and the desktop can hand the file to whatever opens it.
+///
+/// Always a download, never a page. The bytes are a stranger's file arriving
+/// on this app's own origin, so `Content-Disposition: attachment` and the
+/// `nosniff` every response carries are what stop an HTML attachment from
+/// being rendered here with the page's privileges — the same reason §9 puts the message body
+/// in a sandboxed frame.
+pub fn attachment(
+    request: &Request,
+    session: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+) -> Response {
+    let (Some(id), Some(part)) = (request.query.get("id"), request.query.get("part")) else {
+        return Response::text(400, "give an `id` and a `part`");
+    };
+
+    // Writable, because fetching the part may have to fetch the message
+    // first — §5.1 keeps bodies out of the store until something wants one.
+    let mut workspace = match writable(session, tracer, clock) {
+        Ok(workspace) => workspace,
+        Err(e) => return Response::text(500, &e.to_string()),
+    };
+    let (account, resolved) = match workspace.locate(&IdRef::parse(id)) {
+        Ok(found) => found,
+        Err(e) => return Response::text(404, &e.to_string()),
+    };
+    let (filename, mime, bytes) =
+        match workspace.sessions_mut()[account].attachment(&resolved, part) {
+            Ok(found) => found,
+            Err(e) => return Response::text(404, &e.to_string()),
+        };
+
+    Response::new(200, &mime, bytes)
+        .with(
+            "Content-Disposition",
+            &format!("attachment; filename=\"{}\"", quoted_filename(&filename)),
+        )
+        // `nosniff` is already on every response (see `http::Response`), which
+        // is what keeps the declared type from being second-guessed here.
+        .with("Content-Security-Policy", "default-src 'none'; sandbox")
+        .with("Cache-Control", "no-store")
+}
+
+/// A filename safe to put inside a quoted header parameter.
+///
+/// A sender chooses this, so it can hold a quote, a newline, or a path — each
+/// of which would either break the header or name a file somewhere else.
+fn quoted_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' => '_',
+            '/' => '_',
+            c if (c as u32) < 0x20 => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches(['.', ' ']);
+    if trimmed.is_empty() {
+        "attachment".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 pub fn body_document(request: &Request, workspace: &Mutex<Workspace>) -> Response {
     let Some(id) = request.query.get("id") else {
         return Response::text(400, "which message?");

@@ -41,6 +41,11 @@ date = "2026-08-02T10:00:00Z"
 message_id = "<two@example.com>"
 body = "goodbye"
 
+[[message.attachment]]
+filename = "notes\";/../x.txt"
+mime_type = "text/plain"
+text = "the quick brown fox"
+
 [[message]]
 name = "newsletter"
 folder = "INBOX"
@@ -555,6 +560,73 @@ fn a_body_can_be_asked_for_by_name() {
     assert!(
         body["error"]["message"].as_str().unwrap().contains("id"),
         "{body:#}"
+    );
+}
+
+/// An attachment is a stranger's file arriving on this app's own origin, so
+/// it is handed over as a download and never as a page: without that, an
+/// HTML attachment would run here with the page's privileges — the thing §9
+/// sandboxes the message body to prevent.
+#[test]
+fn an_attachment_is_served_as_a_download() {
+    let s = Serving::start();
+    let id = s.id_of("Second");
+    let cookie = format!("Cookie: mailbox_token={}\r\n", s.token);
+
+    let (status, head, body) = s.get(&format!("/attachment?id={id}&part=2"), &cookie);
+    assert_eq!(status, 200, "{head}");
+    assert!(body.contains("the quick brown fox"), "wrong bytes: {body}");
+    assert!(
+        head.contains("Content-Disposition: attachment"),
+        "not offered as a download: {head}"
+    );
+    assert!(
+        head.to_lowercase()
+            .contains("x-content-type-options: nosniff"),
+        "the declared type may be second-guessed: {head}"
+    );
+
+    // The sender chose that filename. Whatever survives into the header may
+    // not carry a quote, a newline or a path out of the download directory.
+    let disposition = head
+        .lines()
+        .find(|l| l.starts_with("Content-Disposition:"))
+        .unwrap_or_default();
+    let name = disposition
+        .split_once("filename=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(name, _)| name)
+        .unwrap_or_default();
+    assert!(!name.is_empty(), "no filename survived: {disposition}");
+    assert!(
+        !name.contains('/') && !name.contains("..") && !name.contains('\\'),
+        "the filename could name another file: {name:?}"
+    );
+    assert_eq!(
+        disposition.lines().count(),
+        1,
+        "the header was split: {disposition:?}"
+    );
+}
+
+/// A part nobody has is a 404, not a 500 and not someone else's bytes.
+#[test]
+fn an_attachment_that_is_not_there_is_refused() {
+    let s = Serving::start();
+    let id = s.id_of("Second");
+    let cookie = format!("Cookie: mailbox_token={}\r\n", s.token);
+
+    let (status, _, _) = s.get(&format!("/attachment?id={id}&part=99"), &cookie);
+    assert_eq!(status, 404);
+
+    let (status, _, _) = s.get(&format!("/attachment?id={id}"), &cookie);
+    assert_eq!(status, 400, "a request with no part should say so");
+
+    // And it is not readable without the page's cookie.
+    let (status, _, _) = s.get(&format!("/attachment?id={id}&part=2"), "");
+    assert_ne!(
+        status, 200,
+        "an attachment was served without authorisation"
     );
 }
 

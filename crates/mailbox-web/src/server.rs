@@ -297,6 +297,10 @@ impl Inner {
                 // changes nothing. See `api::body_document`.
                 let response = if request.path == "/body" {
                     api::body_document(request, &self.workspace)
+                } else if request.path == "/attachment" {
+                    // Navigated to, like the body: a download is handed to the
+                    // browser rather than read by the page.
+                    api::attachment(request, &self.session, &self.tracer, &self.clock)
                 } else {
                     assets::serve(&request.path, self.token.as_deref(), self.setup_allowed)
                 };

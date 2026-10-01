@@ -236,6 +236,12 @@
      and names the key that does it. -->
 <div id="context-menu" role="menu" hidden></div>
 
+<!-- What an attachment is, without opening it. -->
+<dialog id="attachment-info" aria-label="Attachment">
+  <div class="dialog-heading"><h2>Attachment</h2><button type="button" id="attachment-info-close" class="text">Close</button></div>
+  <dl id="attachment-info-rows" class="shortcut-list"></dl>
+</dialog>
+
 <dialog id="help-window" aria-label="Keyboard help">
   <div class="dialog-heading"><h2>Keyboard shortcuts</h2><button type="button" id="help-close" class="text">Close</button></div>
   <dl class="shortcut-list">
