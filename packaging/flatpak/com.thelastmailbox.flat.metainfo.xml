@@ -34,6 +34,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.11" date="2026-09-30">
+      <description>
+        <p>Adds swipe-to-file and wasd triage to the graphical interfaces, lets
+        the macOS build update itself from a signed manifest, and sends macOS
+        notifications as the app so they carry its icon.</p>
+      </description>
+    </release>
     <release version="0.1.10" date="2026-09-27">
       <description>
         <p>Reworks the terminal's panes so the folders and a message preview
