@@ -219,6 +219,42 @@ function addresses(list) {
     return (list ?? []).map((a) => a.name?.trim() || a.address).join(", ");
 }
 
+/** How many recipients are worth the width before the rest are folded away. */
+const RECIPIENTS_SHOWN = 3;
+
+/**
+ * The recipient list, which is as long as the sender cared to make it.
+ *
+ * A message to forty people pushed the subject, the date and the action row
+ * off the top of the pane. The first few are named, the rest are a count you
+ * can press, and the whole list is the hover — so the common case costs one
+ * line and the uncommon one is still answerable without opening anything.
+ */
+function recipients(list) {
+    const all = list ?? [];
+    const names = all.map((a) => a.name?.trim() || a.address);
+    const line = span("to", "");
+    line.title = names.join(", ");
+
+    if (names.length <= RECIPIENTS_SHOWN) {
+        line.textContent = names.join(", ");
+        return line;
+    }
+
+    const shown = document.createTextNode(`${names.slice(0, RECIPIENTS_SHOWN).join(", ")} `);
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "more";
+    const rest = names.length - RECIPIENTS_SHOWN;
+    more.textContent = `+${rest} more`;
+    more.title = `Show all ${names.length} recipients`;
+    more.addEventListener("click", () => {
+        line.replaceChildren(names.join(", "));
+    });
+    line.append(shown, more);
+    return line;
+}
+
 /** `2026-09-01T12:00:00Z` in the reader's own locale, at a length that fits. */
 function shortDate(rfc3339) {
     const when = new Date(rfc3339);
@@ -328,7 +364,7 @@ function drawReader(message) {
     const from = document.createElement("strong");
     from.textContent = addresses(message.from);
     who.append(from);
-    if (message.to?.length) who.append(` to ${addresses(message.to)}`);
+    if (message.to?.length) who.append(" to ", recipients(message.to));
     who.append(` · ${new Date(message.date).toLocaleString()}`);
 
     head.append(subject, who, actions(message));
@@ -350,12 +386,102 @@ function drawReader(message) {
         const strip = document.createElement("div");
         strip.className = "attachments";
         for (const a of attachments) {
-            strip.append(span("attachment", `\u{1F4CE} ${a.filename ?? a.part} (${size(a.size)})`));
+            strip.append(attachmentChip(message, a));
         }
         parts.push(strip);
     }
 
     readerEl.replaceChildren(...parts);
+}
+
+/** Where one attachment's bytes come from. Navigated to, never fetched. */
+function attachmentUrl(message, part) {
+    if (hostedBackend) return hostedBackend.hostedAttachmentUrl?.(message, part);
+    const params = new URLSearchParams({ id: message.id, part: part.part });
+    return `/attachment?${params}`;
+}
+
+/**
+ * One attachment, as something you can act on.
+ *
+ * Double-click opens it, because that is what a file in a list does
+ * everywhere else; right-click offers the same plus saving and what it
+ * actually is. A single click selects nothing — the chip is not a mode, and
+ * one stray click should not hand a stranger's file to the desktop.
+ */
+function attachmentChip(message, part) {
+    const name = part.filename ?? part.part;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "attachment";
+    chip.textContent = `\u{1F4CE} ${name} (${size(part.size)})`;
+    chip.title = `${name} — ${part.mime_type ?? "unknown type"}, ${size(part.size)}\nDouble-click to open`;
+
+    chip.addEventListener("dblclick", () => openAttachment(message, part));
+    chip.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") openAttachment(message, part);
+    });
+    chip.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openMenu(
+            [
+                ["Open", "Enter", () => openAttachment(message, part)],
+                ["Save as…", "", () => saveAttachment(message, part)],
+                null,
+                ["Information", "", () => showAttachmentInfo(message, part)],
+            ],
+            event.clientX,
+            event.clientY,
+        );
+    });
+    return chip;
+}
+
+/** Hands the file to whatever opens it — the browser, then the desktop. */
+function openAttachment(message, part) {
+    const url = attachmentUrl(message, part);
+    if (!url) {
+        fail(new Error("this build cannot open attachments"));
+        return;
+    }
+    window.open(url, "_blank", "noopener");
+}
+
+/** The same bytes, but asking for a filename rather than a handler. */
+function saveAttachment(message, part) {
+    const url = attachmentUrl(message, part);
+    if (!url) {
+        fail(new Error("this build cannot save attachments"));
+        return;
+    }
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = part.filename ?? part.part;
+    link.rel = "noopener";
+    document.body.append(link);
+    link.click();
+    link.remove();
+}
+
+/** What it is, without opening it — which is the point of asking. */
+function showAttachmentInfo(message, part) {
+    const rows = [
+        ["Name", part.filename ?? "(unnamed)"],
+        ["Type", part.mime_type ?? "unknown"],
+        ["Size", size(part.size)],
+        ["Part", part.part],
+        ["Message", message.subject || "(no subject)"],
+    ];
+    const list = el("attachment-info-rows");
+    list.replaceChildren(...rows.flatMap(([label, value]) => {
+        const dt = document.createElement("dt");
+        dt.textContent = label;
+        const dd = document.createElement("dd");
+        dd.textContent = value;
+        return [dt, dd];
+    }));
+    if (!el("attachment-info").open) el("attachment-info").showModal();
 }
 
 function actions(message) {
@@ -1871,6 +1997,7 @@ el("version").addEventListener("click", () => {
     if (!el("about-window").open) el("about-window").showModal();
 });
 el("about-close").addEventListener("click", () => el("about-window").close());
+el("attachment-info-close").addEventListener("click", () => el("attachment-info").close());
 
 // ---- the first launch (§9) ----
 //

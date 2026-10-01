@@ -272,6 +272,24 @@ nav#folders {
 }
 .message.is-dragging { opacity: .45; }
 
+/* An attachment is a file you can act on, so it looks like one rather than
+   like a label that happens to name it. */
+.attachments .attachment {
+    font: inherit;
+    color: inherit;
+    background: var(--bg-sunken);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: .3rem .55rem;
+    cursor: pointer;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.attachments .attachment:hover,
+.attachments .attachment:focus-visible { border-color: var(--accent); color: var(--accent); }
+
 /* Stands in for the body frame while the body is still on the server. */
 .body-missing {
     display: flex;
@@ -441,6 +459,19 @@ li.message.multi-account > .row { padding-left: calc(.7rem - 3px); }
 .head h1 { margin: 0 0 .35rem; font-size: 1.15rem; line-height: 1.35; }
 .head .who { color: var(--text-dim); }
 .head .who strong { color: var(--text); font-weight: 600; }
+/* A long address has no spaces to break at, so say where it may break —
+   otherwise one of them widens the pane and the body scrolls sideways. */
+.head .who .to { overflow-wrap: anywhere; }
+/* The count that opens the rest: a word in the sentence, not a control. */
+.head .who .more {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+}
+.head .who .more:hover, .head .who .more:focus-visible { text-decoration: underline; }
 
 .actions { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .6rem; }
 
