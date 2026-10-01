@@ -34,6 +34,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.13" date="2026-10-01">
+      <description>
+        <p>Carries the key the in-app updater checks signatures against, so
+        builds from here on can update themselves where the platform allows
+        it, and keeps the header still while a sync runs.</p>
+      </description>
+    </release>
     <release version="0.1.12" date="2026-10-01">
       <description>
         <p>Fixes a window left open for days becoming unresponsive, opens and
