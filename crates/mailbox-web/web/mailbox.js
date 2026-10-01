@@ -1706,6 +1706,17 @@ const PROGRESS_POLL_MS = 700;
 let progressTimer = 0;
 
 /**
+ * Which poll chain is the current one.
+ *
+ * `clearTimeout` alone cannot stop a chain that is *between* polls: the next
+ * timer has not been scheduled yet, because the poll in flight is still
+ * waiting on its reply, and it will schedule one the moment that reply lands.
+ * A chain that is no longer the current one therefore stops itself, and
+ * stopping works by making that true rather than by racing it.
+ */
+let progressRun = 0;
+
+/**
  * Says which account and folder the server's pass is on, until it stops.
  *
  * The hosted backend syncs in this page and reports as it goes; a served
@@ -1713,7 +1724,8 @@ let progressTimer = 0;
  * another connection. A pass over several accounts is slow enough that a
  * spinner on its own is indistinguishable from a hang.
  */
-async function pollProgress() {
+async function pollProgress(run) {
+    if (run !== progressRun) return;
     try {
         const at = await api("/api/sync/progress");
         if (at.running) {
@@ -1722,10 +1734,20 @@ async function pollProgress() {
     } catch {
         // Whatever went wrong, the sync's own reply will say it better.
     }
-    progressTimer = setTimeout(pollProgress, PROGRESS_POLL_MS);
+    // Asked again, because the sync may have finished while that was in the
+    // air. Without this check the chain outlives the pass it was reporting
+    // on, and every pass leaves another one behind it.
+    if (run !== progressRun) return;
+    progressTimer = setTimeout(() => pollProgress(run), PROGRESS_POLL_MS);
+}
+
+function startPollingProgress() {
+    progressRun += 1;
+    pollProgress(progressRun);
 }
 
 function stopPollingProgress() {
+    progressRun += 1;
     clearTimeout(progressTimer);
     progressTimer = 0;
 }
@@ -1752,7 +1774,7 @@ function syncNow(args = {}, { auto = false } = {}) {
         el("spinner").hidden = false;
         if (!hostedBackend) {
             say("syncing…");
-            pollProgress();
+            startPollingProgress();
         }
         try {
             const result = hostedBackend

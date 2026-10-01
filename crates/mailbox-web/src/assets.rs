@@ -158,6 +158,30 @@ mod tests {
         }
     }
 
+    /// A progress poll that outlives its sync pass never stops, and every
+    /// later pass leaves another one behind it — which is how a window left
+    /// open for days ends up spending its time asking what a finished sync is
+    /// doing. `clearTimeout` cannot catch a chain waiting on a reply, so the
+    /// chain checks whether it is still wanted after the await as well as
+    /// before.
+    #[test]
+    fn the_progress_poll_stops_when_its_sync_does() {
+        let js = super::SCRIPT;
+        assert!(
+            js.contains("async function pollProgress(run)"),
+            "the poll chain has no generation to be stopped by"
+        );
+        assert_eq!(
+            js.matches("if (run !== progressRun) return;").count(),
+            2,
+            "the poll must check it is still wanted after the await, not only before"
+        );
+        assert!(
+            js.contains("progressRun += 1;"),
+            "stopping has to invalidate a chain, not just cancel a timer"
+        );
+    }
+
     /// Mail that arrived while the window was shut is the mail it was opened
     /// for, so the page syncs on open and then on a timer rather than waiting
     /// to be asked — and says where the pass has got to while it runs, which
