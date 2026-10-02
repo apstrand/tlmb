@@ -13,6 +13,8 @@
 
 pub mod app;
 pub mod backend;
+/// The window's command names and their ACL permissions.
+pub mod commands;
 pub mod update;
 
 pub use app::{App, Focus};
@@ -87,17 +89,16 @@ fn open_window(url: &str, port: u16) -> Result<()> {
         ])
         .setup(move |app| {
             // The page is served from loopback, which Tauri counts as remote
-            // content and refuses every command to. This grants the three
-            // update commands to exactly this process's server — not to any
-            // port, and not to anything a message links to.
-            app.add_capability(
-                CapabilityBuilder::new("shell-updates")
-                    .remote(format!("http://127.0.0.1:{port}"))
-                    .window("main")
-                    .permission("allow-update-status")
-                    .permission("allow-update-install")
-                    .permission("allow-update-restart"),
-            )?;
+            // content and refuses every command to. This grants the update
+            // commands to exactly this process's server — not to any port, and
+            // not to anything a message links to.
+            let mut shell = CapabilityBuilder::new("shell-updates")
+                .remote(format!("http://127.0.0.1:{port}"))
+                .window("main");
+            for command in commands::COMMANDS {
+                shell = shell.permission(commands::allow(command));
+            }
+            app.add_capability(shell)?;
             app.manage(Updates::start(app.handle()));
 
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
