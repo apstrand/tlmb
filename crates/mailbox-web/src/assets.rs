@@ -182,6 +182,25 @@ mod tests {
         );
     }
 
+    /// A filter narrows what is on screen. An empty search box is showing the
+    /// inbox — the core's answer to the empty query — so appending `is:unread`
+    /// to nothing searched the whole store instead, and a mailbox whose unread
+    /// mail has all been deleted answered with the trash. The scope the page
+    /// writes out is held against the server in `serving.rs`
+    /// (`the_unread_filter_stays_in_the_inbox`).
+    #[test]
+    fn a_filter_pressed_on_an_empty_search_box_keeps_the_inbox() {
+        let js = super::SCRIPT;
+        assert!(
+            js.contains(r#"const DEFAULT_SCOPE = ["in:inbox", "NOT", "is:snoozed"];"#),
+            "the page has no scope to fall back on"
+        );
+        assert!(
+            js.contains("if (!terms.length) terms.push(...DEFAULT_SCOPE);"),
+            "a filter on an empty box is a search of the whole store"
+        );
+    }
+
     /// Mail that arrived while the window was shut is the mail it was opened
     /// for, so the page syncs on open and then on a timer rather than waiting
     /// to be asked — and says where the pass has got to while it runs, which

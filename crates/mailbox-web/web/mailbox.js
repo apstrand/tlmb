@@ -1775,6 +1775,17 @@ const FILTERS = [
     ["filter-attachment", "has:attachment"],
 ];
 
+/**
+ * What an empty search box is asking for, spelled out.
+ *
+ * It is not "everything": the core answers an empty query with the unified
+ * inbox, snoozed mail set aside (`Session::ls`). A filter has to narrow *that*,
+ * so pressing one while the box is empty writes the scope out first. Appending
+ * the term alone made `is:unread` a search of the whole store, which on a
+ * mailbox whose unread mail is mostly deleted mail is a list of the trash.
+ */
+const DEFAULT_SCOPE = ["in:inbox", "NOT", "is:snoozed"];
+
 function queryTerms(text) {
     return text.trim().split(/\s+/).filter(Boolean);
 }
@@ -1790,6 +1801,7 @@ function drawFilters() {
 
 function toggleFilter(token) {
     const terms = queryTerms(el("search").value);
+    if (!terms.length) terms.push(...DEFAULT_SCOPE);
     const at = terms.findIndex((t) => t.toLowerCase() === token);
     if (at >= 0) terms.splice(at, 1);
     else terms.push(token);

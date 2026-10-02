@@ -62,6 +62,38 @@ html = """
 /// A second account, whose mail is the mail the default account does not have.
 ///
 /// The subject is what the multi-account tests below look the message up by.
+/// The inbox read, the trash not — which is what a mailbox looks like after
+/// someone has been deleting mail without opening it, and the shape that makes
+/// an unscoped `is:unread` answer with the trash.
+const TRASH_FIXTURE: &str = r#"
+[[folder]]
+path = "INBOX"
+special_use = "inbox"
+
+[[folder]]
+path = "Trash"
+special_use = "trash"
+
+[[message]]
+name = "kept"
+folder = "INBOX"
+from = "Alice <alice@example.com>"
+subject = "Kept"
+date = "2026-08-01T10:00:00Z"
+message_id = "<kept@example.com>"
+body = "in the inbox, read"
+flags = ["\\Seen"]
+
+[[message]]
+name = "binned"
+folder = "Trash"
+from = "Shop <shop@example.com>"
+subject = "Binned"
+date = "2026-08-02T10:00:00Z"
+message_id = "<binned@example.com>"
+body = "deleted without opening it"
+"#;
+
 const OTHER_FIXTURE: &str = r#"
 [[folder]]
 path = "INBOX"
@@ -91,6 +123,10 @@ struct Serving {
 
 impl Serving {
     fn start() -> Serving {
+        Serving::start_seeded_with(FIXTURE)
+    }
+
+    fn start_seeded_with(fixture: &str) -> Serving {
         let port = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("mailbox-serve-{}-{port}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -105,7 +141,7 @@ impl Serving {
         let state = dir.join("state");
 
         let manifest = dir.join("fixture.toml");
-        std::fs::write(&manifest, FIXTURE).expect("write fixture");
+        std::fs::write(&manifest, fixture).expect("write fixture");
         let seeded = Command::new(env!("CARGO_BIN_EXE_mailbox"))
             .args(["debug", "fixture", "load", manifest.to_str().unwrap()])
             .env("MAILBOX_CONFIG", &config)
@@ -122,6 +158,11 @@ impl Serving {
         assert!(seeded.status.success(), "seeding failed");
 
         Serving::spawn(dir, config, state, port)
+    }
+
+    /// A server whose unread mail is all in the trash.
+    fn start_with_a_trash() -> Serving {
+        Serving::start_seeded_with(TRASH_FIXTURE)
     }
 
     /// A server over two accounts, as §1.5's unified mailbox is normally run.
@@ -533,6 +574,46 @@ fn flags_can_be_set_and_are_visible_to_the_next_read() {
 
     let read = s.api("/api/ls?q=is%3Aread");
     assert_eq!(read["messages"].as_array().unwrap().len(), 1, "{read:#}");
+}
+
+/// The page's filter buttons are query terms (§6.2), and an empty search box
+/// is not the empty query: the core answers that one with the inbox, snoozed
+/// mail aside. So a filter pressed on an empty box has to carry that scope with
+/// it — `is:unread` on its own is a search of the whole store, and on a mailbox
+/// where the unread mail is deleted mail it answers with the trash.
+///
+/// The scope `mailbox.js` writes out is pinned here: if the default listing
+/// ever means something else, the two must be changed together.
+#[test]
+fn the_unread_filter_stays_in_the_inbox() {
+    let s = Serving::start_with_a_trash();
+
+    let subjects = |listing: &serde_json::Value| -> Vec<String> {
+        listing["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["subject"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+
+    // What the box asks for when it is empty, and what the page now writes out
+    // in its place. The same mail, which is the point.
+    let default = s.api("/api/ls");
+    let scoped = s.api("/api/ls?q=in%3Ainbox+NOT+is%3Asnoozed");
+    assert_eq!(subjects(&default), vec!["Kept".to_string()], "{default:#}");
+    assert_eq!(subjects(&scoped), subjects(&default), "{scoped:#}");
+
+    // The term alone: the bug. Kept here so the scope has a reason on the page.
+    let loose = s.api("/api/ls?q=is%3Aunread");
+    assert_eq!(subjects(&loose), vec!["Binned".to_string()], "{loose:#}");
+
+    // And composed, as the button leaves the box.
+    let filtered = s.api("/api/ls?q=in%3Ainbox+NOT+is%3Asnoozed+is%3Aunread");
+    assert!(
+        subjects(&filtered).is_empty(),
+        "the inbox has no unread mail: {filtered:#}"
+    );
 }
 
 /// §5.1 fetches bodies lazily, so a message opened from outside the prefetch
