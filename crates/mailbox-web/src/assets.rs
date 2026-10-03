@@ -182,6 +182,27 @@ mod tests {
         );
     }
 
+    /// `w` marks a message read without reloading, and the default listing is
+    /// sorted unread first — so the next listing files that message below the
+    /// mail still unread and the rows after it move up one. A cursor restored
+    /// by its old index then lands a row too far, and the message that moved
+    /// into that row is never seen: one skipped for every `w` followed by a
+    /// triage key. The place has to be the next message by name.
+    /// `mailbox-tui` holds the same rule in
+    /// `reading_one_message_and_filing_the_next_skips_nothing`.
+    #[test]
+    fn the_cursor_lands_on_a_message_rather_than_an_index() {
+        let js = super::SCRIPT;
+        assert!(
+            js.contains("function landingSpot(messages, previous, below, previousAt)"),
+            "the listing has no place to put the cursor back"
+        );
+        assert!(
+            js.contains("const next = below.map(at).find((i) => i >= 0);"),
+            "the restore does not look for the message that was below the cursor"
+        );
+    }
+
     /// A filter narrows what is on screen. An empty search box is showing the
     /// inbox — the core's answer to the empty query — so appending `is:unread`
     /// to nothing searched the whole store instead, and a mailbox whose unread

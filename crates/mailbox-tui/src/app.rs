@@ -429,15 +429,38 @@ impl App {
             workspace.search(&self.query, &opts)?
         };
 
-        // Keep the cursor on the same message where possible: a reload after a
-        // sync should not move the selection out from under someone.
-        let previous = self.current_id();
-        self.messages = list.messages;
-        self.selected = previous
-            .and_then(|id| self.messages.iter().position(|m| m.id == id))
-            .unwrap_or_else(|| self.selected.min(self.messages.len().saturating_sub(1)));
+        self.show_listing(list.messages);
         self.dirty = false;
         Ok(())
+    }
+
+    /// Puts a freshly read listing on screen without losing the reader's place.
+    ///
+    /// The cursor stays on the same message where that message is still listed,
+    /// so a reload after a sync does not move the selection out from under
+    /// someone. Where it is gone — deleted, archived, filed — the place is the
+    /// next message that was *below* it, by name.
+    ///
+    /// By name, because an index is not a place. The default listing is sorted
+    /// unread first, and `w` marks a message read without reloading, so the
+    /// next listing files it below the mail still unread and everything after
+    /// it moves up a row. Landing on the old index then skips whatever moved
+    /// into it — one message lost for every `w` followed by a triage key.
+    pub fn show_listing(&mut self, messages: Vec<MessageSummary>) {
+        let previous = self.current_id();
+        let below: Vec<String> = self
+            .messages
+            .iter()
+            .skip(self.selected.saturating_add(1))
+            .map(|m| m.id.clone())
+            .collect();
+        self.messages = messages;
+        let position = |id: &String| self.messages.iter().position(|m| m.id == *id);
+        self.selected = previous
+            .as_ref()
+            .and_then(position)
+            .or_else(|| below.iter().find_map(position))
+            .unwrap_or_else(|| self.selected.min(self.messages.len().saturating_sub(1)));
     }
 
     /// Feeds a keystroke to whatever is asking for text.

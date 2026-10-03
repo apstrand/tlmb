@@ -86,6 +86,34 @@ function say(message) {
 
 // ---- the listing ----
 
+/**
+ * Where the cursor goes after a listing is replaced.
+ *
+ * On the same message where it is still listed, so a refresh does not move the
+ * selection out from under someone mid-read. Where that message is gone —
+ * deleted, archived, filed — on the nearest message that was below it, because
+ * landing back at the top of the list is how someone loses their place in a
+ * mailbox they are working down.
+ *
+ * The place is the next message *by name*, never by index. The default listing
+ * is sorted unread first (`Sort::UnreadFirst`), and `w` marks a message read
+ * without reloading — deliberately, so the list does not move mid-read. The
+ * next listing therefore files that message below everything still unread and
+ * the rows after it move up one. Restoring the old index then lands a row too
+ * far and the message that moved up into it is never seen: one message skipped
+ * for every `w` followed by a triage key.
+ *
+ * The index survives only as the last resort, for when the whole tail is gone.
+ */
+function landingSpot(messages, previous, below, previousAt) {
+    const at = (id) => messages.findIndex((m) => m.id === id);
+    const same = at(previous);
+    if (same >= 0) return same;
+    const next = below.map(at).find((i) => i >= 0);
+    if (next >= 0) return next;
+    return Math.min(Math.max(previousAt, 0), messages.length - 1);
+}
+
 async function reload() {
     const seq = ++state.listSeq;
     try {
@@ -95,26 +123,20 @@ async function reload() {
         el("error").textContent = "";
 
         const previous = state.selected?.id;
-        // Where the selection was, not just what it was on. A message that is
-        // gone — deleted, archived, filed — took its id with it, and landing
-        // back at the top of the list is how someone loses their place in a
-        // mailbox they were working down.
         const previousAt = state.messages.findIndex((m) => m.id === previous);
+        // The ids below the cursor, in the order they were on screen. What the
+        // reader's place *is*, should the message they were on have gone.
+        const below = previousAt < 0
+            ? []
+            : state.messages.slice(previousAt + 1).map((message) => message.id);
         state.messages = (listing.messages ?? []).filter((message) => !pendingMoves.has(message.id));
         state.partial = Boolean(listing.partial);
         el("list-coverage").hidden = !(state.partial || state.unloadedFolders);
         drawList();
 
-        const same = state.messages.findIndex((m) => m.id === previous);
-        // Keep the cursor on the same message where one exists, so a refresh
-        // does not move the selection out from under someone mid-read; and
-        // where it does not, keep the *place*, which is the next message down
-        // — or the new last one, when the list just lost its end.
         if (state.messages.length) {
-            const at = same >= 0
-                ? same
-                : Math.min(Math.max(previousAt, 0), state.messages.length - 1);
-            select(at, { pane: false, cachedOnly: true });
+            select(landingSpot(state.messages, previous, below, previousAt),
+                   { pane: false, cachedOnly: true });
         } else clearReader();
     } catch (e) {
         if (seq === state.listSeq) fail(e);

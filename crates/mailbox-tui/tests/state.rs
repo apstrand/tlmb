@@ -42,6 +42,43 @@ fn app_with(count: usize) -> App {
     app
 }
 
+/// `w` then a triage key used to skip a message.
+///
+/// The default listing is sorted unread first and `w` marks a message read
+/// without reloading — on purpose, so the list does not move under someone
+/// mid-read. The next listing therefore files the message it just read below
+/// the mail still unread, and everything after it moves up a row. Restoring the
+/// cursor by its old index then lands a row too far, and the message that moved
+/// up into that row is never seen.
+#[test]
+fn reading_one_message_and_filing_the_next_skips_nothing() {
+    let mut app = App::new();
+    // Five unread, newest first, as `ls` answers an untouched inbox.
+    app.messages = (1..=5)
+        .rev()
+        .map(|i| message(&format!("id{i}"), &format!("Unread {i}"), false))
+        .collect();
+
+    // `w` on the top one: read, cursor steps down to "Unread 4".
+    app.handle(Action::MarkRead);
+    assert_eq!(app.current_id().as_deref(), Some("id4"));
+
+    // `d` on it, and the listing comes back as the store now sorts it: the
+    // message `w` read has gone to the bottom, and "Unread 4" is gone.
+    app.show_listing(vec![
+        message("id3", "Unread 3", false),
+        message("id2", "Unread 2", false),
+        message("id1", "Unread 1", false),
+        message("id5", "Unread 5", true),
+    ]);
+
+    assert_eq!(
+        app.current_id().as_deref(),
+        Some("id3"),
+        "the cursor should be on the next message down, not a row past it"
+    );
+}
+
 // ---- movement ----
 
 #[test]
