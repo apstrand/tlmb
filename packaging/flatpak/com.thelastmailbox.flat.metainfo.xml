@@ -34,6 +34,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.16" date="2026-10-04">
+      <description>
+        <p>Keeps the unread and flagged filters inside the folder on screen
+        rather than searching the whole mailbox, and stops a message being
+        skipped when one is read and the next one filed.</p>
+      </description>
+    </release>
     <release version="0.1.15" date="2026-10-02">
       <description>
         <p>Fixes the About pane's update check, which answered with a
