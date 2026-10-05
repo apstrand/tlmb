@@ -35,6 +35,12 @@
 #   APPLE_API_KEY_PATH       the .p8 itself, if you have it on disk; takes
 #                            precedence over APPLE_API_KEY_BASE64
 #   MAILBOX_MACOS_GITHUB     owner/repo the release is created in
+#   MAILBOX_MACOS_SITE       public base URL the in-app updater reads the
+#                            manifest and archive from. The repo is private, so
+#                            a GitHub release asset 404s for the unauthenticated
+#                            updater; these are published to a plain web host
+#                            instead, the way the Flatpak update site is.
+#   MAILBOX_MACOS_PUBLISH    rsync-over-ssh target that serves MAILBOX_MACOS_SITE
 #   MAILBOX_GOOGLE_CLIENT_ID …  OAuth2 client credentials, compiled in exactly
 #                            as a `cargo build` would (README, "Building")
 
@@ -45,6 +51,8 @@ root="$(cd "$here/../.." && pwd)"
 work="$here/.build"
 
 github="${MAILBOX_MACOS_GITHUB:-apstrand/tlmb}"
+site="${MAILBOX_MACOS_SITE:-https://tlmb-app.2615.io}"
+publish="${MAILBOX_MACOS_PUBLISH:-peter@wonko.nena.se:web/tlmb-app}"
 targets=(aarch64-apple-darwin x86_64-apple-darwin)
 
 install=0 run=0 release=0 dry_run=0 dmg=1
@@ -273,6 +281,12 @@ fi
 #
 # The archive is made after notarization so it carries the stapled ticket: a
 # copy that lands on another machine has to launch without asking Apple.
+#
+# The manifest and the archive are published to MAILBOX_MACOS_SITE, a plain web
+# host, not to the GitHub release: the repo is private, and a release asset
+# 404s for the unauthenticated request the in-app updater makes — which is the
+# "Could not fetch a valid release JSON from the remote" it reported. They are
+# still attached to the release too, for anyone browsing it with access.
 
 # Appended to rather than collected and expanded: macOS ships bash 3.2, where
 # `"${empty[@]}"` under `set -u` is an unbound variable rather than nothing at
@@ -302,15 +316,15 @@ if [[ -n ${TAURI_SIGNING_PRIVATE_KEY:-} ]]; then
   "platforms": {
     "darwin-universal": {
       "signature": "$signature",
-      "url": "https://github.com/$github/releases/download/$tag/$(basename "$tarball")"
+      "url": "$site/$(basename "$tarball")"
     },
     "darwin-aarch64": {
       "signature": "$signature",
-      "url": "https://github.com/$github/releases/download/$tag/$(basename "$tarball")"
+      "url": "$site/$(basename "$tarball")"
     },
     "darwin-x86_64": {
       "signature": "$signature",
-      "url": "https://github.com/$github/releases/download/$tag/$(basename "$tarball")"
+      "url": "$site/$(basename "$tarball")"
     }
   }
 }
@@ -333,7 +347,18 @@ dry run — nothing was published. The bundles are in $work. A real run would no
       ${assets[*]}
   (or, if the Flatpak release already made $tag, upload them into it)
 EOF
+    if [[ -f "$work/latest.json" ]]; then
+        echo "  rsync $(basename "$tarball") latest.json -> $publish/ (what the updater reads)"
+    fi
     exit 0
+fi
+
+# What the in-app updater actually reads, before the release page humans read:
+# the private repo's release assets are not reachable without a token, so the
+# manifest and the archive it points at go to the public host first.
+if [[ -f "$work/latest.json" ]]; then
+    echo "publishing the update manifest to $publish"
+    rsync -av "$tarball" "$work/latest.json" "$publish/"
 fi
 
 if gh release view "$tag" -R "$github" >/dev/null 2>&1; then
@@ -349,3 +374,4 @@ else
 fi
 
 echo "released $tag: https://github.com/$github/releases/tag/$tag"
+[[ -f "$work/latest.json" ]] && echo "updater manifest: $site/latest.json"

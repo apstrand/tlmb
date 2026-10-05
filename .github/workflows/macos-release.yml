@@ -22,6 +22,10 @@
 #   APPLE_API_ISSUER           its issuer UUID
 #   APPLE_API_KEY_BASE64       base64 of the AuthKey_<id>.p8 holding it:
 #                              `base64 -i AuthKey_<id>.p8 | pbcopy`
+#   MACOS_PUBLISH_SSH_KEY      private key that may rsync into the update site
+#                              directory on the host serving MAILBOX_MACOS_SITE
+#   MACOS_PUBLISH_KNOWN_HOSTS  ssh-keyscan of that host (optional but wanted:
+#                              without it the host key is taken on first sight)
 #   MAILBOX_*_CLIENT_ID/SECRET optional OAuth2 client credentials to compile in
 name: macos-release
 
@@ -45,6 +49,8 @@ jobs:
     timeout-minutes: 120
     env:
       MAILBOX_MACOS_GITHUB: ${{ github.repository }}
+      MAILBOX_MACOS_SITE: ${{ vars.MAILBOX_MACOS_SITE || 'https://tlmb-app.2615.io' }}
+      MAILBOX_MACOS_PUBLISH: ${{ vars.MAILBOX_MACOS_PUBLISH || 'peter@wonko.nena.se:web/tlmb-app' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +106,37 @@ jobs:
           rm -f "$certificate"
 
           security find-identity -v -p codesigning "$keychain"
+
+      # The in-app updater reads the manifest and archive from a plain web host,
+      # not the private repo's release assets, so the job needs a key that may
+      # rsync into that site directory — the same arrangement as the Flatpak
+      # update site.
+      - name: Publishing key
+        env:
+          SSH_KEY: ${{ secrets.MACOS_PUBLISH_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.MACOS_PUBLISH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SSH_KEY" ]]; then
+            echo "::error::MACOS_PUBLISH_SSH_KEY is not set"
+            exit 1
+          fi
+          host="${MAILBOX_MACOS_PUBLISH%%:*}"
+          host="${host#*@}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_publish
+          chmod 600 ~/.ssh/id_publish
+          if [[ -n "$KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::MACOS_PUBLISH_KNOWN_HOSTS is not set; trusting $host on first sight"
+            ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+          printf 'Host %s\n  IdentityFile ~/.ssh/id_publish\n  IdentitiesOnly yes\n' \
+            "$host" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       # The notarization key goes to the build script as the secret it is;
       # the script is what turns it into the file notarytool reads, and what
