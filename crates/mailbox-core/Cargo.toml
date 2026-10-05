@@ -40,6 +40,15 @@ pake-cpace = "0.1.7"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rustls-native-certs = "0.8"
 
+# A desktop notification carries the icon of the process that posts it, and a
+# `mailbox` running inside Mailbox.app posts its own so the banner is the app's
+# rather than a script runner's (see `notify`). These are already in the graph
+# through the GUI's webview; naming them here is what lets `mailbox-core` post.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+dispatch2 = "0.3"
+
 # `wasm32-unknown-unknown` has no ambient entropy source. All three versions
 # are present in the crypto graph, so the JS backend must be selected for each.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

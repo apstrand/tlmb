@@ -9,6 +9,14 @@
 //! same thing a user can run by hand to see what we will do, and it makes the
 //! whole feature testable by pointing `notify.command` at a script.
 //!
+//! macOS is the one exception. A notification carries the icon of the process
+//! that posts it, and `osascript` posts as a generic script runner whatever it
+//! is told to say — there is no argument that changes that. So a `mailbox`
+//! running inside `Mailbox.app` posts through Cocoa in its own process, which
+//! is the only way the banner comes up with the app's own icon. A `mailbox`
+//! run from a terminal has no bundle and no icon of its own, and falls back to
+//! `osascript` as before.
+//!
 //! Nothing here reaches the network. §2 is categorical about that, and a
 //! notification is the one feature where it would be easy to forget.
 
@@ -63,8 +71,13 @@ impl Notification {
 pub enum Notifier {
     /// `notify-send SUMMARY BODY` — freedesktop, so Linux and the BSDs.
     NotifySend(String),
-    /// `osascript -e 'display notification …'` — macOS.
+    /// `osascript -e 'display notification …'` — macOS from a terminal, where
+    /// there is no app bundle and so no icon to post as.
     OsaScript(String),
+    /// macOS, running inside `Mailbox.app`: post through Cocoa in this process
+    /// so the banner carries the app's icon. Preferred over [`OsaScript`]
+    /// wherever a bundle is found.
+    MacApp,
     /// A command from the config. `{summary}` and `{body}` are substituted.
     Custom(String),
     /// Nothing suitable was found. Not an error: a headless machine has no
@@ -104,6 +117,13 @@ fn discover_impl(configured: Option<&str>) -> Notifier {
     if let Some(command) = configured.filter(|c| !c.trim().is_empty()) {
         return Notifier::Custom(command.to_string());
     }
+    // Inside our own bundle, post as the app so the banner is the app's icon;
+    // this is the common case, since the desktop app is where a notification
+    // has a desktop to appear on.
+    #[cfg(target_os = "macos")]
+    if enclosing_bundle_id().is_some() {
+        return Notifier::MacApp;
+    }
     for (program, build) in [
         (
             "notify-send",
@@ -131,8 +151,18 @@ impl Notifier {
     pub fn send(&self, notification: &Notification) -> Result<()> {
         use std::process::Command;
 
+        // Posting through Cocoa does not run a command and has no exit status
+        // to fold in below; it is handled here and returns on its own.
+        #[cfg(target_os = "macos")]
+        if matches!(self, Notifier::MacApp) {
+            deliver_as_app(&notification.summary, &notification.body);
+            return Ok(());
+        }
+
         let status = match self {
             Notifier::Unavailable => return Ok(()),
+            // Only ever built on macOS, and handled above where it is.
+            Notifier::MacApp => return Ok(()),
             Notifier::NotifySend(path) => Command::new(path)
                 .arg("--app-name=mailbox")
                 .arg("--category=email.arrived")
@@ -143,29 +173,14 @@ impl Notifier {
             Notifier::OsaScript(path) => {
                 // AppleScript has no argv, so the text has to be escaped into
                 // the script. Quotes and backslashes are the whole of what can
-                // break out of an AppleScript string literal.
-                let notify = format!(
+                // break out of an AppleScript string literal. This is the
+                // terminal fallback, with no bundle to post as, so the banner
+                // carries osascript's own icon — `MacApp` is what the app uses.
+                let script = format!(
                     "display notification {} with title \"mailbox\" subtitle {}",
                     applescript_string(&notification.body),
                     applescript_string(&notification.summary),
                 );
-                // macOS draws the icon of whichever application *sent* the
-                // notification, and a bare `osascript` sends as itself — which
-                // is why the banner carried a generic script icon. Said inside
-                // a `tell` for our own bundle, the system attributes it to the
-                // app and uses the app's icon.
-                //
-                // Only our own bundle, and only when we are running from
-                // inside it: `tell application id` launches what it addresses,
-                // so doing this from a terminal would open the desktop app
-                // every time a sync found mail.
-                let script = match enclosing_bundle_id() {
-                    Some(id) => format!(
-                        "tell application id {} to {notify}",
-                        applescript_string(&id)
-                    ),
-                    None => notify,
-                };
                 Command::new(path).arg("-e").arg(script).status()
             }
             Notifier::Custom(command) => {
@@ -196,10 +211,40 @@ impl Notifier {
         match self {
             Notifier::NotifySend(p) => format!("notify-send ({p})"),
             Notifier::OsaScript(p) => format!("osascript ({p})"),
+            Notifier::MacApp => "macOS app".to_string(),
             Notifier::Custom(c) => format!("custom: {c}"),
             Notifier::Unavailable => "none available".to_string(),
         }
     }
+}
+
+/// Posts a notification through `NSUserNotificationCenter`, as this process.
+///
+/// This is what makes the banner the app's: the center attributes it to the
+/// running application, which inside `Mailbox.app` is us, icon and all. It is
+/// the deprecated API rather than `UNUserNotificationCenter` because the newer
+/// one needs an authorization round trip and a delegate held for the life of
+/// the app, where this is one self-contained call — and it is still delivered.
+///
+/// `NSUserNotificationCenter` reaches into AppKit state and has to run on the
+/// main thread, but a sync runs on a background one; the work is handed to the
+/// main queue, which the window's run loop is already turning. Nothing waits
+/// on it — a banner that is a beat late, or that a headless process never
+/// draws, is not worth blocking a sync for.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // NSUserNotification*; see above for why it is the choice.
+fn deliver_as_app(summary: &str, body: &str) {
+    use objc2_foundation::{NSString, NSUserNotification, NSUserNotificationCenter};
+
+    let summary = summary.to_owned();
+    let body = body.to_owned();
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        let note = NSUserNotification::new();
+        note.setTitle(Some(&NSString::from_str("mailbox")));
+        note.setSubtitle(Some(&NSString::from_str(&summary)));
+        note.setInformativeText(Some(&NSString::from_str(&body)));
+        NSUserNotificationCenter::defaultUserNotificationCenter().deliverNotification(&note);
+    });
 }
 
 /// The bundle identifier of the `.app` this process is running inside.
