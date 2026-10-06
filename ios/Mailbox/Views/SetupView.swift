@@ -44,10 +44,13 @@ struct SetupView: View {
                     TextField(
                         "Address",
                         text: $address,
-                        // A plain title doubles as the placeholder and picks up
-                        // the field's tint; an explicit prompt is what gets the
-                        // muted colour placeholder text is supposed to have.
-                        prompt: Text("you@example.com").foregroundStyle(.secondary)
+                        // A prompt rather than letting the title double as the
+                        // placeholder, so the label can stay hidden. Unstyled:
+                        // `.secondary` is hierarchical, so it resolves against
+                        // the row's foreground style — which is the tint, and
+                        // that is how this placeholder came out blue. The
+                        // system's placeholder colour is already right.
+                        prompt: Text(verbatim: "you@example.com")
                     )
                     .labelsHidden()
                     .textInputAutocapitalization(.never)
@@ -58,7 +61,7 @@ struct SetupView: View {
                     SecureField(
                         "Password",
                         text: $password,
-                        prompt: Text("Password").foregroundStyle(.secondary)
+                        prompt: Text(verbatim: "Password")
                     )
                     .labelsHidden()
                     .textContentType(.password)
@@ -74,87 +77,6 @@ struct SetupView: View {
                 }
 
                 if showServers {
-                    Section {
-                        LabeledContent("Host") {
-                            TextField(
-                                "IMAP host",
-                                text: $imapHost,
-                                prompt: Text(placeholderHost("imap")).foregroundStyle(.secondary)
-                            )
-                            .labelsHidden()
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        }
-                        LabeledContent("Port") {
-                            TextField(
-                                "IMAP port",
-                                text: $imapPort,
-                                prompt: Text(Self.defaultIMAPPort).foregroundStyle(.secondary)
-                            )
-                            .labelsHidden()
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.numberPad)
-                        }
-                        LabeledContent("Username") {
-                            TextField(
-                                "IMAP username",
-                                text: $imapUser,
-                                prompt: Text(address.isEmpty ? "Your address" : address)
-                                    .foregroundStyle(.secondary)
-                            )
-                            .labelsHidden()
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        }
-                    } header: {
-                        Text("IMAP")
-                    } footer: {
-                        Text("Leave a field empty to use what is shown.")
-                    }
-
-                    Section {
-                        LabeledContent("Host") {
-                            TextField(
-                                "SMTP host",
-                                text: $smtpHost,
-                                prompt: Text(placeholderHost("smtp")).foregroundStyle(.secondary)
-                            )
-                            .labelsHidden()
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        }
-                        LabeledContent("Port") {
-                            TextField(
-                                "SMTP port",
-                                text: $smtpPort,
-                                prompt: Text(Self.defaultSMTPPort).foregroundStyle(.secondary)
-                            )
-                            .labelsHidden()
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.numberPad)
-                        }
-                        Toggle("Same username as IMAP", isOn: $sameUser)
-                        if !sameUser {
-                            LabeledContent("Username") {
-                                TextField(
-                                    "SMTP username",
-                                    text: $smtpUser,
-                                    prompt: Text(address.isEmpty ? "Your address" : address)
-                                        .foregroundStyle(.secondary)
-                                )
-                                .labelsHidden()
-                                .multilineTextAlignment(.trailing)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                            }
-                        }
-                    } header: {
-                        Text("SMTP")
-                    }
-
                     Section {
                         Button {
                             Task { await discover() }
@@ -172,6 +94,85 @@ struct SetupView: View {
                         .disabled(!canDiscover)
                     } footer: {
                         Text("Asks \(domain.isEmpty ? "the domain" : domain) for its SRV and MX records.")
+                    }
+
+                    Section {
+                        LabeledContent("Host") {
+                            TextField(
+                                "IMAP host",
+                                text: $imapHost,
+                                prompt: Text(placeholderHost("imap"))
+                            )
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        }
+                        LabeledContent("Port") {
+                            TextField(
+                                "IMAP port",
+                                text: $imapPort,
+                                prompt: Text(Self.defaultIMAPPort)
+                            )
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.numberPad)
+                        }
+                        LabeledContent("Username") {
+                            TextField(
+                                "IMAP username",
+                                text: $imapUser,
+                                prompt: Text(address.isEmpty ? "Your address" : address)
+                            )
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        }
+                    } header: {
+                        Text("IMAP")
+                    } footer: {
+                        Text("Leave a field empty to use what is shown.")
+                    }
+
+                    Section {
+                        LabeledContent("Host") {
+                            TextField(
+                                "SMTP host",
+                                text: $smtpHost,
+                                prompt: Text(placeholderHost("smtp"))
+                            )
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        }
+                        LabeledContent("Port") {
+                            TextField(
+                                "SMTP port",
+                                text: $smtpPort,
+                                prompt: Text(Self.defaultSMTPPort)
+                            )
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.numberPad)
+                        }
+                        Toggle("Same username as IMAP", isOn: $sameUser)
+                        if !sameUser {
+                            LabeledContent("Username") {
+                                TextField(
+                                    "SMTP username",
+                                    text: $smtpUser,
+                                    prompt: Text(address.isEmpty ? "Your address" : address)
+                                )
+                                .labelsHidden()
+                                .multilineTextAlignment(.trailing)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            }
+                        }
+                    } header: {
+                        Text("SMTP")
                     }
                 }
 
