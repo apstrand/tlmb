@@ -8,7 +8,7 @@ enum Keychain {
     /// Tracks the bundle ID. Changing it orphans items written under the old
     /// name, which is moot here because the keychain access group moved with
     /// the bundle ID anyway.
-    private static let service = "com.thelastmailbox.ios"
+    private static let service = "com.thelastmailbox.app"
 
     static func password(account: String) -> String? {
         let query: [String: Any] = [

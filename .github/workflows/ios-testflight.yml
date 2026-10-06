@@ -20,7 +20,7 @@
 #   IOS_DISTRIBUTION_CERTIFICATE          base64 of an Apple Distribution .p12
 #   IOS_DISTRIBUTION_CERTIFICATE_PASSWORD its export password
 #   IOS_PROVISIONING_PROFILE              base64 of an App Store .mobileprovision
-#                                         for com.thelastmailbox.ios, tied to the
+#                                         for com.thelastmailbox.app, tied to the
 #                                         cert above. Make it in the Developer
 #                                         portal (Profiles → App Store), then:
 #                                         base64 -i profile.mobileprovision | pbcopy
@@ -30,7 +30,7 @@
 #   APPLE_API_KEY_BASE64     base64 of the AuthKey_<id>.p8 for that key
 #   APPLE_TEAM_ID            the 10-character Apple Developer Team ID
 #
-# The app record (bundle id com.thelastmailbox.ios) must already exist in App
+# The app record (bundle id com.thelastmailbox.app) must already exist in App
 # Store Connect; this job uploads builds to it, it does not create it.
 name: ios-testflight
 
@@ -200,7 +200,7 @@ jobs:
             <key>signingCertificate</key><string>Apple Distribution</string>
             <key>provisioningProfiles</key>
             <dict>
-              <key>com.thelastmailbox.ios</key><string>${PROFILE_NAME}</string>
+              <key>com.thelastmailbox.app</key><string>${PROFILE_NAME}</string>
             </dict>
             <key>uploadSymbols</key><true/>
             <key>stripSwiftSymbols</key><true/>
