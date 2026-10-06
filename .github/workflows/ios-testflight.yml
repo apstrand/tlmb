@@ -1,0 +1,201 @@
+# Builds the iOS app and ships it to TestFlight when a version tag is pushed.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag has to match the version in Cargo.toml; that becomes the build's
+# marketing version (CFBundleShortVersionString). The TestFlight build number
+# (CFBundleVersion) is the GitHub run number, which only ever climbs, so each
+# upload is accepted as newer than the last.
+#
+# Signing is "automatic" in Xcode's sense but driven by an App Store Connect
+# API key: xcodebuild fetches (or creates) the App Store provisioning profile
+# itself. The one thing it must not create on its own is the signing identity
+# — a cert-less runner would mint a fresh Apple Distribution certificate every
+# run, and Apple caps you at a handful before refusing more. So the job imports
+# an existing Apple Distribution cert into a throwaway keychain, the same way
+# macos-release.yml handles its Developer ID cert, and the API key only manages
+# the profile and the upload.
+#
+# Secrets:
+#   APPLE_API_KEY            App Store Connect key id (reused from the macOS
+#                            release job; the key needs the App Manager role to
+#                            manage profiles and upload builds)
+#   APPLE_API_ISSUER         its issuer UUID
+#   APPLE_API_KEY_BASE64     base64 of the AuthKey_<id>.p8 for that key
+#   APPLE_TEAM_ID            the 10-character Apple Developer Team ID
+#   IOS_DISTRIBUTION_CERTIFICATE          base64 of an Apple Distribution .p12
+#   IOS_DISTRIBUTION_CERTIFICATE_PASSWORD its export password
+#
+# The app record (bundle id com.thelastmailbox.ios) must already exist in App
+# Store Connect; this job uploads builds to it, it does not create it.
+name: ios-testflight
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Two runs of the same tag would upload two builds with different run numbers;
+# harmless but pointless. Serialize instead.
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # macos-latest ships a recent Xcode, but pin it so an image bump cannot
+      # silently change the SDK the build is cut against.
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # The archive's build phase cross-compiles mailbox-ffi for the device
+      # (ios/build-ffi.sh picks aarch64-apple-ios for the iphoneos SDK), so the
+      # target has to be installed before xcodebuild runs.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Version and build number
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+              exit 1
+            fi
+          fi
+          echo "MARKETING_VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "Building $version ($GITHUB_RUN_NUMBER)"
+
+      # A throwaway keychain holds the distribution key for the life of the job
+      # only; the runner is discarded after, but on a self-hosted one the key
+      # must not outlive the build that imported it.
+      - name: Signing certificate
+        env:
+          CERTIFICATE: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CERTIFICATE" ]]; then
+            echo "::error::IOS_DISTRIBUTION_CERTIFICATE is not set"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          certificate="$RUNNER_TEMP/certificate.p12"
+          echo "$CERTIFICATE" | base64 --decode > "$certificate"
+
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -k "$keychain" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/xcodebuild
+          # Let codesign use the key without a GUI confirmation dialog.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$password" "$keychain" >/dev/null
+          # Add it to the search list rather than replacing the list.
+          security list-keychain -d user -s "$keychain" \
+            $(security list-keychain -d user | sed -e 's/[" ]//g')
+          rm -f "$certificate"
+
+          security find-identity -v -p codesigning "$keychain"
+
+      # xcodebuild authenticates to App Store Connect with the API key to
+      # manage the provisioning profile; altool reuses the same key, which it
+      # finds by id under ~/.appstoreconnect/private_keys.
+      - name: App Store Connect API key
+        env:
+          API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$API_KEY_BASE64" ]]; then
+            echo "::error::APPLE_API_KEY_BASE64 is not set"
+            exit 1
+          fi
+          dir="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$dir"
+          key="$dir/AuthKey_${APPLE_API_KEY}.p8"
+          echo "$API_KEY_BASE64" | base64 --decode > "$key"
+          chmod 600 "$key"
+          echo "API_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      # The project keeps a hand-written Info.plist (GENERATE_INFOPLIST_FILE is
+      # off), so the version strings are literals in the file, not build
+      # settings xcodebuild could override. Write them in before archiving.
+      - name: Stamp the version
+        run: |
+          set -euo pipefail
+          plist="ios/Mailbox/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $MARKETING_VERSION" "$plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$plist"
+
+      - name: Archive
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project ios/Mailbox.xcodeproj \
+            -scheme mailbox \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/mailbox.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$APPLE_API_KEY" \
+            -authenticationKeyIssuerID "$APPLE_API_ISSUER" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic
+
+      - name: Export the ipa
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>stripSwiftSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/mailbox.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$APPLE_API_KEY" \
+            -authenticationKeyIssuerID "$APPLE_API_ISSUER"
+
+      - name: Upload to TestFlight
+        run: |
+          set -euo pipefail
+          ipa="$(ls "$RUNNER_TEMP"/export/*.ipa | head -1)"
+          echo "Uploading $ipa"
+          xcrun altool --upload-app --type ios --file "$ipa" \
+            --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
+
+      - name: Remove the signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
