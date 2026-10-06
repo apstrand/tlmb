@@ -7,24 +7,28 @@
 # (CFBundleVersion) is the GitHub run number, which only ever climbs, so each
 # upload is accepted as newer than the last.
 #
-# Signing is "automatic" in Xcode's sense but driven by an App Store Connect
-# API key: xcodebuild fetches (or creates) the App Store provisioning profile
-# itself. The one thing it must not create on its own is the signing identity
-# — a cert-less runner would mint a fresh Apple Distribution certificate every
-# run, and Apple caps you at a handful before refusing more. So the job imports
-# an existing Apple Distribution cert into a throwaway keychain, the same way
-# macos-release.yml handles its Developer ID cert, and the API key only manages
-# the profile and the upload.
+# Signing is manual, with assets you supply, and nothing is asked of Apple at
+# build time. An earlier cut let xcodebuild cloud-sign — fetch or mint the
+# provisioning profile through the API key — and the key, which was first made
+# for notarization, lacked the role that needs ("Cloud signing permission
+# error"). So the job imports an Apple Distribution cert into a throwaway
+# keychain and installs a matching App Store provisioning profile you exported
+# once by hand; the export is pinned to both. The API key is left to do the one
+# thing it is unarguably allowed to: upload the finished build.
 #
 # Secrets:
+#   IOS_DISTRIBUTION_CERTIFICATE          base64 of an Apple Distribution .p12
+#   IOS_DISTRIBUTION_CERTIFICATE_PASSWORD its export password
+#   IOS_PROVISIONING_PROFILE              base64 of an App Store .mobileprovision
+#                                         for com.thelastmailbox.ios, tied to the
+#                                         cert above. Make it in the Developer
+#                                         portal (Profiles → App Store), then:
+#                                         base64 -i profile.mobileprovision | pbcopy
 #   APPLE_API_KEY            App Store Connect key id (reused from the macOS
-#                            release job; the key needs the App Manager role to
-#                            manage profiles and upload builds)
+#                            release job), for the upload only
 #   APPLE_API_ISSUER         its issuer UUID
 #   APPLE_API_KEY_BASE64     base64 of the AuthKey_<id>.p8 for that key
 #   APPLE_TEAM_ID            the 10-character Apple Developer Team ID
-#   IOS_DISTRIBUTION_CERTIFICATE          base64 of an Apple Distribution .p12
-#   IOS_DISTRIBUTION_CERTIFICATE_PASSWORD its export password
 #
 # The app record (bundle id com.thelastmailbox.ios) must already exist in App
 # Store Connect; this job uploads builds to it, it does not create it.
@@ -117,9 +121,31 @@ jobs:
 
           security find-identity -v -p codesigning "$keychain"
 
-      # xcodebuild authenticates to App Store Connect with the API key to
-      # manage the provisioning profile; altool reuses the same key, which it
-      # finds by id under ~/.appstoreconnect/private_keys.
+      # Install the App Store profile where xcodebuild looks for it, and read its
+      # name back out — that name is what the archive and the export plist pin
+      # the signing to, so neither has to be hardcoded here.
+      - name: Provisioning profile
+        env:
+          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PROFILE" ]]; then
+            echo "::error::IOS_PROVISIONING_PROFILE is not set"
+            exit 1
+          fi
+          profile="$RUNNER_TEMP/profile.mobileprovision"
+          echo "$PROFILE" | base64 --decode > "$profile"
+          plist="$RUNNER_TEMP/profile.plist"
+          security cms -D -i "$profile" > "$plist"
+          uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$plist")"
+          name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$plist")"
+          dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$dir"
+          cp "$profile" "$dir/$uuid.mobileprovision"
+          echo "PROFILE_NAME=$name" >> "$GITHUB_ENV"
+          echo "Installed profile '$name' ($uuid)"
+
+      # altool finds the key by id under ~/.appstoreconnect/private_keys.
       - name: App Store Connect API key
         env:
           API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
@@ -134,7 +160,6 @@ jobs:
           key="$dir/AuthKey_${APPLE_API_KEY}.p8"
           echo "$API_KEY_BASE64" | base64 --decode > "$key"
           chmod 600 "$key"
-          echo "API_KEY_PATH=$key" >> "$GITHUB_ENV"
 
       # The project keeps a hand-written Info.plist (GENERATE_INFOPLIST_FILE is
       # off), so the version strings are literals in the file, not build
@@ -155,12 +180,10 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/mailbox.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$API_KEY_PATH" \
-            -authenticationKeyID "$APPLE_API_KEY" \
-            -authenticationKeyIssuerID "$APPLE_API_ISSUER" \
+            CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
 
       - name: Export the ipa
         run: |
@@ -173,7 +196,12 @@ jobs:
             <key>method</key><string>app-store-connect</string>
             <key>destination</key><string>export</string>
             <key>teamID</key><string>${APPLE_TEAM_ID}</string>
-            <key>signingStyle</key><string>automatic</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.thelastmailbox.ios</key><string>${PROFILE_NAME}</string>
+            </dict>
             <key>uploadSymbols</key><true/>
             <key>stripSwiftSymbols</key><true/>
           </dict>
@@ -182,11 +210,7 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/mailbox.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$API_KEY_PATH" \
-            -authenticationKeyID "$APPLE_API_KEY" \
-            -authenticationKeyIssuerID "$APPLE_API_ISSUER"
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 
       - name: Upload to TestFlight
         run: |
