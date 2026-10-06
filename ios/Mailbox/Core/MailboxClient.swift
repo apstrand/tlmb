@@ -159,6 +159,24 @@ final class MailboxClient: @unchecked Sendable {
         Keychain.deletePassword(account: id)
     }
 
+    /// Adds the accounts in an encrypted pairing export (§8.3).
+    ///
+    /// The export is text — a header line and base64 — so it travels as a
+    /// string whether it arrived as a file, through the share sheet, or pasted.
+    /// The core applies the config and hands the passwords back; filing them
+    /// where they survive a relaunch is this side's job, exactly as it is for
+    /// `addAccount`.
+    func pairImport(text: String, passphrase: String, replace: Bool = false) throws -> PairImport {
+        let imported: PairImport = try decode(
+            "pair.import",
+            ["text": text, "passphrase": passphrase, "replace": replace]
+        )
+        for credential in imported.credentials {
+            try Keychain.setPassword(credential.password, account: credential.id)
+        }
+        return imported
+    }
+
     /// The built-in table only. Cheap enough to call as the address is typed.
     func providers(address: String) throws -> ProviderHints {
         try decode("providers", ["address": address])

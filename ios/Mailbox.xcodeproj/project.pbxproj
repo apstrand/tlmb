@@ -15,6 +15,8 @@
 		A40000000000000000000006 /* ComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000006 /* ComposeView.swift */; };
 		A40000000000000000000007 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000007 /* SetupView.swift */; };
 		A40000000000000000000008 /* AccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000008 /* AccountsView.swift */; };
+		A40000000000000000000016 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000016 /* WelcomeView.swift */; };
+		A40000000000000000000017 /* TransferView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000017 /* TransferView.swift */; };
 		A40000000000000000000009 /* Types.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000009 /* Types.swift */; };
 		A4000000000000000000000A /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000A /* Keychain.swift */; };
 		A4000000000000000000000B /* MailboxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3000000000000000000000B /* MailboxClient.swift */; };
@@ -36,6 +38,8 @@
 		A30000000000000000000006 /* ComposeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeView.swift; sourceTree = "<group>"; };
 		A30000000000000000000007 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
 		A30000000000000000000008 /* AccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountsView.swift; sourceTree = "<group>"; };
+		A30000000000000000000016 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
+		A30000000000000000000017 /* TransferView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferView.swift; sourceTree = "<group>"; };
 		A30000000000000000000009 /* Types.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Types.swift; sourceTree = "<group>"; };
 		A3000000000000000000000A /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		A3000000000000000000000B /* MailboxClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxClient.swift; sourceTree = "<group>"; };
@@ -110,6 +114,8 @@
 				A30000000000000000000006 /* ComposeView.swift */,
 				A30000000000000000000007 /* SetupView.swift */,
 				A30000000000000000000008 /* AccountsView.swift */,
+				A30000000000000000000016 /* WelcomeView.swift */,
+				A30000000000000000000017 /* TransferView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -235,6 +241,8 @@
 				A40000000000000000000006 /* ComposeView.swift in Sources */,
 				A40000000000000000000007 /* SetupView.swift in Sources */,
 				A40000000000000000000008 /* AccountsView.swift in Sources */,
+				A40000000000000000000016 /* WelcomeView.swift in Sources */,
+				A40000000000000000000017 /* TransferView.swift in Sources */,
 				A40000000000000000000009 /* Types.swift in Sources */,
 				A4000000000000000000000A /* Keychain.swift in Sources */,
 				A4000000000000000000000B /* MailboxClient.swift in Sources */,

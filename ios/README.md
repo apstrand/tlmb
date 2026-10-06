@@ -57,8 +57,13 @@ rebuild the crate before `xtool dev run` when the FFI changes.
 
 ## What it does
 
+- A first launch with no accounts offers the two ways in: set one up here, or
+  bring another device's across
 - Add an account (address + password; Gmail / Fastmail / Outlook / Yahoo /
   iCloud / Proton hosts are filled in from the built-in table)
+- Import the accounts from `mailbox pair --export-file` — the one §8 transport
+  that needs no socket, so no LAN, no relay, and no re-typing passwords. §8.2's
+  link and relay code are not here yet.
 - Password goes to the iOS Keychain, never to `config.toml`
 - Unified inbox, pull-to-refresh sync, search with the §6.2 grammar
 - Open a thread, archive / delete / flag with swipe

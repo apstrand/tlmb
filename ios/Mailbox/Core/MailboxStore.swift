@@ -152,6 +152,36 @@ final class MailboxStore {
         await refresh()
     }
 
+    /// Takes the accounts out of a pairing export (§8.3) and starts using them.
+    ///
+    /// Throws rather than reporting through `lastError`, because the screen that
+    /// asked has a passphrase field to put the failure beside — a wrong
+    /// passphrase is a thing to try again, not an app-level error.
+    @discardableResult
+    func importPairing(text: String, passphrase: String) async throws -> PairImport {
+        // Argon2id on the passphrase is deliberately slow (§8.3), so it does not
+        // run on the main actor — the same reason discovery does not.
+        let imported = try await Task.detached(priority: .userInitiated) {
+            try MailboxClient.shared.pairImport(text: text, passphrase: passphrase)
+        }.value
+        accounts = try MailboxClient.shared.listAccounts()
+        var said = imported.summary
+        if !imported.needsPassword.isEmpty {
+            // An account whose secret did not travel will fail to sync, and
+            // finding out then is worse than being told now.
+            said += " — \(imported.needsPassword.joined(separator: ", ")) still needs a password"
+        }
+        if hasAccounts {
+            try await reload()
+            await refresh(quiet: true)
+        }
+        // After the sync, which sets a banner of its own: what the import did is
+        // the news here, and the mail arriving is visible without being told.
+        banner = said
+        clearBannerLater()
+        return imported
+    }
+
     func removeAccount(id: String) async {
         do {
             try MailboxClient.shared.removeAccount(id: id)

@@ -456,6 +456,76 @@ impl Mailbox {
         Ok(json!({ "removed": id, "store": store.display().to_string() }))
     }
 
+    /// Adds the accounts in an encrypted pairing export (§8.3).
+    ///
+    /// The export is the one pairing route a phone can take today: it is a pure
+    /// function of some bytes and a passphrase, where §8.2's LAN and relay
+    /// transports need a socket, a PAKE round trip, and a confirmation the user
+    /// drives. The container is line-oriented text (a JSON header, then base64),
+    /// so the shell can hand it over as a string whether it came from a file, a
+    /// share sheet, or a paste.
+    ///
+    /// Credentials are installed for this process and *also* returned, because
+    /// the durable copy belongs in the platform keystore and only the shell can
+    /// write that (see [`Self::set_password`], which is the same division).
+    /// Returning them is the same trust boundary `add_account` already crosses
+    /// in the other direction.
+    pub fn pair_import(&self, text: &str, passphrase: &str, replace: bool) -> Result<Value> {
+        let clock = Clock::from_env();
+        let payload = mailbox_core::pair::file::import(text.as_bytes(), passphrase, clock.now())?;
+        let mode = if replace {
+            mailbox_core::pair::ApplyMode::Replace
+        } else {
+            mailbox_core::pair::ApplyMode::Merge
+        };
+
+        let existing = Config::load(&self.config_path).unwrap_or_default();
+        let (config, applied) = payload.apply(&existing, mode);
+        config.save(&self.config_path)?;
+
+        // §9: the config never carries a secret. Each one goes into this
+        // process so the mailbox works before the shell has filed anything, and
+        // into the reply so the shell can make that durable.
+        let mut credentials = Vec::new();
+        let mut needs_password = Vec::new();
+        for account in &payload.accounts {
+            match &account.credential {
+                Some(mailbox_core::pair::PairedCredential::Password { secret }) => {
+                    credentials::install(&account.id, Credential::Password(secret.clone()));
+                    credentials.push(json!({
+                        "id": account.id,
+                        "address": account.config.address,
+                        "password": secret,
+                    }));
+                }
+                // An OAuth account travels as a refresh token, which is not a
+                // password and must not be filed as one. Adopting it is the
+                // core's job (it owns the token cache); saying so here is what
+                // stops the shell from implying the account is ready.
+                Some(mailbox_core::pair::PairedCredential::OAuth2 { refresh_token }) => {
+                    match credentials::adopt_refresh_token(&account.id, refresh_token) {
+                        Ok(true) => {}
+                        _ => needs_password.push(account.id.clone()),
+                    }
+                }
+                None => needs_password.push(account.id.clone()),
+            }
+        }
+
+        self.reload()?;
+
+        Ok(json!({
+            "device": payload.device,
+            "summary": payload.describe(),
+            "age_days": mailbox_core::pair::file::age_days(&payload, clock.now()),
+            "added": applied.added,
+            "updated": applied.updated,
+            "removed": applied.removed,
+            "needs_password": needs_password,
+            "credentials": credentials,
+        }))
+    }
+
     /// The built-in table, and nothing else.
     ///
     /// Deliberately offline: a setup screen calls this as the address is
@@ -625,6 +695,13 @@ impl Mailbox {
                 let id = a.id;
                 Ok(("accounts", self.remove_account(&id)?))
             }
+            "pair.import" | "pair_import" => {
+                let a: PairImportArgs = serde_from_value(args)?;
+                Ok((
+                    "accounts",
+                    self.pair_import(&a.text, &a.passphrase, a.replace)?,
+                ))
+            }
             "providers" => {
                 let a: AddressArgs = serde_from_value(args)?;
                 Ok(("accounts", self.providers(&a.address)?))
@@ -765,6 +842,16 @@ pub struct SendArgs {
     pub body: Option<String>,
     pub in_reply_to: Option<String>,
     pub references: Option<Vec<String>>,
+}
+
+/// `pair.import`: the export's own text, and the passphrase that opens it.
+#[derive(Debug, Deserialize)]
+pub struct PairImportArgs {
+    pub text: String,
+    pub passphrase: String,
+    /// Wipe this device's accounts first (§8.3). Merging is the default.
+    #[serde(default)]
+    pub replace: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]

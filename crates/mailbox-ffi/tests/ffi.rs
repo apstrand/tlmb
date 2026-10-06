@@ -280,6 +280,93 @@ fn add_account_fills_gmail_hosts_and_keeps_the_password_out_of_config() {
     assert_eq!(accounts["accounts"][0]["has_credential"], true);
 }
 
+/// The export a desktop writes with `mailbox pair --export-file`, as text.
+fn an_export(passphrase: &str) -> String {
+    use mailbox_core::config::{AccountConfig, Config};
+    let mut config = Config::default();
+    config.accounts.insert(
+        "work".to_string(),
+        AccountConfig {
+            address: "peter@work.example".to_string(),
+            imap_host: Some("imap.work.example".to_string()),
+            ..Default::default()
+        },
+    );
+    // The credential has to resolve on the sending device for it to travel, and
+    // in-process installation is how a shell supplies one (§9).
+    mailbox_core::credentials::install(
+        "work",
+        mailbox_core::imap::Credential::Password("hunter2".to_string()),
+    );
+    let payload = mailbox_core::pair::Payload::build(
+        &config,
+        "the-desktop",
+        &Clock::fixed(1_788_264_000),
+        &mailbox_core::Rng::from_env(),
+    );
+    let bytes =
+        mailbox_core::pair::file::export(&payload, passphrase, &mailbox_core::Rng::from_env())
+            .expect("export");
+    String::from_utf8(bytes).expect("the container is text")
+}
+
+/// §8's promise is "no re-entering passwords": the phone's first launch can be
+/// an import rather than a setup form. The export is the one transport that
+/// needs no socket, so it is the one the shell has.
+#[test]
+fn a_pairing_export_brings_its_accounts_and_hands_back_the_password() {
+    let tmp = TempDir::new();
+    let config = tmp.path().join("config.toml");
+    let mb = Mailbox::open(&config, tmp.path().join("state")).expect("open");
+
+    let text = an_export("a long enough passphrase");
+    let args = serde_json::json!({ "text": text, "passphrase": "a long enough passphrase" });
+    let out = mb.exec("pair.import", &args.to_string()).expect("import");
+    let v = payload(&out);
+
+    assert_eq!(v["device"], "the-desktop");
+    assert_eq!(v["added"][0], "work");
+    assert_eq!(v["needs_password"].as_array().unwrap().len(), 0, "{v:#}");
+    // The shell files the durable copy in the platform keystore, so it has to
+    // come back out.
+    assert_eq!(v["credentials"][0]["id"], "work");
+    assert_eq!(v["credentials"][0]["address"], "peter@work.example");
+    assert_eq!(v["credentials"][0]["password"], "hunter2");
+
+    // The account is live in this process, and §9 holds: no secret on disk.
+    let accounts = payload(&mb.exec("accounts", "{}").expect("accounts"));
+    assert_eq!(accounts["accounts"][0]["id"], "work");
+    assert_eq!(accounts["accounts"][0]["has_credential"], true);
+    let written = std::fs::read_to_string(&config).expect("read config");
+    assert!(written.contains("imap.work.example"), "{written}");
+    assert!(!written.contains("hunter2"), "{written}");
+}
+
+#[test]
+fn a_wrong_passphrase_changes_nothing() {
+    let tmp = TempDir::new();
+    let config = tmp.path().join("config.toml");
+    let mb = Mailbox::open(&config, tmp.path().join("state")).expect("open");
+
+    let text = an_export("the right one");
+    let args = serde_json::json!({ "text": text, "passphrase": "the wrong one" });
+    let err = mb
+        .exec("pair.import", &args.to_string())
+        .expect_err("a wrong passphrase must not import");
+    assert!(
+        err.error.message.to_lowercase().contains("passphrase"),
+        "{:?}",
+        err.error.message
+    );
+    assert!(
+        !config.exists()
+            || !std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("work.example"),
+        "a failed import wrote accounts anyway"
+    );
+}
+
 #[test]
 fn providers_knows_gmail_and_not_example() {
     let tmp = TempDir::new();

@@ -265,3 +265,31 @@ struct DiscoveryStep: Decodable {
     var target: String
     var outcome: String
 }
+
+/// What came out of an encrypted pairing export (§8.3).
+///
+/// `credentials` is the part this side has to act on: the core installed each
+/// password for the life of the process, and the durable copy belongs in the
+/// iOS Keychain, which only Swift can write.
+struct PairImport: Decodable {
+    struct Credential: Decodable {
+        var id: String
+        var address: String
+        var password: String
+    }
+
+    var device: String
+    var summary: String
+    /// How old the export is. A kept file may hold a password that has since
+    /// been rotated, which is worth saying rather than discovering at sync.
+    var ageDays: Int
+    var added: [String]
+    var updated: [String]
+    var removed: [String]
+    /// Accounts that arrived without a usable secret and will still be asked
+    /// for one.
+    var needsPassword: [String]
+    var credentials: [Credential]
+
+    var accountCount: Int { added.count + updated.count }
+}

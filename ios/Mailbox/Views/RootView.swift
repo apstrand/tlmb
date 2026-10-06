@@ -8,7 +8,7 @@ struct RootView: View {
             if !store.loaded {
                 ProgressView("opening mailbox")
             } else if !store.hasAccounts {
-                SetupView()
+                WelcomeView()
             } else {
                 InboxView()
             }
