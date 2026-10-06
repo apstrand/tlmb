@@ -34,6 +34,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.21" date="2026-10-06">
+      <description>
+        <p>Lets the iOS build pass App Store validation: it now declares all
+        four interface orientations, as a build that targets iPad must. No
+        changes to the desktop app.</p>
+      </description>
+    </release>
     <release version="0.1.20" date="2026-10-06">
       <description>
         <p>Fixes the iOS app, whose setup screen did not compile and whose
