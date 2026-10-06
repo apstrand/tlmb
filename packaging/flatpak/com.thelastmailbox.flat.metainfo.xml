@@ -34,6 +34,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.19" date="2026-10-05">
+      <description>
+        <p>Fixes the iOS app, whose setup screen did not compile and whose
+        server discovery decoded the wrong reply. No changes to the desktop
+        app.</p>
+      </description>
+    </release>
     <release version="0.1.18" date="2026-10-05">
       <description>
         <p>Build and release machinery only: the iOS app now ships to
