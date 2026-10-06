@@ -236,10 +236,16 @@ struct SetupView: View {
         defer { discovering = false }
         let target = address.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let hints = try await Task.detached {
+            let discovery = try await Task.detached {
                 try MailboxClient.shared.discover(address: target)
             }.value
-            apply(hints)
+            // The address may have moved on while the network was busy.
+            guard target == address.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+            guard let found = discovery.found else {
+                provenance = "Nothing answered for \(domain). Enter the servers below."
+                return
+            }
+            apply(found)
         } catch {
             store.lastError = error.localizedDescription
         }
@@ -258,6 +264,27 @@ struct SetupView: View {
         if let port = hints.smtpPort { smtpPort = String(port) }
         smtpSecurity = hints.smtpSecurity ?? smtpSecurity
         provenance = hints.provenance
+    }
+
+    /// Fills the server fields in from a network discovery result. A login the
+    /// autoconfig names, when it is not the address, goes in the field as a
+    /// suggestion rather than straight into the account — and if SMTP names a
+    /// different one, the shared-login toggle has to come off to show it.
+    private func apply(_ found: DiscoveredServers) {
+        imapHost = found.imapHost
+        imapPort = String(found.imapPort)
+        imapSecurity = found.imapSecurity
+        smtpHost = found.smtpHost
+        smtpPort = String(found.smtpPort)
+        smtpSecurity = found.smtpSecurity
+        if let user = found.imapUser, !user.isEmpty { imapUser = user }
+        if let user = found.smtpUser, !user.isEmpty, user != found.imapUser {
+            smtpUser = user
+            sameUser = false
+        }
+        provenance = found.verified
+            ? "Found \(found.imapHost), and it answered."
+            : "Found \(found.imapHost)."
     }
 
     private func add() async {

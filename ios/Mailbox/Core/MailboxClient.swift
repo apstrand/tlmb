@@ -165,8 +165,10 @@ final class MailboxClient: @unchecked Sendable {
     }
 
     /// Asks the network where a domain's servers are. Blocks on DNS, so this
-    /// belongs on a worker; `providers` is the instant, offline sibling.
-    func discover(address: String) throws -> ProviderHints {
+    /// belongs on a worker; `providers` is the instant, offline sibling. Unlike
+    /// `providers` this runs §9's full chain and returns what it found along
+    /// with the trail, not the flat table shape.
+    func discover(address: String) throws -> Discovery {
         try decode("discover", ["address": address])
     }
 
