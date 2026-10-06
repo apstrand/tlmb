@@ -267,11 +267,6 @@ fn enclosing_bundle_id() -> Option<String> {
     bundle_id_from_plist(&plist)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn enclosing_bundle_id() -> Option<String> {
-    None
-}
-
 /// The `CFBundleIdentifier` out of an `Info.plist`.
 ///
 /// Scanned rather than parsed: this is one string out of a document we ship
