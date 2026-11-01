@@ -50,6 +50,39 @@ large)
   n=${2:-3000}
   mailbox --yes debug generate --messages "$n" --seed 1
   ;;
+paging)
+  # Numbered so a test can read the cursor and the scroll off the screen:
+  # "Paging 001" is the newest of 120, and the oldest is a 200-line letter
+  # whose lines are "line 001" onwards.
+  manifest=$(mktemp --suffix=.toml)
+  python3 - "$manifest" <<'PY'
+import json, sys
+from datetime import datetime, timedelta, timezone
+base = datetime(2026, 8, 28, 12, tzinfo=timezone.utc)
+out = ['[[folder]]\npath = "INBOX"\nspecial_use = "inbox"\n']
+def message(name, subject, when, body):
+    out.append("\n".join([
+        "[[message]]",
+        f"name = {json.dumps(name)}",
+        'folder = "INBOX"',
+        'from = "Pat <pat@example.com>"',
+        'to = ["peter@example.com"]',
+        f"subject = {json.dumps(subject)}",
+        f'date = "{when:%Y-%m-%dT%H:%M:%SZ}"',
+        f'message_id = "<{name}@example.com>"',
+        'flags = ["\\\\Seen"]',
+        f"body = {json.dumps(body)}",
+        "",
+    ]))
+for i in range(1, 121):
+    message(f"p{i:03}", f"Paging {i:03}", base - timedelta(hours=i), f"Message {i}.\n")
+message("long", "Long letter", base - timedelta(days=30),
+        "".join(f"line {i:03} of the long letter\n" for i in range(1, 201)))
+open(sys.argv[1], "w").write("\n".join(out))
+PY
+  mailbox debug fixture load "$manifest"
+  rm -f "$manifest"
+  ;;
 imap)
   manifest="$SCEN/inbox.toml"
   mailbox debug fixture render "$manifest" \
@@ -57,7 +90,7 @@ imap)
   mailbox sync --once --yes || mailbox sync --once
   ;;
 *)
-  echo "unknown scenario: $scenario (inbox|html-images|attachments|thread|large|imap)" >&2
+  echo "unknown scenario: $scenario (inbox|html-images|attachments|thread|large|paging|imap)" >&2
   exit 1
   ;;
 esac

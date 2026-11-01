@@ -663,12 +663,15 @@ impl App {
                 self.step_by(-1);
                 self.follow_folder_cursor()
             }
+            // A page of whatever is on screen: rows of the list, or lines of
+            // the message being read. Moving the list cursor behind an open
+            // message would only change which message `Esc` lands on.
             Action::PageDown => {
-                self.move_by(self.page_size as isize);
+                self.page_by(self.page_size as isize);
                 Effect::None
             }
             Action::PageUp => {
-                self.move_by(-(self.page_size as isize));
+                self.page_by(-(self.page_size as isize));
                 Effect::None
             }
             Action::Top => {
@@ -842,6 +845,14 @@ impl App {
         } else {
             self.body_scroll.saturating_add(delta as u16)
         };
+    }
+
+    fn page_by(&mut self, delta: isize) {
+        if self.view == View::Message {
+            self.scroll_body(delta);
+        } else {
+            self.move_by(delta);
+        }
     }
 
     /// Re-points the list when the move was one through the folders.

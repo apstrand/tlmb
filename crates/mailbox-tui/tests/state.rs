@@ -114,6 +114,47 @@ fn paging_moves_by_the_visible_height() {
     assert_eq!(app.selected, 0);
 }
 
+/// The page is measured by the renderer, from the rows the list really gets.
+/// It used to be measured from the one-row header, which made every page key
+/// a `j`.
+#[test]
+fn a_page_is_what_the_screen_shows() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let mut app = app_with(100);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            mailbox_tui::ui::draw(frame, &mut app, &Keymap::vim());
+        })
+        .expect("draw");
+    // 40 rows less the header, status and prompt rows, less two of context.
+    assert_eq!(app.page_size, 35);
+
+    app.handle(Action::PageDown);
+    assert_eq!(app.selected, 35);
+}
+
+/// In an open message the page keys page through the message, as they do in
+/// every pager, instead of moving the list cursor hidden behind it.
+#[test]
+fn paging_in_a_message_scrolls_the_message() {
+    let mut app = app_with(100);
+    app.page_size = 10;
+    app.handle(Action::Open);
+    assert_eq!(app.view, View::Message);
+
+    app.handle(Action::PageDown);
+    assert_eq!(app.body_scroll, 10);
+    assert_eq!(app.selected, 0, "the list cursor stays on the open message");
+    app.handle(Action::PageDown);
+    app.handle(Action::PageUp);
+    assert_eq!(app.body_scroll, 10);
+    app.handle(Action::PageUp);
+    app.handle(Action::PageUp);
+    assert_eq!(app.body_scroll, 0);
+}
+
 #[test]
 fn movement_on_an_empty_list_is_harmless() {
     let mut app = App::new();

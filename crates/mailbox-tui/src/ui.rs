@@ -44,7 +44,9 @@ pub fn draw(
 
     // The renderer owns the real page height, so paging moves by what the user
     // can actually see rather than by a guess.
-    app.page_size = (areas[0].height as usize).saturating_sub(2).max(1);
+    // Two rows short of the content area, so a line or two of context carries
+    // over from one page to the next.
+    app.page_size = (areas[1].height as usize).saturating_sub(2).max(1);
 
     draw_header(frame, areas[0], app);
     let mut links = Vec::new();
