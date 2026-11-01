@@ -125,6 +125,10 @@ fn event_loop(
 
     loop {
         if needs_redraw {
+            if app.repaint {
+                terminal.clear()?;
+                app.repaint = false;
+            }
             let mut links = Vec::new();
             terminal.draw(|frame| links = crate::ui::draw(frame, app, keymap))?;
             // After the frame, never during it: see [`crate::markdown::LinkSpan`].
@@ -597,6 +601,7 @@ fn run_suspended(
     // strand the user in raw mode.
     let _ = enable_raw_mode();
     let _ = io::stdout().execute(EnterAlternateScreen);
+    app.repaint = true;
 
     app.status = match outcome {
         Ok(status) => status,

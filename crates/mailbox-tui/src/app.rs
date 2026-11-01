@@ -227,6 +227,10 @@ pub struct App {
     pub page_size: usize,
     /// Set when the list no longer matches the store and should be reloaded.
     pub dirty: bool,
+    /// Set when something else had the terminal (an editor, a pipe), so the
+    /// next frame has to be painted whole: the screen it left is not the one
+    /// the renderer remembers drawing.
+    pub repaint: bool,
     /// True when nothing is configured yet, so the index draws §9's setup
     /// guide instead of a listing.
     ///
@@ -271,6 +275,7 @@ impl App {
             undo: Vec::new(),
             page_size: DEFAULT_PAGE,
             dirty: false,
+            repaint: false,
             no_accounts: false,
             link_selected: 0,
             folders: Vec::new(),
