@@ -318,6 +318,11 @@ fn handle_key(
         return Ok(false);
     }
 
+    // The attachments come with the message, so the list has to load the one
+    // under the cursor before there is anything to list.
+    if action == Action::Attachments && app.view == View::List {
+        load_open_message(app, workspace)?;
+    }
     let effect = app.handle(action);
     // The preview follows the cursor: the point of it is to arrow down a list
     // and see each message, so a move with it open reloads it too.
@@ -532,6 +537,17 @@ fn apply_effect(
             };
             Ok(false)
         }
+        Effect::Save(request) => {
+            app.status = "saving…".to_string();
+            start_save(
+                opts.clone(),
+                tracer.clone(),
+                clock.clone(),
+                tx.clone(),
+                request,
+            );
+            Ok(false)
+        }
         Effect::Write(write) => {
             app.status = perform_write(opts, tracer, clock, &write)?;
             app.dirty = true;
@@ -581,6 +597,38 @@ fn start_sync(opts: SessionOptions, tracer: Tracer, clock: Clock, tx: Sender<Upd
             })
             .map_err(|e| e.to_string());
         let _ = tx.send(Update::SyncFinished(outcome));
+    });
+}
+
+/// Saves a message or an attachment on a worker thread.
+///
+/// A worker for the same reason a sync gets one: the body may not be here
+/// yet, and fetching it is a network round trip the keys must not wait on.
+fn start_save(
+    opts: SessionOptions,
+    tracer: Tracer,
+    clock: Clock,
+    tx: Sender<Update>,
+    request: crate::app::SaveRequest,
+) {
+    std::thread::spawn(move || {
+        let outcome = (|| -> Result<String> {
+            let target = mailbox_core::attach::save_target(&request.path, &request.filename)?;
+            let mut writable = opts;
+            writable.read_only = false;
+            let mut workspace = Workspace::open(&writable, tracer, clock)?;
+            let id = IdRef::Id(request.id.clone());
+            let file = match &request.part {
+                Some(part) => workspace.attachment_file(&id, part)?,
+                None => workspace.message_file(&id)?,
+            };
+            mailbox_core::attach::write(&target, &file.bytes)?;
+            Ok(format!("saved to {}", target.display()))
+        })();
+        let _ = tx.send(Update::Status(match outcome {
+            Ok(status) => status,
+            Err(e) => format!("could not save: {e}"),
+        }));
     });
 }
 

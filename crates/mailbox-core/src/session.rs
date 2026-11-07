@@ -24,6 +24,15 @@ use crate::store::read::{ListOptions, Listing};
 use crate::store::{Store, Written};
 use crate::trace::Tracer;
 
+/// A message or a part, ready to be written somewhere a person chose.
+#[derive(Debug, Clone)]
+pub struct SaveFile {
+    /// Already through [`crate::attach::safe_filename`].
+    pub filename: String,
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+}
+
 /// How a session was asked to open.
 #[derive(Debug, Clone, Default)]
 pub struct SessionOptions {
@@ -645,6 +654,40 @@ impl Session {
         let raw = self.store.raw_message(message_id)?;
         crate::mime::extract_part(&raw, part)
             .ok_or_else(|| Error::not_found("part", format!("{part} of {message_id}")))
+    }
+
+    /// The whole message as a file to save: the bytes the server sent, named
+    /// for its subject (see [`crate::attach::message_filename`]).
+    pub fn message_file(&mut self, message_id: &str) -> Result<SaveFile> {
+        self.ensure_body(message_id)?;
+        let subject = self
+            .store
+            .message(message_id, &Default::default())?
+            .summary
+            .subject;
+        Ok(SaveFile {
+            filename: crate::attach::message_filename(&subject),
+            mime_type: "message/rfc822".to_string(),
+            bytes: self.store.raw_message(message_id)?,
+        })
+    }
+
+    /// One part as a file to save, under the name the attachment list shows
+    /// — what the sender called it — made safe to write (§9).
+    pub fn attachment_file(&mut self, message_id: &str, part: &str) -> Result<SaveFile> {
+        let (extracted, mime_type, bytes) = self.attachment(message_id, part)?;
+        let listed = self
+            .store
+            .message(message_id, &Default::default())?
+            .attachments
+            .into_iter()
+            .find(|a| a.part == part)
+            .and_then(|a| a.filename);
+        Ok(SaveFile {
+            filename: crate::attach::safe_filename(&listed.unwrap_or(extracted)),
+            mime_type,
+            bytes,
+        })
     }
 
     /// §5.3's conflicts: local writes that were abandoned, whose effect the

@@ -99,6 +99,26 @@ struct Attachment: Codable, Hashable, Identifiable {
     var id: String { part }
 }
 
+/// What `raw` and `attachment` hand back: the bytes and what to call them.
+struct SaveableFile: Decodable {
+    var filename: String
+    var mimeType: String
+    /// Base64 on the wire, which is `JSONDecoder`'s default for `Data`.
+    var data: Data
+
+    /// Writes the bytes under their own name, in a directory of their own so
+    /// two saves of `invoice.pdf` cannot meet, and returns where. The save
+    /// sheet moves the file from there to wherever the person picks.
+    func temporaryURL() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("save-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(filename)
+        try data.write(to: url, options: .completeFileProtection)
+        return url
+    }
+}
+
 struct MessageDetail: Codable, Hashable, Identifiable {
     var id: String
     var account: String

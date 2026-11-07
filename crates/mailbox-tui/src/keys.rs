@@ -58,6 +58,11 @@ pub enum Action {
     Snooze,
     /// Copy the selected link to the clipboard.
     Yank,
+    /// Save the message as an `.eml` file, or — in the attachments view —
+    /// the attachment under the cursor.
+    Save,
+    /// List the message's attachments, to save one.
+    Attachments,
     /// Slide the folder pane in, or close the message beside the list (§7).
     PaneLeft,
     /// Show the message beside the list, then focus it.
@@ -102,6 +107,8 @@ impl Action {
             Action::Links => "follow a link",
             Action::Snooze => "snooze until later",
             Action::Yank => "copy the selected link",
+            Action::Save => "save message / attachment",
+            Action::Attachments => "list attachments",
             Action::Sync => "sync now",
             Action::Help => "help",
             Action::ScrollDown => "scroll down",
@@ -167,6 +174,10 @@ impl Keymap {
             ("o", Action::Links),
             ("z", Action::Snooze),
             ("y", Action::Yank),
+            // `S`, not `s`: that one is spam, and under the left hand with
+            // the other triage keys. `v` is mutt's attachment view.
+            ("S", Action::Save),
+            ("v", Action::Attachments),
             ("@", Action::Sync),
             ("?", Action::Help),
             // The arrows slide the panes in and out; `h` and `l` keep their

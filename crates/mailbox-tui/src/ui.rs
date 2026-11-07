@@ -55,6 +55,7 @@ pub fn draw(
         View::Message => draw_message(frame, areas[1], app, &mut links),
         View::Thread => draw_thread(frame, areas[1], app),
         View::Links => draw_links(frame, areas[1], app, &mut links),
+        View::Attachments => draw_attachments(frame, areas[1], app),
         View::Help => draw_help(frame, areas[1], keymap),
     }
     draw_status(frame, areas[2], app);
@@ -80,7 +81,7 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     .map(|m| m.summary.subject.as_str())
                     .unwrap_or("(none)")
             ),
-            "← back   ↑↓ scroll   o links   r reply   ? keys".to_string(),
+            "← back   ↑↓ scroll   o links   v attachments   r reply   ? keys".to_string(),
         ),
         View::Thread => (
             "thread".to_string(),
@@ -89,6 +90,10 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
         View::Links => (
             "links".to_string(),
             "↑↓ choose   Enter open   y copy   ← back".to_string(),
+        ),
+        View::Attachments => (
+            "attachments".to_string(),
+            "↑↓ choose   Enter save   ← back".to_string(),
         ),
         View::Help => ("keys".to_string(), "any key closes".to_string()),
         View::List => match (app.side, app.focus) {
@@ -588,6 +593,50 @@ fn draw_links(
     );
 }
 
+/// The open message's attachments: name, type and size, one to a row.
+///
+/// The type is shown as the message declares it, beside the name the sender
+/// chose — the pair is how a reader spots an `invoice.pdf` that is not one.
+fn draw_attachments(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  attachments — Enter to save, q to go back",
+            Style::default().fg(theme::DIM),
+        )),
+        Line::from(""),
+    ];
+    for (i, a) in app.attachments().into_iter().enumerate() {
+        let selected = i == app.attachment_selected;
+        let name = a
+            .filename
+            .clone()
+            .unwrap_or_else(|| format!("part {}", a.part));
+        let style = if selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(vec![
+            Span::raw(if selected { "> " } else { "  " }),
+            Span::styled(name, style),
+            Span::styled(
+                format!("  {}  {}", a.mime_type, human_size(a.size)),
+                Style::default().fg(theme::DIM),
+            ),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Bytes the way a person reads them.
+fn human_size(bytes: u64) -> String {
+    match bytes {
+        b if b < 1024 => format!("{b} B"),
+        b if b < 1024 * 1024 => format!("{:.0} KB", b as f64 / 1024.0),
+        b => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+    }
+}
+
 fn draw_thread(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let Some(current) = app.current() else { return };
     let thread_id = current.thread_id.clone();
@@ -651,6 +700,8 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect, keymap: &Keymap) {
         Action::Forward,
         Action::Compose,
         Action::Links,
+        Action::Attachments,
+        Action::Save,
         Action::Snooze,
         Action::Yank,
         Action::Pipe,
@@ -748,10 +799,22 @@ fn draw_prompt(frame: &mut Frame<'_>, area: Rect, app: &App) {
         return;
     };
 
+    // The end of the text is where the typing happens, so a line too long
+    // for the terminal shows its end: a prefilled save path is mostly
+    // directory, and the part worth seeing is the name at the end of it.
+    let room = (area.width as usize).saturating_sub(prompt.label().chars().count() + 2);
+    let text = prompt.text();
+    let count = text.chars().count();
+    let shown = if count > room {
+        let tail: String = text.chars().skip(count - room.saturating_sub(1)).collect();
+        format!("…{tail}")
+    } else {
+        text.to_string()
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(prompt.label(), Style::default().fg(theme::ACCENT)),
-            Span::raw(prompt.text().to_string()),
+            Span::raw(shown),
             Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
         ])),
         area,

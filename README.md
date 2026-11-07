@@ -142,6 +142,9 @@ You can also work directly from the command line:
 mailbox ls
 mailbox show 1
 mailbox search 'from:alice is:unread'
+mailbox save 1 -o ~/Documents      # the whole message, as an .eml file
+mailbox attach 1                   # list its attachments
+mailbox attach 1 --all -x -o ~/Downloads
 mailbox compose
 mailbox sync
 mailbox status

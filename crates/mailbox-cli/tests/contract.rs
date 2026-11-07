@@ -249,7 +249,11 @@ fn every_command_conforms_to_its_published_schema() {
         let Coverage::Checked(args) = coverage else {
             continue;
         };
-        let owned: Vec<String> = args.iter().map(|a| a.replace("<id>", &id)).collect();
+        let dir = cli.dir.display().to_string();
+        let owned: Vec<String> = args
+            .iter()
+            .map(|a| a.replace("<id>", &id).replace("<dir>", &dir))
+            .collect();
         let args: Vec<&str> = owned.iter().map(String::as_str).collect();
         let document = cli.ok(&args);
         assert_conforms(&cli, command, &document);
@@ -288,6 +292,10 @@ const COVERAGE: &[(&str, Coverage)] = &[
     ("notify", Coverage::Checked(&["notify"])),
     ("outbox", Coverage::Checked(&["outbox"])),
     ("attach", Coverage::Checked(&["attach", "<id>"])),
+    (
+        "save",
+        Coverage::Checked(&["save", "<id>", "--offline", "-o", "<dir>"]),
+    ),
     ("flag", Coverage::Checked(&["flag", "<id>", "+seen"])),
     ("mv", Coverage::Checked(&["mv", "<id>", "Archive"])),
     ("cp", Coverage::Checked(&["cp", "<id>", "Archive"])),

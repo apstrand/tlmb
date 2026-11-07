@@ -15,6 +15,7 @@ pub mod app;
 pub mod backend;
 /// The window's command names and their ACL permissions.
 pub mod commands;
+pub mod save;
 pub mod update;
 
 pub use app::{App, Focus};
@@ -33,6 +34,11 @@ use tauri::{AppHandle, Manager, WebviewUrl};
 
 /// Opens the window and runs until it closes.
 pub fn run(opts: SessionOptions, tracer: Tracer, clock: Clock) -> Result<()> {
+    let source = save::Source {
+        opts: opts.clone(),
+        tracer: tracer.clone(),
+        clock: clock.clone(),
+    };
     let server = Server::bind(
         Options {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -59,10 +65,10 @@ pub fn run(opts: SessionOptions, tracer: Tracer, clock: Clock) -> Result<()> {
         let _ = server.run();
     });
 
-    open_window(&url, port)
+    open_window(&url, port, source)
 }
 
-fn open_window(url: &str, port: u16) -> Result<()> {
+fn open_window(url: &str, port: u16, source: save::Source) -> Result<()> {
     prepare_webview_env();
 
     let parsed: tauri::Url = url
@@ -79,13 +85,19 @@ fn open_window(url: &str, port: u16) -> Result<()> {
     // registered on Linux, where a Flatpak cannot replace its own files.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    // The save dialog, for `save::choose`. Only its Rust side is used: the
+    // page is granted none of its commands, and asks `save_*` instead.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
 
     builder
         .invoke_handler(tauri::generate_handler![
             update_status,
             update_check,
             update_install,
-            update_restart
+            update_restart,
+            save_message,
+            save_attachment
         ])
         .setup(move |app| {
             // The page is served from loopback, which Tauri counts as remote
@@ -100,6 +112,7 @@ fn open_window(url: &str, port: u16) -> Result<()> {
             }
             app.add_capability(shell)?;
             app.manage(Updates::start(app.handle()));
+            app.manage(source);
 
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(parsed))
                 .title("mailbox")
@@ -319,6 +332,27 @@ async fn check_repo(app: AppHandle, tracker: Arc<Mutex<update::Tracker>>, asked:
         }
     }
     push_update_status(&app);
+}
+
+/// Saves a message as an `.eml` file, wherever the save dialog says.
+#[tauri::command]
+async fn save_message(
+    app: AppHandle,
+    id: String,
+) -> std::result::Result<Option<save::Saved>, String> {
+    let source = app.state::<save::Source>();
+    save::save(app.clone(), &source, save::What::Message { id }).await
+}
+
+/// Saves one attachment, wherever the save dialog says.
+#[tauri::command]
+async fn save_attachment(
+    app: AppHandle,
+    id: String,
+    part: String,
+) -> std::result::Result<Option<save::Saved>, String> {
+    let source = app.state::<save::Source>();
+    save::save(app.clone(), &source, save::What::Attachment { id, part }).await
 }
 
 /// Starts the newest installed build and closes this one.

@@ -154,6 +154,7 @@ fn run(cli: &Cli, out: &Out) -> mailbox_core::Result<()> {
         Command::Search(args) => commands::search(&ctx, args),
         Command::Flag(args) => commands::flag(&ctx, args),
         Command::Attach(args) => commands::attach(&ctx, args),
+        Command::Save(args) => commands::save(&ctx, args),
         Command::Snooze(args) => commands::snooze(&ctx, args),
         Command::Serve(args) => commands::serve(&ctx, args),
         Command::Relay(args) => relay::relay(&ctx, args),
@@ -235,10 +236,11 @@ fn needs_write(cmd: &Command) -> bool {
         ),
         // Receiving a pairing rewrites the config, and may create a store.
         Command::Pair(_) => true,
-        // `show` and `attach` fetch a body they do not have (§5.1), which is a
+        // `show`, `attach` and `save` fetch a body they do not have (§5.1), which is a
         // write to the blob store and the message row.
         Command::Show(args) => !args.offline,
         Command::Attach(args) => !args.offline,
+        Command::Save(args) => !args.offline,
         // Listing is a read; everything else the outbox does is a write.
         Command::Outbox(args) => {
             !matches!(args.action, None | Some(cli::OutboxAction::List { .. }))

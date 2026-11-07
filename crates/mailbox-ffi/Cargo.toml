@@ -13,5 +13,6 @@ crate-type = ["lib", "staticlib"]
 [dependencies]
 mailbox-api.workspace = true
 mailbox-core.workspace = true
+base64 = "0.22"
 serde.workspace = true
 serde_json.workspace = true

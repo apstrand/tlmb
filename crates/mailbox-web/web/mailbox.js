@@ -416,9 +416,8 @@ function drawReader(message) {
     readerEl.replaceChildren(...parts);
 }
 
-/** Where one attachment's bytes come from. Navigated to, never fetched. */
+/** Where one attachment's bytes come from on `mailbox serve`. Navigated to, never fetched. */
 function attachmentUrl(message, part) {
-    if (hostedBackend) return hostedBackend.hostedAttachmentUrl?.(message, part);
     const params = new URLSearchParams({ id: message.id, part: part.part });
     return `/attachment?${params}`;
 }
@@ -461,25 +460,77 @@ function attachmentChip(message, part) {
 }
 
 /** Hands the file to whatever opens it — the browser, then the desktop. */
-function openAttachment(message, part) {
-    const url = attachmentUrl(message, part);
-    if (!url) {
-        fail(new Error("this build cannot open attachments"));
+async function openAttachment(message, part) {
+    if (!hostedBackend) {
+        // Synchronously, inside the click: a browser only lets a page open a
+        // window while it is still answering one.
+        window.open(attachmentUrl(message, part), "_blank", "noopener");
         return;
     }
-    window.open(url, "_blank", "noopener");
+    try {
+        // The hosted page may have to fetch the body first, by which time the
+        // click is long over and a popup blocker may refuse — so say so.
+        const opened = window.open(await hostedBackend.hostedAttachmentUrl(message, part), "_blank");
+        if (!opened) fail(new Error("the browser blocked the new tab — use Save as… instead"));
+    } catch (error) {
+        fail(error);
+    }
 }
 
 /** The same bytes, but asking for a filename rather than a handler. */
 function saveAttachment(message, part) {
-    const url = attachmentUrl(message, part);
-    if (!url) {
-        fail(new Error("this build cannot save attachments"));
-        return;
+    return saveFile(message, part);
+}
+
+/** The whole message as the server sent it, as an `.eml` file. */
+function saveMessage(message) {
+    return saveFile(message, null);
+}
+
+/**
+ * Saves a message (`part` null) or one of its attachments.
+ *
+ * Three ways, one per place this page runs. The desktop window writes the
+ * file itself, after the system's save dialog: a webview's own downloads go
+ * nowhere useful there, and in a Flatpak nowhere at all. The hosted page has
+ * the bytes in its own worker and hands the browser a blob. `mailbox serve`
+ * is a browser talking to a server, so a download link is the whole job.
+ */
+async function saveFile(message, part) {
+    try {
+        if (shellIpc) {
+            const saved = part
+                ? await shellIpc.invoke("save_attachment", { id: message.id, part: part.part })
+                : await shellIpc.invoke("save_message", { id: message.id });
+            // Null is the dialog cancelled, which needs no answer.
+            if (saved) say(`Saved to ${saved.path}`);
+            return;
+        }
+        if (hostedBackend) {
+            const file = await hostedBackend.hostedFile(message, part?.part);
+            const url = URL.createObjectURL(file.blob);
+            download(url, file.filename);
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+            return;
+        }
+        if (part) {
+            download(attachmentUrl(message, part), part.filename ?? part.part);
+        } else {
+            download(`/raw?${new URLSearchParams({ id: message.id })}`, "");
+        }
+    } catch (error) {
+        fail(error);
     }
+}
+
+/**
+ * Starts a browser download. An empty name leaves it to the response's
+ * `Content-Disposition`, which the server has already made safe.
+ */
+function download(url, filename) {
     const link = document.createElement("a");
     link.href = url;
-    link.download = part.filename ?? part.part;
+    link.download = filename;
     link.rel = "noopener";
     document.body.append(link);
     link.click();
@@ -531,6 +582,7 @@ function actions(message) {
     add("Archive", () => moveTo(message.id, "archive"));
     add("Delete", () => moveTo(message.id, "trash"));
     add("Spam", () => moveTo(message.id, "junk"));
+    add("Save", () => saveMessage(message));
     // §7's snooze, in its local-only form: the times anyone actually picks.
     for (const [label, until] of [["2h", "2h"], ["Tomorrow", "tomorrow"], ["Next week", "+7d"]]) {
         add(label, () => snooze(message.id, until));
@@ -1670,6 +1722,8 @@ function messageMenu(message) {
         ["Move to trash", "d", () => moveTo(message.id, "trash")],
         ["Mark spam", "s", () => moveTo(message.id, "junk")],
         ["Snooze until tomorrow", "z", () => snooze(message.id, "tomorrow")],
+        null,
+        ["Save as…", "", () => saveMessage(message)],
     ];
 }
 

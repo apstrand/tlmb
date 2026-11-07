@@ -896,6 +896,45 @@ pub fn attachment(
         .with("Cache-Control", "no-store")
 }
 
+/// A whole message, exactly as the server sent it, as an `.eml` download.
+///
+/// Navigated to like [`attachment`], and for the same reasons always a
+/// download: `message/rfc822` is a type some browsers would otherwise try to
+/// show, and showing it would mean rendering a stranger's HTML part here.
+pub fn raw_message(
+    request: &Request,
+    session: &SessionOptions,
+    tracer: &Tracer,
+    clock: &Clock,
+) -> Response {
+    let Some(id) = request.query.get("id") else {
+        return Response::text(400, "which message?");
+    };
+    let mut workspace = match writable(session, tracer, clock) {
+        Ok(workspace) => workspace,
+        Err(e) => return Response::text(500, &e.to_string()),
+    };
+    let (account, resolved) = match workspace.locate(&IdRef::parse(id)) {
+        Ok(found) => found,
+        Err(e) => return Response::text(404, &e.to_string()),
+    };
+    let file = match workspace.sessions_mut()[account].message_file(&resolved) {
+        Ok(file) => file,
+        Err(e) => return Response::text(404, &e.to_string()),
+    };
+
+    Response::new(200, &file.mime_type, file.bytes)
+        .with(
+            "Content-Disposition",
+            &format!(
+                "attachment; filename=\"{}\"",
+                quoted_filename(&file.filename)
+            ),
+        )
+        .with("Content-Security-Policy", "default-src 'none'; sandbox")
+        .with("Cache-Control", "no-store")
+}
+
 /// A filename safe to put inside a quoted header parameter.
 ///
 /// A sender chooses this, so it can hold a quote, a newline, or a path — each

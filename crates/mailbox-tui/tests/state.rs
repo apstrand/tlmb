@@ -1045,3 +1045,130 @@ fn a_shared_folder_is_one_row_with_the_accounts_under_it() {
     // And a path with a space survives as one term either way.
     assert_eq!(rows[2].query(), r#"account:work in:"Some Folder""#);
 }
+
+// ---- saving a message or an attachment ----
+
+fn opened_with_attachments(names: &[&str]) -> App {
+    let mut app = opened_with_links(&[]);
+    let detail = app.open.as_mut().unwrap();
+    detail.summary.subject = "Re: Lunch?".into();
+    detail.attachments = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| mailbox_api::Attachment {
+            part: format!("{}", i + 2),
+            filename: Some(name.to_string()),
+            mime_type: "application/pdf".into(),
+            size: 2048,
+            content_id: None,
+            is_attachment: true,
+        })
+        .collect();
+    app
+}
+
+fn typed(app: &App) -> String {
+    match &app.prompt {
+        Some(Prompt::Save(path)) => path.clone(),
+        other => panic!("no save prompt: {other:?}"),
+    }
+}
+
+#[test]
+fn saving_a_message_asks_where_with_its_name_filled_in() {
+    let mut app = opened_with_attachments(&[]);
+    assert_eq!(
+        app.handle(Action::Save),
+        Effect::None,
+        "nothing is written before Enter"
+    );
+    assert!(typed(&app).ends_with("Re_ Lunch_.eml"), "{}", typed(&app));
+
+    // Keys go to the prompt, so `d` in a filename deletes nothing.
+    app.backspace_prompt();
+    for c in "x".chars() {
+        app.type_into_prompt(c);
+    }
+    match app.submit_prompt() {
+        Effect::Save(request) => {
+            assert_eq!(request.id, "id00");
+            assert_eq!(request.part, None);
+            assert_eq!(request.filename, "Re_ Lunch_.eml");
+            assert!(request.path.ends_with("Re_ Lunch_.emx"), "{}", request.path);
+        }
+        other => panic!("expected a save, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_cancelled_save_saves_nothing_later() {
+    let mut app = opened_with_attachments(&[]);
+    app.handle(Action::Save);
+    app.cancel_prompt();
+    app.handle(Action::Tag);
+    app.type_into_prompt('x');
+    assert!(!matches!(app.submit_prompt(), Effect::Save(_)));
+}
+
+#[test]
+fn the_attachments_view_saves_the_one_under_the_cursor() {
+    let mut app = opened_with_attachments(&["a.pdf", "../../b.sh"]);
+    app.handle(Action::Attachments);
+    assert_eq!(app.view, View::Attachments);
+
+    app.handle(Action::Down);
+    app.handle(Action::Down);
+    assert_eq!(app.attachment_selected, 1, "clamped at the last one");
+
+    // Enter saves rather than opens: §9 never opens an attachment for anyone.
+    assert_eq!(app.handle(Action::Open), Effect::None);
+    assert!(typed(&app).ends_with("b.sh.bin"), "{}", typed(&app));
+    match app.submit_prompt() {
+        Effect::Save(request) => {
+            assert_eq!(request.part.as_deref(), Some("3"));
+            assert_eq!(request.filename, "b.sh.bin");
+        }
+        other => panic!("expected a save, got {other:?}"),
+    }
+
+    app.handle(Action::Back);
+    assert_eq!(
+        app.view,
+        View::Message,
+        "back to the message it was opened from"
+    );
+}
+
+#[test]
+fn a_message_without_attachments_says_so() {
+    let mut app = opened_with_attachments(&[]);
+    app.handle(Action::Attachments);
+    assert_eq!(app.view, View::Message);
+    assert!(app.status.contains("no attachments"), "{}", app.status);
+}
+
+#[test]
+fn attachments_listed_from_the_index_are_forgotten_on_the_way_out() {
+    let mut app = opened_with_attachments(&["a.pdf"]);
+    app.view = View::List;
+    app.handle(Action::Attachments);
+    assert_eq!(app.view, View::Attachments);
+    app.handle(Action::Quit);
+    assert_eq!(app.view, View::List);
+    assert!(
+        app.open.is_none(),
+        "the next `v` would list this message's files again"
+    );
+}
+
+#[test]
+fn save_and_attachments_have_keys_and_names() {
+    let keymap = Keymap::vim();
+    assert_eq!(keymap.action("S"), Some(Action::Save));
+    assert_eq!(keymap.action("v"), Some(Action::Attachments));
+    assert_eq!(keymap.action("s"), Some(Action::Spam), "spam keeps its key");
+    assert_eq!(
+        action_by_name(&action_name(Action::Save)),
+        Some(Action::Save)
+    );
+}

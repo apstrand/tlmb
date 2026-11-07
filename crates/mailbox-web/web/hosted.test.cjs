@@ -56,7 +56,7 @@ function client(relay, account, options = {}) {
         .replace(/^import[\s\S]*?from "\.\/storage.js";/, "")
         .replaceAll("export ", "");
     const context = vm.createContext({
-        URL, Worker, WebSocket, SharedArrayBuffer, Atomics, Int32Array, Uint8Array,
+        URL, Worker, WebSocket, SharedArrayBuffer, Atomics, Int32Array, Uint8Array, Blob, atob, setTimeout,
         setInterval, clearInterval, queueMicrotask, crossOriginIsolated: true,
         location: { href: "https://mail.example/" },
         fetch: async (input) => {
@@ -84,6 +84,7 @@ function client(relay, account, options = {}) {
     vm.runInContext(source, context);
     return { api: context.api, syncProgressively: context.syncProgressively,
         hostedImageUrl: context.hostedImageUrl,
+        hostedFile: context.hostedFile, hostedAttachmentUrl: context.hostedAttachmentUrl,
         urls, fetches, requests, credentials, checkpoints, settings: () => settings };
 }
 
@@ -324,4 +325,39 @@ test("opening a header-only message fetches its body through the owning account"
     const request = c.requests.find(request => request.method === "ensure_body");
     assert.deepEqual(Object.keys(JSON.parse(request.config).accounts), ["work"]);
     assert.equal(new URL(c.urls[0]).searchParams.get("host"), "imap.two.example");
+});
+
+test("a cached message saves from the local store without the network", async () => {
+    const c = client("wss://relay.example/", accounts.home, {
+        reply: (request, result) => request.method === "raw"
+            ? { filename: "Lunch.eml", mime_type: "message/rfc822", data: btoa("Subject: Lunch\r\n\r\nhi") }
+            : result,
+    });
+    const file = await c.hostedFile({ id: "m1", body: { content: "hi" } });
+    assert.equal(file.filename, "Lunch.eml");
+    assert.equal(await file.blob.text(), "Subject: Lunch\r\n\r\nhi");
+    assert.deepEqual(c.requests.map(r => r.method), ["raw"], "no body fetch for a body already here");
+    assert.equal(c.urls.length, 0);
+});
+
+test("an attachment that could run is opened as a download, not a page", async () => {
+    const reply = (type) => (request, result) => request.method === "attachment"
+        ? { filename: "x", mime_type: type, data: btoa("<script>1</script>") }
+        : result;
+    for (const [type, opened] of [
+        ["text/html", "application/octet-stream"],
+        ["image/svg+xml", "application/octet-stream"],
+        ["application/pdf", "application/pdf"],
+    ]) {
+        const c = client("wss://relay.example/", accounts.home, { reply: reply(type) });
+        const created = [];
+        const original = URL.createObjectURL;
+        URL.createObjectURL = (blob) => { created.push(blob.type); return "blob:x"; };
+        try {
+            await c.hostedAttachmentUrl({ id: "m1", body: {} }, { part: "2" });
+        } finally {
+            URL.createObjectURL = original;
+        }
+        assert.deepEqual(created, [opened], type);
+    }
 });

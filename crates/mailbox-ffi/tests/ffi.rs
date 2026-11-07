@@ -423,3 +423,46 @@ fn add_account_does_not_discover_unless_asked() {
         "the error should name the domain: {err:?}"
     );
 }
+
+#[test]
+fn raw_and_attachment_hand_back_bytes_to_save() {
+    use base64::Engine as _;
+    let (_tmp, mb, id) = seeded();
+    let decode = |v: &Value| {
+        base64::engine::general_purpose::STANDARD
+            .decode(v["data"].as_str().unwrap())
+            .unwrap()
+    };
+
+    let raw = payload(
+        &mb.exec("raw", &serde_json::json!({ "id": id }).to_string())
+            .unwrap(),
+    );
+    assert_eq!(raw["command"], "raw");
+    assert_eq!(raw["filename"], "Invoice 42.eml");
+    assert_eq!(raw["mime_type"], "message/rfc822");
+    let bytes = decode(&raw);
+    assert!(String::from_utf8_lossy(&bytes).contains("Please pay"));
+
+    // A single-part message's body is part 1.
+    let part = payload(
+        &mb.exec(
+            "attachment",
+            &serde_json::json!({ "id": id, "part": "1" }).to_string(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(part["part"], "1");
+    assert!(String::from_utf8_lossy(&decode(&part)).contains("Please pay"));
+
+    let missing = mb
+        .exec(
+            "attachment",
+            &serde_json::json!({ "id": id, "part": "9" }).to_string(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        serde_json::to_value(&missing).unwrap()["error"]["code"],
+        "not_found"
+    );
+}

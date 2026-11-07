@@ -90,6 +90,9 @@ pub enum View {
     /// mean nothing without the URLs beside them, and a reader deciding whether
     /// to follow a link in mail needs to see where it goes first (§9).
     Links,
+    /// The open message's attachments, to save one. Never to open one: §9's
+    /// attachments are saved, and opened by whoever chooses to afterwards.
+    Attachments,
     Help,
 }
 
@@ -104,18 +107,28 @@ pub enum Prompt {
     Pipe(String),
     /// `z` — when the message should come back (§7).
     Snooze(String),
+    /// `S` — where to save it, prefilled with somewhere reasonable.
+    Save(String),
 }
 
 impl Prompt {
     pub fn text(&self) -> &str {
         match self {
-            Prompt::Search(t) | Prompt::Tag(t) | Prompt::Pipe(t) | Prompt::Snooze(t) => t,
+            Prompt::Search(t)
+            | Prompt::Tag(t)
+            | Prompt::Pipe(t)
+            | Prompt::Snooze(t)
+            | Prompt::Save(t) => t,
         }
     }
 
     fn text_mut(&mut self) -> &mut String {
         match self {
-            Prompt::Search(t) | Prompt::Tag(t) | Prompt::Pipe(t) | Prompt::Snooze(t) => t,
+            Prompt::Search(t)
+            | Prompt::Tag(t)
+            | Prompt::Pipe(t)
+            | Prompt::Snooze(t)
+            | Prompt::Save(t) => t,
         }
     }
 
@@ -125,6 +138,7 @@ impl Prompt {
             Prompt::Tag(_) => "tag:",
             Prompt::Pipe(_) => "|",
             Prompt::Snooze(_) => "snooze until:",
+            Prompt::Save(_) => "save to:",
         }
     }
 }
@@ -162,6 +176,29 @@ pub enum Effect {
     /// Put this on the clipboard. The shell owns the terminal, and the
     /// clipboard is reached through it (OSC 52).
     Copy(String),
+    /// Write a message or an attachment to a file, on a worker: the body may
+    /// have to be fetched first, and a keystroke never waits on a network.
+    Save(SaveRequest),
+}
+
+/// What `S` asked to have written, and where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveRequest {
+    pub id: String,
+    /// `None` for the whole message.
+    pub part: Option<String>,
+    /// Already safe; used when `path` names a directory.
+    pub filename: String,
+    /// As typed: a file, or a directory to put `filename` in.
+    pub path: String,
+}
+
+/// What the save prompt is for, kept while it is open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingSave {
+    id: String,
+    part: Option<String>,
+    filename: String,
 }
 
 /// A write the interface asked for.
@@ -241,6 +278,12 @@ pub struct App {
     pub no_accounts: bool,
     /// Which link is highlighted in [`View::Links`].
     pub link_selected: usize,
+    /// Which attachment is highlighted in [`View::Attachments`].
+    pub attachment_selected: usize,
+    /// Where the attachments view goes back to: the message, or the list it
+    /// was opened from.
+    attachments_return: View,
+    pending_save: Option<PendingSave>,
     /// The folders, for the pane that slides in from the left.
     pub folders: Vec<FolderRow>,
     pub folder_selected: usize,
@@ -278,6 +321,9 @@ impl App {
             repaint: false,
             no_accounts: false,
             link_selected: 0,
+            attachment_selected: 0,
+            attachments_return: View::List,
+            pending_save: None,
             folders: Vec::new(),
             folder_selected: 0,
             side: Side::None,
@@ -384,6 +430,15 @@ impl App {
             .as_ref()
             .and_then(|m| m.body.as_ref())
             .map(|b| b.links.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// The open message's attachments — the parts sent as files, which is
+    /// the same list the window shows, not every inline image.
+    pub fn attachments(&self) -> Vec<&mailbox_api::Attachment> {
+        self.open
+            .as_ref()
+            .map(|m| m.attachments.iter().filter(|a| a.is_attachment).collect())
             .unwrap_or_default()
     }
 
@@ -501,6 +556,7 @@ impl App {
             self.dirty = true;
         }
         self.prompt = None;
+        self.pending_save = None;
     }
 
     /// Accepts what was typed. Returns an effect for prompts that need one.
@@ -536,7 +592,58 @@ impl App {
                 None => Effect::None,
             },
             Prompt::Pipe(_) => Effect::None,
+            Prompt::Save(path) => match (self.pending_save.take(), path.trim()) {
+                (Some(pending), path) if !path.is_empty() => Effect::Save(SaveRequest {
+                    id: pending.id,
+                    part: pending.part,
+                    filename: pending.filename,
+                    path: path.to_string(),
+                }),
+                _ => Effect::None,
+            },
         }
+    }
+
+    /// Opens the save prompt for the message, or for the attachment under the
+    /// cursor when the attachments view is showing.
+    ///
+    /// Prefilled with a full path rather than left empty: the name is the
+    /// part worth not having to type, and the directory is what a browser
+    /// would have picked. Editing it is one backspace away.
+    fn start_save(&mut self) {
+        let pending = if self.view == View::Attachments {
+            let Some(id) = self.open.as_ref().map(|m| m.summary.id.clone()) else {
+                return;
+            };
+            let Some(part) = self.attachments().get(self.attachment_selected).copied() else {
+                self.status = "no attachment to save".to_string();
+                return;
+            };
+            PendingSave {
+                id,
+                filename: mailbox_core::attach::safe_filename(
+                    part.filename.as_deref().unwrap_or(&part.part),
+                ),
+                part: Some(part.part.clone()),
+            }
+        } else {
+            let subject = match (&self.open, self.view) {
+                (Some(detail), View::Message | View::Links) => Some(&detail.summary),
+                _ => self.current(),
+            }
+            .map(|m| m.subject.clone());
+            let (Some(id), Some(subject)) = (self.target_id(), subject) else {
+                return;
+            };
+            PendingSave {
+                id,
+                part: None,
+                filename: mailbox_core::attach::message_filename(&subject),
+            }
+        };
+        let path = mailbox_core::paths::downloads_dir().join(&pending.filename);
+        self.prompt = Some(Prompt::Save(path.display().to_string()));
+        self.pending_save = Some(pending);
     }
 
     /// The live search text, if a search prompt is open.
@@ -558,7 +665,7 @@ impl App {
                 // `q` in a sub-view goes back rather than quitting: losing a
                 // session because you wanted to close a message is the classic
                 // way to make people distrust a TUI.
-                View::Message | View::Thread | View::Links | View::Help => {
+                View::Message | View::Thread | View::Links | View::Attachments | View::Help => {
                     self.back();
                     Effect::None
                 }
@@ -694,6 +801,12 @@ impl App {
             }
 
             Action::Open => {
+                // Enter on an attachment is "save this", since opening one is
+                // the thing §9 will not do on anyone's behalf.
+                if self.view == View::Attachments {
+                    self.start_save();
+                    return Effect::None;
+                }
                 if self.view == View::Links {
                     return match self.links().get(self.link_selected) {
                         Some(url) => Effect::OpenUrl(url.clone()),
@@ -748,6 +861,31 @@ impl App {
                     self.link_selected = 0;
                     self.view = View::Links;
                 }
+                Effect::None
+            }
+
+            // The shell loads the message first when only the list was
+            // showing, so `open` is the message under the cursor here.
+            Action::Attachments => {
+                if self.view == View::Attachments {
+                    self.back();
+                } else if self.open.is_none() {
+                    // Nothing to look at, which only happens on an empty list.
+                } else if self.attachments().is_empty() {
+                    self.status = "no attachments in this message".to_string();
+                    self.forget_unless_shown();
+                } else {
+                    self.attachments_return = match self.view {
+                        View::Message | View::Links => View::Message,
+                        _ => View::List,
+                    };
+                    self.attachment_selected = 0;
+                    self.view = View::Attachments;
+                }
+                Effect::None
+            }
+            Action::Save => {
+                self.start_save();
                 Effect::None
             }
 
@@ -818,6 +956,10 @@ impl App {
             View::Links => {
                 self.view = View::Message;
             }
+            View::Attachments => {
+                self.view = self.attachments_return;
+                self.forget_unless_shown();
+            }
             // The help overlays whatever was underneath it, and leaves it
             // there.
             View::Help => {
@@ -836,6 +978,14 @@ impl App {
                     self.dirty = true;
                 }
             }
+        }
+    }
+
+    /// Drops a message loaded only so its attachments could be listed. One
+    /// the preview is showing stays, since the preview is still showing it.
+    fn forget_unless_shown(&mut self) {
+        if self.view == View::List && self.side != Side::Preview {
+            self.open = None;
         }
     }
 
@@ -910,6 +1060,12 @@ impl App {
             self.link_selected = next.clamp(0, links as isize - 1) as usize;
             return;
         }
+        if self.view == View::Attachments {
+            let count = self.attachments().len();
+            let next = self.attachment_selected as isize + delta;
+            self.attachment_selected = next.clamp(0, count.saturating_sub(1) as isize) as usize;
+            return;
+        }
         if self.messages.is_empty() {
             self.selected = 0;
             return;
@@ -970,7 +1126,7 @@ impl App {
     /// The same choice as [`App::target`], as a plain id.
     pub fn target_id(&self) -> Option<String> {
         match (&self.open, self.view) {
-            (Some(detail), View::Message) => Some(detail.summary.id.clone()),
+            (Some(detail), View::Message | View::Attachments) => Some(detail.summary.id.clone()),
             _ => self.current_id(),
         }
     }

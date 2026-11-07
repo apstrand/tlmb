@@ -322,6 +322,22 @@ impl Workspace {
         self.accounts[i].raw(&IdRef::Id(id))
     }
 
+    /// [`Session::message_file`], for whichever account has the message.
+    pub fn message_file(&mut self, id_ref: &IdRef) -> Result<crate::session::SaveFile> {
+        let (i, id) = self.locate(id_ref)?;
+        self.accounts[i].message_file(&id)
+    }
+
+    /// [`Session::attachment_file`], for whichever account has the message.
+    pub fn attachment_file(
+        &mut self,
+        id_ref: &IdRef,
+        part: &str,
+    ) -> Result<crate::session::SaveFile> {
+        let (i, id) = self.locate(id_ref)?;
+        self.accounts[i].attachment_file(&id, part)
+    }
+
     /// Routes each message to the account that owns it, then applies the write.
     ///
     /// Grouping by account rather than looping one message at a time keeps a

@@ -42,7 +42,7 @@ Cross-compiling the Rust staticlib needs the Darwin SDK sysroot; cc-rs shells
 out to `xcrun` otherwise:
 
 ```sh
-export SDKROOT=$(swift sdk configure --show-configuration darwin aarch64-apple-ios \
+export SDKROOT=$(swift sdk configure --show-configuration darwin arm64-apple-ios \
   | sed -n 's/^sdkRootPath: //p')
 export IPHONEOS_DEPLOYMENT_TARGET=18.0
 export CC_aarch64_apple_ios=clang AR_aarch64_apple_ios=llvm-ar

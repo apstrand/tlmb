@@ -14,6 +14,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod c;
 
+use base64::Engine as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -358,6 +359,21 @@ impl Mailbox {
         Ok(json!({ "fetched": fetched }))
     }
 
+    /// The message as the server sent it, for saving as an `.eml` file.
+    ///
+    /// Bytes cross the JSON boundary as base64. `filename` is already safe
+    /// to write (§9): the shell still asks where, but not what to call it.
+    pub fn raw(&self, id: &str) -> Result<Value> {
+        let file = self.with_ws_mut(|ws| ws.message_file(&IdRef::Id(id.to_string())))?;
+        Ok(file_json(id, None, file))
+    }
+
+    /// One MIME part's decoded bytes, fetching the message first if need be.
+    pub fn attachment(&self, id: &str, part: &str) -> Result<Value> {
+        let file = self.with_ws_mut(|ws| ws.attachment_file(&IdRef::Id(id.to_string()), part))?;
+        Ok(file_json(id, Some(part), file))
+    }
+
     pub fn send(&self, args: SendArgs) -> Result<Value> {
         let from = match args
             .from
@@ -671,6 +687,14 @@ impl Mailbox {
                 let a: IdArgs = serde_from_value(args)?;
                 Ok(("show", self.ensure_body(&a.id)?))
             }
+            "raw" => {
+                let a: IdArgs = serde_from_value(args)?;
+                Ok(("raw", self.raw(&a.id)?))
+            }
+            "attachment" => {
+                let a: PartArgs = serde_from_value(args)?;
+                Ok(("attachment", self.attachment(&a.id, &a.part)?))
+            }
             "send" => {
                 let a: SendArgs = serde_from_value(args)?;
                 Ok(("send", self.send(a)?))
@@ -713,6 +737,19 @@ impl Mailbox {
             other => Err(Error::usage(format!("unknown method `{other}`"))),
         }
     }
+}
+
+fn file_json(id: &str, part: Option<&str>, file: mailbox_core::session::SaveFile) -> Value {
+    let mut reply = json!({
+        "id": id,
+        "filename": file.filename,
+        "mime_type": file.mime_type,
+        "data": base64::engine::general_purpose::STANDARD.encode(file.bytes),
+    });
+    if let Some(part) = part {
+        reply["part"] = json!(part);
+    }
+    reply
 }
 
 fn serde_from_value<T: for<'de> Deserialize<'de>>(v: Value) -> Result<T> {
@@ -789,6 +826,12 @@ struct IdsArgs {
 #[derive(Debug, Deserialize)]
 struct IdArgs {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PartArgs {
+    id: String,
+    part: String,
 }
 
 #[derive(Debug, Deserialize)]

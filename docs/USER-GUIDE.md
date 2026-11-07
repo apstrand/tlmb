@@ -53,9 +53,31 @@ is saved as `[gui]` `swipe_left` and `swipe_right` in `config.toml`. The iPhone
 app has the same choice under **Accounts**.
 
 The action row above a message has the unsurprising operations: mark read or
-unread, flag, reply, archive, delete, spam, and snooze. Archive, delete, and
+unread, flag, reply, archive, delete, spam, save, and snooze. Archive, delete, and
 spam move the message to the server folder carrying that role; if a server has
 several, choose one with `mailbox folders prefer`.
+
+## Save messages and attachments
+
+**Save** in the action row, or **Save as…** when you right-click a message in the
+list, writes the whole message as an `.eml` file named after its subject. Any
+mail program can open that file, and it contains exactly what the server sent.
+Right-click an attachment and choose **Save as…** to save just that file.
+
+The desktop app asks where to put the file with the system's save dialog. A
+browser saves to its usual downloads folder. On the iPhone, tap an attachment,
+or choose **Save message** from the **⋯** menu, then pick a place in Files.
+
+Attachments are only ever saved, never opened for you. The name the sender
+chose is cleaned before the file is written, so it cannot point outside the
+folder you picked. An extension that a double-click would run, such as `.exe`
+or `.sh`, also gets `.bin` added to the end.
+
+In the terminal interface, `S` saves the open message and asks where,
+suggesting your Downloads folder. `v` lists the message's attachments; choose
+one and press Enter to save it. A path you type is never written over an
+existing file. A folder gets the suggested name, numbered if that name is
+already taken.
 
 ## Write mail
 
@@ -83,7 +105,8 @@ next one moves up into its place. `f` flags, `W` toggles read, `u` undoes the
 last move.
 
 The others worth remembering are `j`/`k` to move, `r` to reply, `F` to
-forward, `m` to write, `/` to search, and `@` to sync. The terminal interface
+forward, `m` to write, `/` to search, and `@` to sync. In the terminal, `S`
+saves a message and `v` lists its attachments. The terminal interface
 uses the same letters. Keys do nothing while you are typing in a field, which
 saves a surprising amount of grief.
 

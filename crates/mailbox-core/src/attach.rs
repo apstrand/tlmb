@@ -58,10 +58,9 @@ pub fn safe_filename(raw: &str) -> String {
     if cleaned.is_empty() {
         cleaned = "attachment".to_string();
     }
-    // Long enough for any real name, short enough for every filesystem.
-    if cleaned.len() > 200 {
-        cleaned.truncate(200);
-    }
+    // Long enough for any real name, short enough for every filesystem — and
+    // cut on a character, not a byte, or a long non-ASCII name panics here.
+    truncate_chars(&mut cleaned, 200);
 
     // A dangerous extension is suffixed rather than stripped: the user can
     // still tell what it was, and can still rename it deliberately, but a
@@ -74,6 +73,36 @@ pub fn safe_filename(raw: &str) -> String {
         cleaned.push_str(".bin");
     }
     cleaned
+}
+
+/// What a saved message is called: its subject, as an `.eml` file.
+///
+/// `.eml` because that is what every mail client and most desktops open as a
+/// message, and the bytes are exactly RFC 5322 — what the server sent. The
+/// subject is cut short first, so a long one cannot push the extension off
+/// the end of [`safe_filename`]'s limit.
+pub fn message_filename(subject: &str) -> String {
+    let mut stem: String = subject
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    truncate_chars(&mut stem, 120);
+    let stem = stem.trim_end_matches(['.', ' ']);
+    let stem = if stem.is_empty() { "message" } else { stem };
+    safe_filename(&format!("{stem}.eml"))
+}
+
+fn truncate_chars(s: &mut String, max_bytes: usize) {
+    if s.len() > max_bytes {
+        let mut end = max_bytes;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
 }
 
 /// Where an extracted part should be written, without overwriting anything.
@@ -98,6 +127,40 @@ pub fn destination(dir: &Path, filename: &str) -> PathBuf {
         }
     }
     dir.join(format!("{stem}-{}{extension}", std::process::id()))
+}
+
+/// Where a typed save path really points.
+///
+/// A directory — one that exists, or anything ending in `/` — gets
+/// `filename` inside it, with [`destination`]'s counter on a collision. A
+/// file path is taken as it is, but never over a file already there: the
+/// prompt that asked was a line of text, not a dialog that warned. `~/` is
+/// the home directory, as it is everywhere else someone types a path.
+pub fn save_target(typed: &str, filename: &str) -> Result<PathBuf> {
+    let typed = typed.trim();
+    let path = match typed
+        .strip_prefix("~/")
+        .or(if typed == "~" { Some("") } else { None })
+    {
+        Some(rest) => match std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+            Some(home) => PathBuf::from(home).join(rest),
+            None => return Err(Error::usage("there is no home directory to put it in")),
+        },
+        None => PathBuf::from(typed),
+    };
+    if typed.ends_with('/') || path.is_dir() {
+        if !path.is_dir() {
+            return Err(Error::not_found("directory", path.display().to_string()));
+        }
+        return Ok(destination(&path, filename));
+    }
+    if path.exists() {
+        return Err(Error::usage(format!(
+            "{} already exists — give it another name",
+            path.display()
+        )));
+    }
+    Ok(path)
 }
 
 /// Writes an extracted part, with the executable bit cleared (§9).
@@ -127,4 +190,46 @@ fn clear_executable_bit(path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn clear_executable_bit(_path: &Path) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_name_is_cut_on_a_character() {
+        let name = format!("{}.pdf", "å".repeat(150));
+        let safe = safe_filename(&name);
+        assert!(safe.len() <= 200);
+        assert!(safe.starts_with('å'));
+    }
+
+    #[test]
+    fn a_typed_path_is_a_file_or_a_directory_and_never_clobbers() {
+        let dir = std::env::temp_dir().join(format!("mailbox-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let typed = dir.display().to_string();
+
+        assert_eq!(save_target(&typed, "a.eml").unwrap(), dir.join("a.eml"));
+        assert_eq!(
+            save_target(&format!("{typed}/b.txt"), "a.eml").unwrap(),
+            dir.join("b.txt")
+        );
+        std::fs::write(dir.join("a.eml"), b"x").unwrap();
+        assert_eq!(save_target(&typed, "a.eml").unwrap(), dir.join("a-1.eml"));
+        assert!(save_target(&format!("{typed}/a.eml"), "a.eml").is_err());
+        assert!(save_target(&format!("{typed}/nope/"), "a.eml").is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_message_is_named_for_its_subject() {
+        assert_eq!(message_filename("Re: Lunch?"), "Re_ Lunch_.eml");
+        assert_eq!(message_filename("  \t "), "message.eml");
+        assert_eq!(message_filename("../../etc/passwd"), "passwd.eml");
+        assert_eq!(message_filename("two\r\nlines"), "two lines.eml");
+        let long = message_filename(&"ö".repeat(300));
+        assert!(long.ends_with(".eml") && long.len() <= 200, "{long}");
+    }
 }

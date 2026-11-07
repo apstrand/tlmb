@@ -17,8 +17,8 @@ use std::io::{IsTerminal, Write};
 
 use crate::cli::{
     AccountsAction, AccountsArgs, AttachArgs, DebugAction, DebugArgs, FixtureAction, FlagArgs,
-    FoldersAction, FoldersArgs, Format, GlobalFlags, LsArgs, MoveArgs, NotifyArgs, SchemaArgs,
-    SearchArgs, ShowArgs, SyncArgs, TargetArgs,
+    FoldersAction, FoldersArgs, Format, GlobalFlags, LsArgs, MoveArgs, NotifyArgs, SaveArgs,
+    SchemaArgs, SearchArgs, ShowArgs, SyncArgs, TargetArgs,
 };
 use crate::format;
 use crate::output::{maybe_page, Out, GREEN, YELLOW};
@@ -356,6 +356,63 @@ pub fn attach(ctx: &Ctx<'_>, args: &AttachArgs) -> Result<()> {
                 format::human_size(w.bytes),
             ));
         }
+    }
+    Ok(())
+}
+
+/// `mailbox save <id>`: the message as the server sent it, in an `.eml` file.
+pub fn save(ctx: &Ctx<'_>, args: &SaveArgs) -> Result<()> {
+    let id_ref = IdRef::parse(&args.id);
+    ctx.warn_if_positional(&id_ref);
+
+    let (account, id) = {
+        let workspace = ctx.workspace()?;
+        let (index, id) = workspace.locate(&id_ref)?;
+        (workspace.sessions()[index].account_id.clone(), id)
+    };
+    let mut opts = ctx.opts.clone();
+    opts.account = Some(account);
+    opts.read_only = args.offline;
+    let mut session = Session::open(&opts, ctx.tracer.clone(), ctx.clock.clone())?;
+    if !args.offline {
+        session.ensure_body(&id)?;
+    }
+    let raw = session.raw(&IdRef::Id(id.clone()))?;
+
+    if args.out.as_os_str() == "-" {
+        use std::io::Write;
+        std::io::stdout().write_all(&raw)?;
+        return Ok(());
+    }
+    let target = if args.out.is_dir() {
+        let subject = session
+            .store()
+            .message(&id, &Default::default())?
+            .summary
+            .subject;
+        mailbox_core::attach::destination(
+            &args.out,
+            &mailbox_core::attach::message_filename(&subject),
+        )
+    } else {
+        args.out.clone()
+    };
+    mailbox_core::attach::write(&target, &raw)?;
+
+    let saved = mailbox_api::SavedMessage {
+        id,
+        path: target.display().to_string(),
+        bytes: raw.len() as u64,
+    };
+    if ctx.out.is_structured() {
+        ctx.out.reply("save", &saved)?;
+    } else {
+        ctx.out.print(format!(
+            "{} {} ({})",
+            ctx.out.paint("✓", GREEN),
+            saved.path,
+            format::human_size(saved.bytes),
+        ));
     }
     Ok(())
 }
@@ -1883,8 +1940,8 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
     let Some(command) = &args.command else {
         let commands = [
             "ls", "search", "show", "folders", "accounts", "sync", "status", "snooze", "watch",
-            "flag", "mv", "cp", "rm", "archive", "spam", "attach", "send", "compose", "reply",
-            "outbox", "notify", "error",
+            "flag", "mv", "cp", "rm", "archive", "spam", "attach", "save", "send", "compose",
+            "reply", "outbox", "notify", "error",
         ];
         if ctx.out.is_structured() {
             ctx.out
@@ -1912,6 +1969,7 @@ pub fn schema(ctx: &Ctx<'_>, args: &SchemaArgs) -> Result<()> {
             schemars::schema_for!(Reply<WriteResult>)
         }
         "attach" => schemars::schema_for!(Reply<AttachmentList>),
+        "save" => schemars::schema_for!(Reply<SavedMessage>),
         "notify" => schemars::schema_for!(Reply<NotifyStatus>),
         "error" => schemars::schema_for!(ErrorResponse),
         other => {

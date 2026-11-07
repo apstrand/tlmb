@@ -152,6 +152,15 @@ pub struct WriteRecord {
     pub changed: bool,
 }
 
+/// `save` payload: a whole message, written out as an `.eml` file.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SavedMessage {
+    pub id: String,
+    /// Where it was written. Exactly the RFC 5322 bytes the server sent.
+    pub path: String,
+    pub bytes: u64,
+}
+
 /// `attach` payload: what a message carries, or what was written out.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AttachmentList {

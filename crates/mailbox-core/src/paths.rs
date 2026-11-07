@@ -25,6 +25,23 @@ pub fn config_dir() -> PathBuf {
     xdg("XDG_CONFIG_HOME", ".config").join("mailbox")
 }
 
+/// Where a saved message or attachment goes when nobody chose a place.
+///
+/// `$XDG_DOWNLOAD_DIR`, else `~/Downloads` when there is one, else the
+/// current directory — the last because a terminal user is already
+/// somewhere, and that is where `attach --extract` writes too.
+pub fn downloads_dir() -> PathBuf {
+    if let Some(p) = env_path("XDG_DOWNLOAD_DIR").filter(|p| p.is_dir()) {
+        return p;
+    }
+    if let Some(home) = env_path("HOME").map(|h| h.join("Downloads")) {
+        if home.is_dir() {
+            return home;
+        }
+    }
+    PathBuf::from(".")
+}
+
 /// Relocates every per-account path for this process.
 ///
 /// `SessionOptions.state_dir` is how the mobile shells point the store at the

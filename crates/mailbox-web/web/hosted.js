@@ -574,3 +574,40 @@ export function hostedBodyUrl(message, images) {
         `<meta http-equiv="Content-Security-Policy" content="${policy}">` + html;
     return URL.createObjectURL(new Blob([bodyDocument], { type: "text/html" }));
 }
+
+/**
+ * A message's bytes, or one part's, as a file to save.
+ *
+ * The body is fetched first if it is not here yet — through the owning
+ * account's relay, as opening the message would — and then the core reads it
+ * out of the local store. `filename` comes back already safe (§9).
+ */
+export async function hostedFile(message, part) {
+    if (!message.body) await fetchBody({ id: message.id });
+    const reply = part
+        ? await core("attachment", { id: message.id, part })
+        : await core("raw", { id: message.id });
+    const bytes = Uint8Array.from(atob(reply.data), (c) => c.charCodeAt(0));
+    return {
+        filename: reply.filename,
+        mime_type: reply.mime_type,
+        blob: new Blob([bytes], { type: reply.mime_type }),
+    };
+}
+
+// Types a browser shows without running anything. Everything else is opened
+// as a download: a blob URL has this page's origin, so an HTML or SVG
+// attachment opened as itself would run with the page's privileges — the
+// thing §9 puts message bodies in a sandboxed frame to prevent.
+const INERT = new Set([
+    "application/pdf", "text/plain", "image/png", "image/jpeg", "image/gif", "image/webp",
+]);
+
+/** An attachment as something a new tab can open. */
+export async function hostedAttachmentUrl(message, part) {
+    const file = await hostedFile(message, part.part);
+    const type = INERT.has(file.mime_type.toLowerCase()) ? file.mime_type : "application/octet-stream";
+    const url = URL.createObjectURL(new Blob([file.blob], { type }));
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return url;
+}

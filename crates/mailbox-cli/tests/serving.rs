@@ -690,6 +690,36 @@ fn an_attachment_is_served_as_a_download() {
     );
 }
 
+/// "Save" on a message: the bytes the server sent, as a download named for
+/// the subject, and only to the page that holds the cookie.
+#[test]
+fn a_message_is_saved_as_an_eml_download() {
+    let s = Serving::start();
+    let id = s.id_of("Second");
+    let cookie = format!("Cookie: mailbox_token={}\r\n", s.token);
+
+    let (status, head, body) = s.get(&format!("/raw?id={id}"), &cookie);
+    assert_eq!(status, 200, "{head}");
+    assert!(
+        body.contains("Subject: Second"),
+        "not the raw message: {body}"
+    );
+    assert!(
+        body.contains("the quick brown fox") || body.contains("dGhlIHF1aWNr"),
+        "{body}"
+    );
+    assert!(head.contains("Content-Type: message/rfc822"), "{head}");
+    assert!(
+        head.contains("Content-Disposition: attachment; filename=\"Second.eml\""),
+        "{head}"
+    );
+
+    let (status, _, _) = s.get("/raw?id=nosuchmessage", &cookie);
+    assert_eq!(status, 404);
+    let (status, _, _) = s.get(&format!("/raw?id={id}"), "");
+    assert_ne!(status, 200, "a message was served without authorisation");
+}
+
 /// A part nobody has is a 404, not a 500 and not someone else's bytes.
 #[test]
 fn an_attachment_that_is_not_there_is_refused() {

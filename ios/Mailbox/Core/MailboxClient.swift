@@ -109,6 +109,15 @@ final class MailboxClient: @unchecked Sendable {
         let _: Envelope = try decode("ensure_body", ["id": id])
     }
 
+    /// A message (`part` nil) or one attachment, as a file to save. Fetches
+    /// the body first if it is not here yet; `filename` is already safe.
+    func file(id: String, part: String? = nil) throws -> SaveableFile {
+        if let part {
+            return try decode("attachment", ["id": id, "part": part])
+        }
+        return try decode("raw", ["id": id])
+    }
+
     func listAccounts() throws -> [Account] {
         (try decode("accounts", [:]) as AccountsReply).accounts
     }

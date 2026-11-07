@@ -301,6 +301,8 @@ impl Inner {
                     // Navigated to, like the body: a download is handed to the
                     // browser rather than read by the page.
                     api::attachment(request, &self.session, &self.tracer, &self.clock)
+                } else if request.path == "/raw" {
+                    api::raw_message(request, &self.session, &self.tracer, &self.clock)
                 } else {
                     assets::serve(&request.path, self.token.as_deref(), self.setup_allowed)
                 };

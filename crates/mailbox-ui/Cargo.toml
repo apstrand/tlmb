@@ -32,3 +32,4 @@ soup3 = "0.5"
 # portal is the supported way to update one (see `update.rs`).
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"

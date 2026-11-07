@@ -559,6 +559,57 @@ fn attach_lists_and_extracts_from_a_lazily_fetched_message() {
     );
 }
 
+/// `save` writes the message exactly as the server sent it, named for its
+/// subject, fetching it first if it has to — and never over another file.
+#[test]
+fn save_writes_the_raw_message_beside_any_earlier_copy() {
+    let w = World::three();
+    w.set_offline("none");
+    assert_eq!(w.sync().status, 0);
+
+    let (id, subject) = {
+        let run = w.run(&["--json", "ls", "-n", "1"]);
+        let v: serde_json::Value = serde_json::from_str(&run.stdout).expect("JSON");
+        let m = &v["messages"][0];
+        (
+            m["id"].as_str().unwrap().to_string(),
+            m["subject"].as_str().unwrap().to_string(),
+        )
+    };
+    let out = w.dir.join("saved");
+    std::fs::create_dir(&out).unwrap();
+    let out_arg = out.display().to_string();
+
+    let first = w.run(&["--json", "save", &id, "-o", &out_arg]);
+    assert_eq!(first.status, 0, "{}", first.stderr);
+    assert_eq!(
+        w.bodies_cached(),
+        1,
+        "saving fetched the body it did not have"
+    );
+    let v: serde_json::Value = serde_json::from_str(&first.stdout).expect("JSON");
+    let path = PathBuf::from(v["path"].as_str().unwrap());
+    assert_eq!(
+        path.file_name().unwrap().to_string_lossy(),
+        mailbox_core::attach::message_filename(&subject)
+    );
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("Body of"));
+    assert_eq!(v["bytes"], bytes.len() as u64);
+
+    let second = w.run(&["--json", "save", &id, "-o", &out_arg, "--offline"]);
+    assert_eq!(second.status, 0, "{}", second.stderr);
+    let v: serde_json::Value = serde_json::from_str(&second.stdout).expect("JSON");
+    assert_ne!(
+        PathBuf::from(v["path"].as_str().unwrap()),
+        path,
+        "overwrote the first copy"
+    );
+
+    let piped = w.run(&["save", &id, "-o", "-", "--offline"]);
+    assert_eq!(piped.stdout.as_bytes(), bytes.as_slice());
+}
+
 // ---- M3: desktop notifications (§11) ----
 
 impl World {

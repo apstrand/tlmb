@@ -146,6 +146,9 @@ pub enum Command {
     /// List or extract a message's attachments.
     Attach(AttachArgs),
 
+    /// Save a whole message as an `.eml` file.
+    Save(SaveArgs),
+
     /// Set a message aside until later (§7).
     Snooze(SnoozeArgs),
 
@@ -464,6 +467,19 @@ pub struct AttachArgs {
     /// Extract every attachment, not just one part.
     #[arg(long, conflicts_with = "part")]
     pub all: bool,
+    /// Never fetch from the server; use only what is cached.
+    #[arg(long)]
+    pub offline: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SaveArgs {
+    /// A message id, an unambiguous prefix, `^`, `@`, or a listing index.
+    pub id: String,
+    /// Where to write it: a directory, where it is named for its subject and
+    /// never overwrites anything, or a file path. `-` writes to stdout.
+    #[arg(long, short = 'o', default_value = ".")]
+    pub out: std::path::PathBuf,
     /// Never fetch from the server; use only what is cached.
     #[arg(long)]
     pub offline: bool,
