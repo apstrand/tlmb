@@ -195,6 +195,189 @@ impl Tracker {
     pub fn installed(&mut self) {
         self.status = Status::Ready;
     }
+
+    /// What the Flatpak repository's summary said its build is, against the
+    /// build this process runs.
+    ///
+    /// Only an answer to "is there something to install": it does not
+    /// overrule an install under way, or one already waiting for a restart.
+    pub fn checked(&mut self, running: &str, remote: &str) {
+        if matches!(self.status, Status::Installing { .. } | Status::Ready) {
+            return;
+        }
+        self.status = if remote != running {
+            Status::Available
+        } else {
+            Status::Current
+        };
+    }
+}
+
+/// Asking the Flatpak repository directly, for "Check for updates".
+///
+/// The portal's update monitor cannot be asked: it looks on its own timer and
+/// only speaks when something moved since it last looked, so for the first
+/// stretch after the window opens — and for good, when nothing is newer — it
+/// says nothing at all. Without this, the about box's button had nothing to
+/// go on but that silence, and called it "the newest version".
+///
+/// The repository's `summary` names the commit each ref points at, and
+/// `/.flatpak-info` names the commit this process runs; different means
+/// newer, since the repository only moves forward. This only reads. The
+/// install still goes through the portal, which checks the signatures.
+#[cfg(target_os = "linux")]
+pub mod repo {
+    use glib::{Variant, VariantTy};
+
+    /// The repository the release build publishes to, compiled in by
+    /// `packaging/flatpak/build.sh`. A local build has none the sandbox can
+    /// read (it is a `file://` path on the host), so it gets no manual check.
+    pub fn url() -> Option<&'static str> {
+        option_env!("MAILBOX_FLATPAK_REPO")
+            .map(|u| u.trim_end_matches('/'))
+            .filter(|u| u.starts_with("https://"))
+    }
+
+    /// The build this process runs: its ref and its commit.
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Running {
+        pub ref_: String,
+        pub commit: String,
+    }
+
+    /// Reads `/.flatpak-info`.
+    pub fn running() -> Option<Running> {
+        parse_info(&std::fs::read_to_string("/.flatpak-info").ok()?)
+    }
+
+    fn parse_info(text: &str) -> Option<Running> {
+        let info = glib::KeyFile::new();
+        info.load_from_data(text, glib::KeyFileFlags::NONE).ok()?;
+        let get = |group: &str, key: &str| info.string(group, key).ok().map(String::from);
+        Some(Running {
+            ref_: format!(
+                "app/{}/{}/{}",
+                get("Application", "name")?,
+                get("Instance", "arch")?,
+                get("Instance", "branch")?
+            ),
+            commit: get("Instance", "app-commit")?,
+        })
+    }
+
+    /// The commit `ref_` points at in an OSTree summary file.
+    ///
+    /// The summary is `(a(s(taya{sv}))a{sv})`: a list of refs, each with the
+    /// commit's size, its checksum and metadata, then the repository's own.
+    pub fn summary_commit(summary: &[u8], ref_: &str) -> Option<String> {
+        let ty = VariantTy::new("(a(s(taya{sv}))a{sv})").ok()?;
+        let summary = Variant::from_data_with_type(summary, ty);
+        if !summary.is_normal_form() {
+            // Untrusted bytes off the network: read nothing from a summary
+            // GVariant had to repair.
+            return None;
+        }
+        let refs = summary.child_value(0);
+        (0..refs.n_children()).find_map(|i| {
+            let entry = refs.child_value(i);
+            if entry.child_value(0).str()? != ref_ {
+                return None;
+            }
+            let checksum = entry.child_value(1).child_value(1);
+            let bytes = checksum.fixed_array::<u8>().ok()?;
+            (bytes.len() == 32).then(|| bytes.iter().map(|b| format!("{b:02x}")).collect())
+        })
+    }
+
+    /// Fetches the summary and says which commit the repository offers.
+    ///
+    /// Blocking: run it off the main loop. A session of its own, made and
+    /// used on this thread, which is how libsoup allows a sync request.
+    pub fn fetch(url: &str, ref_: &str) -> Result<String, String> {
+        use soup::prelude::*;
+        let session = soup::Session::new();
+        session.set_timeout(20);
+        session.set_user_agent(concat!("mailbox/", env!("CARGO_PKG_VERSION")));
+        let message =
+            soup::Message::new("GET", &format!("{url}/summary")).map_err(|e| e.to_string())?;
+        let body = session
+            .send_and_read(&message, gio::Cancellable::NONE)
+            .map_err(|e| e.message().to_string())?;
+        if message.status() != soup::Status::Ok {
+            use glib::translate::IntoGlib;
+            return Err(format!(
+                "the update server answered {}",
+                message.status().into_glib()
+            ));
+        }
+        summary_commit(&body, ref_)
+            .ok_or_else(|| "the update server does not list this app".to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use glib::ToVariant;
+
+        fn summary(refs: &[(&str, [u8; 32])]) -> Vec<u8> {
+            let empty = glib::VariantDict::new(None).end();
+            let refs = refs.iter().map(|(name, checksum)| {
+                Variant::tuple_from_iter([
+                    name.to_variant(),
+                    Variant::tuple_from_iter([
+                        0u64.to_variant(),
+                        Variant::array_from_fixed_array(checksum),
+                        empty.clone(),
+                    ]),
+                ])
+            });
+            let refs =
+                Variant::array_from_iter_with_type(VariantTy::new("(s(taya{sv}))").unwrap(), refs);
+            Variant::tuple_from_iter([refs, empty.clone()])
+                .data()
+                .to_vec()
+        }
+
+        #[test]
+        fn the_summary_names_the_commit_of_the_ref_asked_for() {
+            let bytes = summary(&[
+                ("appstream/x86_64", [1; 32]),
+                ("app/com.example/x86_64/stable", [0xab; 32]),
+            ]);
+            assert_eq!(
+                summary_commit(&bytes, "app/com.example/x86_64/stable").as_deref(),
+                Some("ab".repeat(32).as_str())
+            );
+            assert_eq!(
+                summary_commit(&bytes, "app/com.example/aarch64/stable"),
+                None
+            );
+        }
+
+        #[test]
+        fn a_summary_that_is_not_one_says_nothing() {
+            assert_eq!(
+                summary_commit(b"<html>not found</html>", "app/x/x86_64/stable"),
+                None
+            );
+            assert_eq!(summary_commit(b"", "app/x/x86_64/stable"), None);
+        }
+
+        #[test]
+        fn the_running_build_comes_from_flatpak_info() {
+            let info =
+                "[Application]\nname=com.example\nruntime=runtime/org.gnome.Platform/x86_64/50\n\n\
+                        [Instance]\napp-commit=4e66\nbranch=stable\narch=x86_64\n";
+            assert_eq!(
+                parse_info(info),
+                Some(Running {
+                    ref_: "app/com.example/x86_64/stable".into(),
+                    commit: "4e66".into()
+                })
+            );
+            assert_eq!(parse_info("[Application]\nname=com.example\n"), None);
+        }
+    }
 }
 
 /// Updating where there is no portal: macOS and Windows.
@@ -733,6 +916,27 @@ mod tests {
         );
         t.installing();
         assert_eq!(t.status(), &Status::Installing { percent: 0 });
+    }
+
+    #[test]
+    fn a_checked_repository_says_whether_there_is_anything_to_install() {
+        let mut t = Tracker::watching();
+        t.checked("aaa", "bbb");
+        assert_eq!(t.status(), &Status::Available);
+        t.checked("bbb", "bbb");
+        assert_eq!(t.status(), &Status::Current);
+
+        let mut t = Tracker::watching();
+        t.installing();
+        t.checked("aaa", "aaa");
+        assert_eq!(t.status(), &Status::Installing { percent: 0 });
+        t.installed();
+        t.checked("aaa", "bbb");
+        assert_eq!(
+            t.status(),
+            &Status::Ready,
+            "already installed: restart, not install again"
+        );
     }
 
     #[test]

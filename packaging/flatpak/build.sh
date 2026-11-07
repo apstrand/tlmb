@@ -175,6 +175,10 @@ git_out() { (cd "$root" && git "$@" 2>/dev/null) || true; }
     printf "MAILBOX_BUILD_COMMIT_DATE='%s'\n" "$(git_out log -1 --format=%cI HEAD)"
     printf "MAILBOX_BUILD_TAG='%s'\n" "$(git_out describe --tags --exact-match HEAD)"
     printf "MAILBOX_BUILD_RELEASE='%s'\n" "$([[ $release == 1 ]] && echo 1 || echo 0)"
+    # Where "Check for updates" reads the repository's summary from. Only a
+    # release has one the sandbox can reach; a local repository is a path on
+    # the host, and that build leaves the checking to the portal.
+    printf "MAILBOX_FLATPAK_REPO='%s'\n" "$([[ $release == 1 ]] && echo "$url" || true)"
 } >"$work/build.env"
 
 # ---- the repository this build goes into ----

@@ -2520,9 +2520,9 @@ async function aboutCheck() {
         await updateAction();
         return;
     }
-    // Nothing pending, so go and look. The Flatpak portal watches on its own
-    // and `update_check` is a no-op there; where updates come from a signed
-    // manifest instead, this is the fetch that asks.
+    // Nothing pending, so go and look: `update_check` reads the Flatpak
+    // repository's summary, or the signed manifest elsewhere, and returns
+    // once it has the answer.
     el("about-update-note").textContent = "Checking…";
     try {
         await shellIpc.invoke("update_check");

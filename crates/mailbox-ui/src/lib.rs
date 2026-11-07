@@ -209,6 +209,10 @@ impl Updates {
                     *tracker.lock().unwrap_or_else(|e| e.into_inner()) =
                         update::Tracker::unsupported();
                 }
+                // Once as the window opens, as the manifest is on macOS: the
+                // portal may not say anything for half an hour.
+                let handle = app.clone();
+                tauri::async_runtime::spawn(check_repo(handle, tracker.clone(), false));
                 Updates { tracker, portal }
             }
             #[cfg(not(target_os = "linux"))]
@@ -268,24 +272,53 @@ fn update_install(app: AppHandle, updates: tauri::State<'_, Updates>) {
     let _ = (app, updates);
 }
 
-/// Asks again, for the about box's "Check for updates".
+/// Asks again, for the about box's "Check for updates", and returns once
+/// the answer is in, so the page can say what it found.
 ///
-/// The portal watches on its own and has nothing to be asked; a manifest has
-/// to be fetched, and this is the fetch.
+/// Where updates come from a signed manifest, this fetches it. In a Flatpak
+/// it reads the repository's summary: the portal watches too, but cannot be
+/// asked (see `update::repo`).
 #[tauri::command]
-fn update_check(app: AppHandle, updates: tauri::State<'_, Updates>) {
+async fn update_check(app: AppHandle) {
+    let tracker = app.state::<Updates>().tracker.clone();
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        let tracker = updates.tracker.clone();
-        let handle = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let pushed = handle.clone();
-            update::store::check(handle.clone(), tracker, move || push_update_status(&pushed))
-                .await;
-        });
+        let pushed = app.clone();
+        update::store::check(app, tracker, move || push_update_status(&pushed)).await;
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let _ = (app, updates);
+    #[cfg(target_os = "linux")]
+    if update::in_flatpak() {
+        check_repo(app, tracker, true).await;
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let _ = (app, tracker);
+}
+
+/// Compares the Flatpak repository's build with the running one.
+///
+/// A build with no repository to ask (a local one) and a sandbox without
+/// `/.flatpak-info` leave the status as the portal has it.
+#[cfg(target_os = "linux")]
+async fn check_repo(app: AppHandle, tracker: Arc<Mutex<update::Tracker>>, asked: bool) {
+    let (Some(url), Some(running)) = (update::repo::url(), update::repo::running()) else {
+        return;
+    };
+    let ref_ = running.ref_.clone();
+    let found = tauri::async_runtime::spawn_blocking(move || update::repo::fetch(url, &ref_))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    {
+        let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
+        match found {
+            Ok(remote) => t.checked(&running.commit, &remote),
+            // Offline as the window opens is not worth a red line in the
+            // status bar; offline when someone pressed the button is.
+            Err(e) if asked && matches!(t.status(), update::Status::Current) => t.failed(e),
+            Err(_) => {}
+        }
+    }
+    push_update_status(&app);
 }
 
 /// Starts the newest installed build and closes this one.

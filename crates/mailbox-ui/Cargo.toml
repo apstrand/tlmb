@@ -23,6 +23,9 @@ tauri = { version = "2", default-features = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = "0.18"
 glib = "0.18"
+# For "Check for updates": one GET of the repository's summary, through the
+# libsoup WebKitGTK already links.
+soup3 = "0.5"
 
 # Where there is no portal, updates come from a signed manifest beside the
 # release. Not on Linux: a Flatpak cannot replace its own files, and the

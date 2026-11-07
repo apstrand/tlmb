@@ -4,6 +4,8 @@ include!("src/commands.rs");
 
 fn main() {
     println!("cargo:rerun-if-changed=src/commands.rs");
+    // Compiled into `update::repo::url`.
+    println!("cargo:rerun-if-env-changed=MAILBOX_FLATPAK_REPO");
     // Declaring the app's commands is what lets a capability name them. The
     // window's page is loopback-served, so without one Tauri refuses them all.
     tauri_build::try_build(
