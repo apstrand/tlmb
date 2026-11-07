@@ -34,6 +34,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.23" date="2026-11-07">
+      <description>
+        <p>Makes PageUp/PageDown and C-f/C-b move a full page in the terminal
+        interface, both in the message list and in an open message, and
+        repaints the screen properly after returning from the editor.</p>
+      </description>
+    </release>
     <release version="0.1.22" date="2026-10-06">
       <description>
         <p>Opens the iOS app on a choice rather than a server form: set an
