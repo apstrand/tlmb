@@ -589,10 +589,23 @@ fn start_sync(opts: SessionOptions, tracer: Tracer, clock: Clock, tx: Sender<Upd
             .map(|result| {
                 let added: u32 = result.synced.iter().map(|r| r.messages_added).sum();
                 let removed: u32 = result.synced.iter().map(|r| r.messages_removed).sum();
-                match (added, removed) {
+                let summary = match (added, removed) {
                     (0, 0) => "up to date".to_string(),
                     (a, 0) => format!("{a} new"),
                     (a, r) => format!("{a} new, {r} gone"),
+                };
+                // An account that could not sync would otherwise read as
+                // "up to date" for as long as it keeps failing.
+                match result.errors.as_slice() {
+                    [] => summary,
+                    errors => format!(
+                        "{summary}; not synced: {}",
+                        errors
+                            .iter()
+                            .map(|e| format!("{} ({})", e.account, e.message))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                 }
             })
             .map_err(|e| e.to_string());

@@ -77,11 +77,126 @@ const post = (path, body) =>
 function fail(error) {
     el("error").textContent = String(error.message ?? error);
     el("status").textContent = "";
+    logActivity(String(error.message ?? error), { level: "error" });
 }
 
 function say(message) {
     el("status").textContent = message;
     el("error").textContent = "";
+}
+
+// ---- the activity log ----
+//
+// A line for each thing the client did that someone debugging it would want
+// to see happened: a sync and what it found, a send, an update check and its
+// answer, an error. Not the detail — that is `mailbox --trace` — just enough
+// to tell "nothing happened" from "it looked and found nothing". Kept in this
+// page's memory, because a log a mail client writes to disk is a list of who
+// wrote to whom.
+
+/** Enough for a day of background syncs; older lines fall off the top. */
+const LOG_LIMIT = 500;
+const logEntries = [];
+const LOG_OPEN_KEY = "mailbox.log.open";
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const clockTime = (date) =>
+    `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+
+/**
+ * Adds a line. `source` names what reported it when that is not this page —
+ * the desktop shell, for update checks it runs by itself.
+ */
+function logActivity(text, { level = "info", source = "", at = Date.now() } = {}) {
+    const entry = { at, level, source, text };
+    logEntries.push(entry);
+    const list = el("log-list");
+    if (logEntries.length > LOG_LIMIT) {
+        logEntries.shift();
+        list.firstElementChild?.remove();
+    }
+    const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
+    list.append(logRow(entry));
+    if (atBottom) list.scrollTop = list.scrollHeight;
+    if (level === "error" && el("log").hidden) el("log-toggle").classList.add("has-errors");
+}
+
+function logRow({ at, level, source, text }) {
+    const row = document.createElement("li");
+    if (level === "error") row.className = "is-error";
+    const time = document.createElement("time");
+    const date = new Date(at);
+    time.dateTime = date.toISOString();
+    time.textContent = clockTime(date);
+    row.append(time);
+    if (source) row.append(span("source", `[${source}]`));
+    row.append(document.createTextNode(text));
+    return row;
+}
+
+function logText() {
+    return logEntries
+        .map(({ at, level, source, text }) =>
+            `${new Date(at).toISOString()} ${level === "error" ? "ERROR " : ""}${source ? `[${source}] ` : ""}${text}`)
+        .join("\n");
+}
+
+function showLog(open) {
+    el("log").hidden = !open;
+    const toggle = el("log-toggle");
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.title = open ? "Hide the activity log" : "Show the activity log";
+    if (open) {
+        toggle.classList.remove("has-errors");
+        const list = el("log-list");
+        list.scrollTop = list.scrollHeight;
+    }
+    try { localStorage.setItem(LOG_OPEN_KEY, open ? "1" : "0"); } catch { /* private window */ }
+}
+
+el("log-toggle").addEventListener("click", () => showLog(el("log").hidden));
+el("log-clear").addEventListener("click", () => {
+    logEntries.length = 0;
+    el("log-list").replaceChildren();
+});
+el("log-copy").addEventListener("click", async () => {
+    try {
+        await navigator.clipboard.writeText(logText());
+        say("activity log copied");
+    } catch (e) {
+        fail(e);
+    }
+});
+try { if (localStorage.getItem(LOG_OPEN_KEY) === "1") showLog(true); } catch { /* private window */ }
+
+/** One line per account a sync pass reported on, and one for the outbox. */
+function logSyncResult(result) {
+    for (const r of result.synced ?? []) {
+        const parts = [`${r.messages_added} new`];
+        if (r.messages_updated) parts.push(`${r.messages_updated} updated`);
+        if (r.messages_removed) parts.push(`${r.messages_removed} removed`);
+        if (r.bodies_fetched) parts.push(`${r.bodies_fetched} bodies`);
+        if (r.ops_applied) parts.push(`${r.ops_applied} changes pushed`);
+        if (r.ops_deferred) parts.push(`${r.ops_deferred} deferred`);
+        if (r.ops_conflicted) parts.push(`${r.ops_conflicted} conflicted`);
+        parts.push(`${r.folders_examined} folder${r.folders_examined === 1 ? "" : "s"}`);
+        if (r.duration_ms != null) parts.push(`${(r.duration_ms / 1000).toFixed(1)}s`);
+        logActivity(`${r.account}: ${parts.join(", ")}`);
+        for (const reset of r.uidvalidity_resets ?? []) {
+            logActivity(`${r.account} ${reset}: folder was reset on the server, rescanned`);
+        }
+        for (const e of r.errors ?? []) {
+            logActivity(`${r.account} ${e.folder}: ${e.error}`, { level: "error" });
+        }
+    }
+    for (const e of result.errors ?? []) {
+        logActivity(`${e.account}: ${e.message}`, { level: "error" });
+    }
+    const out = result.submitted;
+    if (out) {
+        logActivity(`outbox: ${out.sent} sent, ${out.deferred} deferred, ${out.failed} failed`,
+            { level: out.failed ? "error" : "info" });
+    }
 }
 
 // ---- the listing ----
@@ -503,7 +618,10 @@ async function saveFile(message, part) {
                 ? await shellIpc.invoke("save_attachment", { id: message.id, part: part.part })
                 : await shellIpc.invoke("save_message", { id: message.id });
             // Null is the dialog cancelled, which needs no answer.
-            if (saved) say(`Saved to ${saved.path}`);
+            if (saved) {
+                say(`Saved to ${saved.path}`);
+                logActivity(`saved ${saved.path}`);
+            }
             return;
         }
         if (hostedBackend) {
@@ -721,6 +839,7 @@ async function change(run, what) {
     try {
         await run();
         say(what);
+        logActivity(what);
         await reload();
     } catch (e) {
         fail(e);
@@ -1241,6 +1360,7 @@ async function sendDraft() {
     const button = el("compose-send");
     button.disabled = true;
     el("compose-note").textContent = "sending…";
+    logActivity(`sending "${el("compose-subject").value || "(no subject)"}" to ${el("compose-to").value || "nobody"}`);
 
     const split = (value) =>
         value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -1260,6 +1380,7 @@ async function sendDraft() {
         // §5.5: queued, not sent. Saying "sent" when the outbox still holds it
         // is a lie the moment submission fails.
         say(`queued for ${result.recipients.join(", ")}`);
+        logActivity(`queued in the outbox for ${result.recipients.join(", ")}; the next sync sends it`);
     } catch (e) {
         el("compose-note").textContent = "";
         fail(e);
@@ -1986,6 +2107,10 @@ function syncNow(args = {}, { auto = false } = {}) {
     syncTask = (async () => {
         state.inFlight += 1;
         el("spinner").hidden = false;
+        const what = args.account
+            ? `${args.account}${args.folders ? ` (${args.folders.join(", ")})` : ""}`
+            : "all accounts";
+        logActivity(`checking for new messages: ${what}${auto ? " (background)" : ""}`);
         if (!hostedBackend) {
             say("syncing…");
             startPollingProgress();
@@ -2002,10 +2127,16 @@ function syncNow(args = {}, { auto = false } = {}) {
             const errors = (result.errors ?? []).map((error) => `${error.account}: ${error.message}`);
             say(`${result.stopped ? "sync paused" : "synced"} — ${added} new message${added === 1 ? "" : "s"}` +
                 (errors.length ? `; ${errors.join("; ")}` : ""));
+            logSyncResult(result);
+            logActivity(`${result.stopped ? "sync paused" : "sync done"}: ${added} new message${added === 1 ? "" : "s"}`);
             await Promise.all([reload(), loadFolders()]);
         } catch (error) {
-            if (auto) say(`sync failed — ${error.message ?? error}`);
-            else fail(error);
+            if (auto) {
+                say(`sync failed — ${error.message ?? error}`);
+                logActivity(`sync failed: ${error.message ?? error}`, { level: "error" });
+            } else {
+                fail(error);
+            }
         } finally {
             stopPollingProgress();
             state.inFlight -= 1;
@@ -2480,6 +2611,7 @@ async function addAccount() {
 
         await start();
         say(`added ${added.address} — ${added.credential ?? "no credential"}`);
+        logActivity(`account added: ${added.address}`);
         // The mailbox is open and empty until something fetches; nobody should
         // have to know to press Sync on their first minute.
         syncNow({ account: added.id });
@@ -2578,6 +2710,7 @@ async function aboutCheck() {
     // repository's summary, or the signed manifest elsewhere, and returns
     // once it has the answer.
     el("about-update-note").textContent = "Checking…";
+    logActivity("checking for updates");
     try {
         await shellIpc.invoke("update_check");
         const status = await shellIpc.invoke("update_status");
@@ -2614,9 +2747,41 @@ async function updateAction() {
 function showUpdate(status) {
     drawUpdate(status);
     drawAboutUpdate(status);
+    logUpdate(status);
+}
+
+/** The update state as a log line, once per change rather than per push. */
+let loggedUpdate = "";
+function logUpdate(status) {
+    if (status.state === "installing") return;
+    const key = JSON.stringify(status);
+    if (key === loggedUpdate) return;
+    loggedUpdate = key;
+    const text = {
+        unsupported: "updates: this build does not update itself",
+        current: "updates: this is the newest version",
+        available: "updates: a new version is available",
+        ready: "updates: the new version is installed, restart to use it",
+        failed: `updates: failed — ${status.message}`,
+    }[status.state];
+    if (text) logActivity(text, { level: status.state === "failed" ? "error" : "info" });
 }
 
 if (shellIpc) {
+    // What the shell did by itself — the update check as the window opens,
+    // with what the repository answered — kept there until the page asks,
+    // because it starts before the page is listening.
+    // A line can arrive both ways — sent while the backlog was on its way —
+    // and is shown once.
+    const seen = new Set();
+    const fromShell = ({ at, level, text }) => {
+        const key = `${at} ${text}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        logActivity(text, { level, source: "app", at });
+    };
+    window.addEventListener("mailbox-log", (event) => fromShell(event.detail));
+    shellIpc.invoke("shell_log").then((entries) => entries.forEach(fromShell), () => {});
     window.addEventListener("mailbox-update", (event) => showUpdate(event.detail));
     el("update-action").addEventListener("click", () => updateAction());
     el("about-check").addEventListener("click", () => aboutCheck());

@@ -11,6 +11,7 @@
 //! §15 asks: microseconds, a fake backend, no screenshot suite. The production
 //! window does not drive that state machine; it loads the page.
 
+pub mod activity;
 pub mod app;
 pub mod backend;
 /// The window's command names and their ACL permissions.
@@ -97,7 +98,8 @@ fn open_window(url: &str, port: u16, source: save::Source) -> Result<()> {
             update_install,
             update_restart,
             save_message,
-            save_attachment
+            save_attachment,
+            shell_log
         ])
         .setup(move |app| {
             // The page is served from loopback, which Tauri counts as remote
@@ -111,6 +113,8 @@ fn open_window(url: &str, port: u16, source: save::Source) -> Result<()> {
                 shell = shell.permission(commands::allow(command));
             }
             app.add_capability(shell)?;
+            // Before the updater, which logs from its first check.
+            app.manage(activity::Activity::default());
             app.manage(Updates::start(app.handle()));
             app.manage(source);
 
@@ -196,13 +200,20 @@ impl Updates {
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 let pushed = handle.clone();
+                activity::log(&handle, activity::Level::Info, "checking for updates");
                 update::store::check(handle.clone(), tracker, move || push_update_status(&pushed))
                     .await;
+                log_update_status(&handle);
             });
             return updates;
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         if !update::in_flatpak() {
+            activity::log(
+                app,
+                activity::Level::Info,
+                "not running as a Flatpak: updates come from whatever installed this build",
+            );
             return Updates {
                 tracker: Arc::new(Mutex::new(update::Tracker::unsupported())),
                 #[cfg(target_os = "linux")]
@@ -219,6 +230,11 @@ impl Updates {
                     push_update_status(&handle)
                 });
                 if portal.is_none() {
+                    activity::log(
+                        app,
+                        activity::Level::Error,
+                        "the Flatpak portal did not answer: this window cannot update itself",
+                    );
                     *tracker.lock().unwrap_or_else(|e| e.into_inner()) =
                         update::Tracker::unsupported();
                 }
@@ -297,7 +313,9 @@ async fn update_check(app: AppHandle) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         let pushed = app.clone();
-        update::store::check(app, tracker, move || push_update_status(&pushed)).await;
+        activity::log(&app, activity::Level::Info, "checking for updates");
+        update::store::check(app.clone(), tracker, move || push_update_status(&pushed)).await;
+        log_update_status(&app);
     }
     #[cfg(target_os = "linux")]
     if update::in_flatpak() {
@@ -313,14 +331,53 @@ async fn update_check(app: AppHandle) {
 /// `/.flatpak-info` leave the status as the portal has it.
 #[cfg(target_os = "linux")]
 async fn check_repo(app: AppHandle, tracker: Arc<Mutex<update::Tracker>>, asked: bool) {
-    let (Some(url), Some(running)) = (update::repo::url(), update::repo::running()) else {
+    use activity::{log, short, Level};
+    let Some(url) = update::repo::url() else {
+        log(
+            &app,
+            Level::Info,
+            "update check skipped: this build has no repository to ask (a local build)",
+        );
         return;
     };
+    let Some(running) = update::repo::running() else {
+        log(
+            &app,
+            Level::Error,
+            "update check skipped: /.flatpak-info does not say which build this is",
+        );
+        return;
+    };
+    log(
+        &app,
+        Level::Info,
+        format!("checking for updates: {url} for {}", running.ref_),
+    );
     let ref_ = running.ref_.clone();
     let found = tauri::async_runtime::spawn_blocking(move || update::repo::fetch(url, &ref_))
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
+    match &found {
+        Ok(remote) if *remote == running.commit => log(
+            &app,
+            Level::Info,
+            format!(
+                "update check: the repository has {}, the build running — up to date",
+                short(remote)
+            ),
+        ),
+        Ok(remote) => log(
+            &app,
+            Level::Info,
+            format!(
+                "update check: the repository has {}, this is {} — a newer version is available",
+                short(remote),
+                short(&running.commit)
+            ),
+        ),
+        Err(e) => log(&app, Level::Error, format!("update check failed: {e}")),
+    }
     {
         let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
         match found {
@@ -332,6 +389,33 @@ async fn check_repo(app: AppHandle, tracker: Arc<Mutex<update::Tracker>>, asked:
         }
     }
     push_update_status(&app);
+}
+
+/// Logs where the manifest check left the update status.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn log_update_status(app: &AppHandle) {
+    let (level, text) = match app.state::<Updates>().status() {
+        update::Status::Current => (
+            activity::Level::Info,
+            "update check: up to date".to_string(),
+        ),
+        update::Status::Available => (
+            activity::Level::Info,
+            "update check: a newer version is available".to_string(),
+        ),
+        update::Status::Failed { message } => (
+            activity::Level::Error,
+            format!("update check failed: {message}"),
+        ),
+        other => (activity::Level::Info, format!("update check: {other:?}")),
+    };
+    activity::log(app, level, text);
+}
+
+/// What the shell logged by itself, for the page to show on load.
+#[tauri::command]
+fn shell_log(activity: tauri::State<'_, activity::Activity>) -> Vec<activity::Entry> {
+    activity.entries()
 }
 
 /// Saves a message as an `.eml` file, wherever the save dialog says.

@@ -35,6 +35,8 @@ pub mod policy;
 pub mod providers;
 pub mod query;
 pub mod render;
+#[cfg(target_os = "linux")]
+pub mod secret_service;
 pub mod send;
 pub mod session;
 pub mod smtp;

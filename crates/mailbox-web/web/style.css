@@ -63,7 +63,9 @@ html, body {
 
 body {
     display: grid;
-    grid-template-rows: auto 1fr auto;
+    /* The top bar, the panes, the activity log (empty while it is closed),
+       and the status bar. */
+    grid-template-rows: auto 1fr auto auto;
 }
 
 /* ---- the bars ---- */
@@ -570,7 +572,7 @@ body[data-state="setup"] > header { display: none; }
  * grow. Restated rather than inherited: the default `auto 1fr auto` counts
  * rows off the children that are left, which would hand the spare height to
  * the status bar. */
-body[data-state="setup"] { grid-template-rows: 1fr auto; }
+body[data-state="setup"] { grid-template-rows: 1fr auto auto; }
 
 /* `hidden` has to beat the `display` below it. The attribute's rule comes from
  * the browser's own stylesheet and is less specific than an id, so without
@@ -807,3 +809,57 @@ button.primary {
 
 button.primary:hover { filter: brightness(1.08); background: var(--accent); }
 button:disabled { opacity: .55; cursor: default; }
+
+/* ---- the activity log ---- */
+
+#log[hidden] { display: none; }
+
+#log {
+    display: flex;
+    flex-direction: column;
+    height: 11rem;
+    min-height: 0;
+    min-width: 0;
+    border-top: 1px solid var(--line);
+    background: var(--bg-sunken);
+    font-size: 12px;
+}
+
+.log-heading {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .2rem .6rem;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--line);
+}
+.log-heading .grow { flex: 1; }
+.log-heading button { padding: .05rem .45rem; font-size: 12px; }
+
+#log-list {
+    flex: 1;
+    overflow-y: auto;
+    margin: 0;
+    padding: .2rem .6rem;
+    list-style: none;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    user-select: text;
+}
+#log-list li { white-space: pre-wrap; overflow-wrap: anywhere; }
+#log-list time { color: var(--text-dim); margin-right: .6rem; }
+#log-list .source { color: var(--text-dim); margin-right: .4rem; }
+#log-list li.is-error { color: var(--danger); }
+#log-list:empty::before { content: "Nothing yet."; color: var(--text-dim); }
+
+#log-toggle {
+    flex: none;
+    padding: 0 .35rem;
+    line-height: 1.3;
+    font-size: 13px;
+    background: none;
+    border-color: transparent;
+    color: inherit;
+}
+#log-toggle[aria-expanded="true"] { background: var(--accent-soft); border-color: var(--line); }
+/* An error landed while the log was closed. */
+#log-toggle.has-errors { color: var(--danger); }

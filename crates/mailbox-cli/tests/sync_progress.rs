@@ -124,3 +124,53 @@ fn world() -> (ImapServer, PathBuf, PathBuf) {
 
     (server, config, dir.join("state"))
 }
+
+/// An account that cannot sync is named in the result, not dropped.
+///
+/// It was dropped whenever another account in the same pass succeeded, and
+/// an account that cannot log in then looks exactly like one with no new mail
+/// — which is how a packaged window that could not read the keyring showed
+/// an empty inbox for hours while saying nothing was wrong.
+#[test]
+fn an_account_that_cannot_sync_is_reported_beside_the_ones_that_did() {
+    let (_server, config, state) = world();
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(
+        "\n[accounts.locked]\naddress = \"locked@example.com\"\n\
+         imap_host = \"127.0.0.1\"\nimap_port = 9\n",
+    );
+    std::fs::write(&config, text).unwrap();
+    // `locked` has no credential anywhere: not installed, and never the
+    // developer's own keyring.
+    mailbox_core::credentials::disable_keychain();
+    mailbox_core::credentials::install("test", Credential::Password("testpass".into()));
+
+    let mut workspace = mailbox_core::workspace::Workspace::open(
+        &SessionOptions {
+            config_path: Some(config),
+            state_dir: Some(state),
+            ..Default::default()
+        },
+        Tracer::disabled(),
+        Clock::fixed(0),
+    )
+    .expect("open the workspace");
+
+    let result = workspace
+        .sync(&SyncOptions::default())
+        .expect("one account synced, so the pass is not an error");
+    assert_eq!(result.synced.len(), 1);
+    assert_eq!(result.synced[0].account, "test");
+    assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+    assert_eq!(result.errors[0].account, "locked");
+    assert!(
+        result.errors[0].message.contains("no credential"),
+        "{}",
+        result.errors[0].message
+    );
+
+    // And it crosses the contract under the name the page reads.
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["errors"][0]["account"], "locked");
+    assert!(json["errors"][0]["message"].is_string());
+}

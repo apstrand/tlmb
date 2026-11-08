@@ -49,6 +49,13 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 dispatch2 = "0.3"
 
+# The login keyring over D-Bus, for the Flatpak, where `secret-tool` is pointed
+# at a private file instead (see `secret_service`). Already in the graph
+# through the GUI's GTK window, which every Linux build of `mailbox` has.
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.18"
+glib = "0.18"
+
 # `wasm32-unknown-unknown` has no ambient entropy source. All three versions
 # are present in the crypto graph, so the JS backend must be selected for each.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

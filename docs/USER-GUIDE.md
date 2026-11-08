@@ -124,5 +124,16 @@ line worth pasting into a bug report.
 
 In the terminal, `?` shows it along the bottom of the help pane.
 
+## See what it has been doing
+
+The ▤ button at the left of the status bar opens the activity log: a line for
+each sync and what it found per account, each message sent or queued, each
+update check and what the repository answered, and every error. It is the
+place to look when mail seems not to arrive. An account that could not sync
+— no password, no connection — shows up there in red rather than as an inbox
+with nothing new. The button turns red when an error lands while the log is
+closed. **Copy** puts the whole log on the clipboard for a bug report. The log
+lives only in the window and is gone when you close it.
+
 The screenshots and the actions described here are exercised by
 `tests/e2e/mailbox-e2e check guide`; see the [e2e README](../tests/e2e/README.md).

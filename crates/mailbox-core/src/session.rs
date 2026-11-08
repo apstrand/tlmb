@@ -795,6 +795,7 @@ impl Session {
         Ok(SyncResult {
             synced: vec![report],
             submitted,
+            errors: Vec::new(),
         })
     }
 

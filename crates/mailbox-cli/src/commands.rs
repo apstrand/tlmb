@@ -1566,6 +1566,10 @@ pub fn sync(ctx: &Ctx<'_>, args: &SyncArgs) -> Result<()> {
                     .warn(format!("{folder}: UIDVALIDITY changed, folder rescanned"));
             }
         }
+        for e in &result.errors {
+            ctx.out
+                .warn(format!("{}: not synced: {}", e.account, e.message));
+        }
     }
     Ok(())
 }

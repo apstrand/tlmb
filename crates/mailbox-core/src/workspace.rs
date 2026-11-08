@@ -504,7 +504,7 @@ impl Workspace {
     ) -> Result<SyncResult> {
         let mut synced = Vec::new();
         let mut submitted = None;
-        let mut first_error = None;
+        let mut failures: Vec<(String, Error)> = Vec::new();
 
         for session in &mut self.accounts {
             match session.sync_watched(opts, progress) {
@@ -520,24 +520,35 @@ impl Workspace {
                         acc.uploaded += s.uploaded;
                     }
                 }
-                Err(e) => {
-                    if first_error.is_none() {
-                        first_error = Some((session.account_id.clone(), e));
-                    }
-                }
+                Err(e) => failures.push((session.account_id.clone(), e)),
             }
         }
 
         // Every account failed, so there is nothing to report but the failure.
-        if synced.is_empty() {
-            if let Some((account, e)) = first_error {
+        if synced.is_empty() && !failures.is_empty() {
+            let (account, e) = failures.swap_remove(0);
+            {
                 return Err(match e {
                     Error::Usage(m) => Error::Usage(format!("{account}: {m}")),
                     other => other,
                 });
             }
         }
-        Ok(SyncResult { synced, submitted })
+        // Some did. The ones that did not are reported beside them rather
+        // than dropped: an account that cannot log in otherwise looks exactly
+        // like one with no new mail, for as long as anyone cares to wait.
+        let errors = failures
+            .into_iter()
+            .map(|(account, e)| mailbox_api::AccountError {
+                account,
+                message: e.to_string(),
+            })
+            .collect();
+        Ok(SyncResult {
+            synced,
+            submitted,
+            errors,
+        })
     }
 
     pub fn store_dump(&self, query: Option<&str>) -> Result<serde_json::Value> {

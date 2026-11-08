@@ -69,6 +69,38 @@ fn keychain_enabled() -> bool {
     )
 }
 
+/// Whether to reach the login keyring over D-Bus rather than through
+/// `secret-tool`.
+///
+/// Inside a Flatpak `secret-tool` cannot reach it: libsecret switches to a
+/// private file keyring there (see [`crate::secret_service`]). Elsewhere
+/// `secret-tool` is kept, being the command a person can run by hand to see
+/// what we see; `MAILBOX_KEYCHAIN=dbus` takes the D-Bus path anyway.
+#[cfg(target_os = "linux")]
+fn keychain_over_dbus() -> bool {
+    matches!(std::env::var("MAILBOX_KEYCHAIN").as_deref(), Ok("dbus"))
+        || std::path::Path::new("/.flatpak-info").exists()
+}
+
+/// The login keyring's entry, over D-Bus, where that is the way to it.
+///
+/// A miss is not the end: what an earlier build stored inside the sandbox is
+/// in libsecret's file keyring, which `secret-tool` still reads.
+#[cfg(target_os = "linux")]
+fn dbus_lookup(service: &str, account_id: &str) -> Option<String> {
+    if !keychain_over_dbus() {
+        return None;
+    }
+    crate::secret_service::lookup(service, account_id)
+        .ok()
+        .flatten()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn dbus_lookup(_service: &str, _account_id: &str) -> Option<String> {
+    None
+}
+
 fn installed() -> &'static Mutex<HashMap<String, Credential>> {
     static INSTALLED: OnceLock<Mutex<HashMap<String, Credential>>> = OnceLock::new();
     INSTALLED.get_or_init(|| Mutex::new(HashMap::new()))
@@ -321,6 +353,10 @@ fn keychain_forget_password(account_id: &str, cfg: &crate::config::AccountConfig
             .status();
         return;
     }
+    #[cfg(target_os = "linux")]
+    if keychain_over_dbus() {
+        let _ = crate::secret_service::clear(PASSWORD_SERVICE, account_id);
+    }
     let _ = Command::new("secret-tool")
         .args(["clear", "service", PASSWORD_SERVICE, "account", account_id])
         .stdout(Stdio::null())
@@ -372,6 +408,9 @@ pub fn store_refresh_token(account_id: &str, token: &str) -> Result<bool> {
 fn keychain_get(service: &str, account_id: &str) -> Option<String> {
     if !keychain_enabled() {
         return None;
+    }
+    if let Some(secret) = dbus_lookup(service, account_id) {
+        return Some(secret);
     }
     let (program, args) = if cfg!(target_os = "macos") {
         (
@@ -426,12 +465,16 @@ fn keychain_store(service: &str, label: &str, account_id: &str, secret: &str) ->
             secret,
         ]);
     }
-    secret_tool_store(
-        &format!("mailbox {label} ({account_id})"),
-        service,
-        account_id,
-        secret,
-    )
+    let label = format!("mailbox {label} ({account_id})");
+    // In the login keyring, where the host's `mailbox` will find it too,
+    // rather than in the sandbox's own file.
+    #[cfg(target_os = "linux")]
+    if keychain_over_dbus()
+        && crate::secret_service::store(service, &label, account_id, secret).is_ok()
+    {
+        return true;
+    }
+    secret_tool_store(&label, service, account_id, secret)
 }
 
 /// What to call the place [`store_password`] puts things, for a caller that
@@ -619,6 +662,9 @@ fn run_credential_command(cmd: &str) -> Result<String> {
 fn keychain_lookup(account_id: &str, cfg: &crate::config::AccountConfig) -> Option<String> {
     if !keychain_enabled() {
         return None;
+    }
+    if let Some(secret) = dbus_lookup(PASSWORD_SERVICE, account_id) {
+        return Some(secret);
     }
     let attempts: Vec<(&str, Vec<String>)> = if cfg!(target_os = "macos") {
         vec![(

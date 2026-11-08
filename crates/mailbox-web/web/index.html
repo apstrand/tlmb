@@ -305,7 +305,22 @@
   </form>
 </dialog>
 
+<!-- What the client has been doing: syncs and what they found, sends,
+     update checks. Collapsed until the status bar's log button opens it, and
+     kept in memory only, so closing the window forgets it. -->
+<section id="log" aria-label="Activity log" hidden>
+  <div class="log-heading">
+    <span>Activity</span>
+    <span class="grow"></span>
+    <button type="button" id="log-copy" class="text">Copy</button>
+    <button type="button" id="log-clear" class="text">Clear</button>
+  </div>
+  <ol id="log-list" aria-live="off"></ol>
+</section>
+
 <footer class="bar status">
+  <button type="button" id="log-toggle" aria-controls="log" aria-expanded="false"
+          title="Show the activity log" aria-label="Activity log">&#9636;</button>
   <span id="status"></span>
   <span id="error" role="alert"></span>
   <!-- Only the packaged desktop app can update itself (see mailbox-ui's

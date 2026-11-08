@@ -10,13 +10,14 @@
 /// `mailbox.js` calls them. A name left out of the capability is not a quiet
 /// no-op — it is `Command … not allowed by ACL` where the reader expected a
 /// button to work.
-pub const COMMANDS: [&str; 6] = [
+pub const COMMANDS: [&str; 7] = [
     "update_status",
     "update_check",
     "update_install",
     "update_restart",
     "save_message",
     "save_attachment",
+    "shell_log",
 ];
 
 /// The ACL permission that allows `command`.

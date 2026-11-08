@@ -278,4 +278,16 @@ pub struct SyncResult {
     /// to do, which is the common case.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submitted: Option<SubmitReport>,
+    /// Accounts this pass could not sync at all — no login, no connection —
+    /// while others did. When every account fails the pass is an error
+    /// instead, so this is never the only thing in a result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<AccountError>,
+}
+
+/// An account a sync pass had to skip, and why.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AccountError {
+    pub account: String,
+    pub message: String,
 }
