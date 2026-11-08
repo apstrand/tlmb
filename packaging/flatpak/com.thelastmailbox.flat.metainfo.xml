@@ -34,6 +34,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.24" date="2026-11-07">
+      <description>
+        <p>Saves messages and attachments from every interface: a Save button
+        and the system save dialog in the window and the browser, S and v in
+        the terminal interface, and mailbox save on the command line. Also
+        makes Check for updates find new releases in the Flatpak.</p>
+      </description>
+    </release>
     <release version="0.1.23" date="2026-11-07">
       <description>
         <p>Makes PageUp/PageDown and C-f/C-b move a full page in the terminal
