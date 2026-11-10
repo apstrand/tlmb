@@ -109,8 +109,11 @@ def start() -> None:
         for k in ("MAILBOX_CONFIG", "MAILBOX_STATE_DIR", "MAILBOX_CLOCK")
         if k in os.environ
     )
+    # The store is seeded locally with no server copy, and a sync would
+    # rightly empty it; this test is about the page keys, not syncing.
     tmux("send-keys", "-t", PANE,
-         f"export {env} MAILBOX_PASSWORD_E2E=testpass MAILBOX_NOTIFIER=none", "Enter")
+         f"export {env} MAILBOX_PASSWORD_E2E=testpass MAILBOX_NOTIFIER=none MAILBOX_AUTO_SYNC=off",
+         "Enter")
     tmux("send-keys", "-t", PANE, "mailbox tui", "Enter")
     for _ in range(75):
         if cursor(screen(True)) is not None:

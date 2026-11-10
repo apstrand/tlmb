@@ -10,6 +10,31 @@ import json
 import sys
 
 
+def empty_every_folder(imap):
+    """Removes what earlier scenarios appended.
+
+    A scenario is the whole mailbox, and the interfaces sync as they open: mail
+    left on the server by the last run would arrive in this one and move the
+    list under the test.
+    """
+    status, folders = imap.list()
+    if status != "OK":
+        return
+    for entry in folders or []:
+        text = entry.decode() if isinstance(entry, bytes) else str(entry)
+        if "\\Noselect" in text:
+            continue
+        # `(flags) "delim" name`, the name possibly quoted.
+        name = text.rsplit(" ", 1)[-1] if not text.endswith('"') else '"' + text.rsplit(' "', 1)[-1]
+        if imap.select(name)[0] != "OK":
+            continue
+        if imap.search(None, "ALL")[1][0]:
+            imap.store("1:*", "+FLAGS.SILENT", "(\\Deleted)")
+            imap.expunge()
+    if imap.state == "SELECTED":
+        imap.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
@@ -20,6 +45,7 @@ def main():
 
     imap = imaplib.IMAP4(args.host, args.port)
     imap.login(args.user, args.password)
+    empty_every_folder(imap)
 
     created = set()
     n = 0

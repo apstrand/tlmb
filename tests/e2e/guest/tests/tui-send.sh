@@ -60,6 +60,10 @@ tmux new-session -d -s "$PANE" -x 120 -y 40
 tmux send-keys -t "$PANE" "export MAILBOX_CONFIG=$MAILBOX_CONFIG MAILBOX_STATE_DIR=$MAILBOX_STATE_DIR MAILBOX_PASSWORD_E2E=testpass MAILBOX_NOTIFIER=none MAILBOX_CLOCK=$MAILBOX_CLOCK EDITOR=$EDITOR_SCRIPT" Enter
 tmux send-keys -t "$PANE" "mailbox tui" Enter
 wait_pane "Invoice 42" start
+# The TUI syncs as it opens. Let that pass finish first, or its summary can
+# land on the status line in place of the one this test is waiting for.
+for _ in $(seq 10); do pane | grep -F -q "syncing" && break; sleep 0.2; done
+for _ in $(seq 75); do pane | grep -F -q "syncing" || break; sleep 0.2; done
 tmux capture-pane -t "$PANE" -pe >"$EVIDENCE/tui-send-1-start.txt"
 
 # 1. Compose a new message with `m`.

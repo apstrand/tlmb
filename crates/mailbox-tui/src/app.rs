@@ -149,6 +149,9 @@ pub enum Update {
     /// A sync pass ended. The list is reloaded from the store, because the
     /// store is what the list shows.
     SyncFinished(std::result::Result<String, String>),
+    /// A pass nobody asked for ended with nothing worth saying: no new mail,
+    /// or another process was already syncing. The list is still reloaded.
+    SyncQuiet,
     /// A long-running action reported something worth saying.
     Status(String),
 }

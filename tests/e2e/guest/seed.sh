@@ -16,10 +16,15 @@ address         = "peter@example.com"
 imap_host       = "127.0.0.1"
 imap_port       = 143
 imap_security   = "none"
+# The Dovecot user the seed appends to. Without it the login is the address,
+# which Dovecot also accepts — as an empty mailbox, so any sync wiped the
+# seeded store.
+imap_user       = "e2e"
 require_tls     = false
 smtp_host       = "127.0.0.1"
 smtp_port       = 2525
 smtp_security   = "none"
+smtp_user       = "e2e"
 offline         = "recent"
 
 [general]

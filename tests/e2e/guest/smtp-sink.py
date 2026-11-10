@@ -14,6 +14,7 @@ from pathlib import Path
 
 OUT = Path(os.environ.get("MAILBOX_E2E_SENT", "/tmp/mailbox-e2e-sent"))
 PORT = int(os.environ.get("MAILBOX_E2E_SMTP_PORT", "2525"))
+SANK = 0
 
 
 def handle(conn: socket.socket) -> None:
@@ -33,7 +34,12 @@ def handle(conn: socket.socket) -> None:
             if in_data:
                 if line == b".":
                     OUT.mkdir(parents=True, exist_ok=True)
-                    name = f"{int(time.time() * 1000)}-{mailfrom.replace('@', '_at_')}.eml"
+                    # Nanoseconds plus a count: two messages from one sync
+                    # pass land in the same millisecond, and the second used
+                    # to overwrite the first.
+                    global SANK
+                    SANK += 1
+                    name = f"{time.time_ns()}-{SANK:04d}-{mailfrom.replace('@', '_at_')}.eml"
                     path = OUT / name
                     path.write_bytes(bytes(data))
                     print(f"sank {path} from={mailfrom} to={','.join(rcpt)}", flush=True)

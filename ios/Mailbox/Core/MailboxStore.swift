@@ -31,6 +31,23 @@ final class MailboxStore {
         }
     }
 
+    /// How often to sync while the app is in front: the same five minutes
+    /// as the desktop and the TUI.
+    static let backgroundSyncInterval: Duration = .seconds(5 * 60)
+
+    /// Syncs on a timer for as long as the app runs.
+    ///
+    /// Skipped while it is not active: iOS suspends a backgrounded app
+    /// anyway, and the return to the foreground syncs by itself.
+    func syncWhileOpen() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: Self.backgroundSyncInterval)
+            if UIApplication.shared.applicationState == .active {
+                await refresh(quiet: true)
+            }
+        }
+    }
+
     func reload() async throws {
         let q = Self.liveQuery(query)
         let list = try MailboxClient.shared.list(query: q.isEmpty ? nil : q)
@@ -50,6 +67,11 @@ final class MailboxStore {
             try await reload()
             let added = report.synced.reduce(0) { $0 + Int($1.messagesAdded) }
             banner = added == 0 ? "up to date" : "\(added) new"
+            // An account that could not sync otherwise reads as "up to date"
+            // for as long as it keeps failing.
+            if let failed = report.errors, !failed.isEmpty {
+                lastError = failed.map { "\($0.account): \($0.message)" }.joined(separator: "\n")
+            }
             clearBannerLater()
         } catch {
             lastError = error.localizedDescription

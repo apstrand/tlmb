@@ -214,6 +214,13 @@ struct FoldersReply: Decodable {
 
 struct SyncReply: Decodable {
     var synced: [SyncReport]
+    /// Accounts the pass could not sync while others did.
+    var errors: [AccountError]?
+}
+
+struct AccountError: Decodable, Hashable {
+    var account: String
+    var message: String
 }
 
 struct DraftReply: Decodable {

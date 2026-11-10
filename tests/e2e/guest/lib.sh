@@ -79,6 +79,12 @@ wait_for() {
 }
 
 start_sink() {
+  # A sink older than its script is restarted, or a fix to it never runs.
+  if [[ -f /tmp/mailbox-e2e-sink.pid && $HERE/smtp-sink.py -nt /tmp/mailbox-e2e-sink.pid ]]; then
+    kill "$(cat /tmp/mailbox-e2e-sink.pid)" 2>/dev/null || true
+    rm -f /tmp/mailbox-e2e-sink.pid
+    sleep 0.3
+  fi
   if ! [[ -f /tmp/mailbox-e2e-sink.pid ]] || ! kill -0 "$(cat /tmp/mailbox-e2e-sink.pid)" 2>/dev/null; then
     python3 "$HERE/smtp-sink.py" >/tmp/mailbox-e2e-sink.log 2>&1 &
     echo $! >/tmp/mailbox-e2e-sink.pid

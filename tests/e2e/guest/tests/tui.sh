@@ -11,7 +11,11 @@ source "$(cd -- "$(dirname -- "$(readlink -f "$0")")/.." && pwd)/lib.sh"
 need tmux
 tmux kill-session -t mailbox-tui 2>/dev/null || true
 tmux new-session -d -s mailbox-tui -x 120 -y 40
-tmux send-keys -t mailbox-tui "export MAILBOX_CONFIG=$MAILBOX_CONFIG MAILBOX_STATE_DIR=$MAILBOX_STATE_DIR MAILBOX_PASSWORD_E2E=testpass MAILBOX_NOTIFIER=none MAILBOX_CLOCK=$MAILBOX_CLOCK" Enter
+# `large` is generated straight into the store, with no server copy; a sync
+# would rightly empty it, so that one leaves syncing to `@`.
+auto_sync=on
+[[ $SCENARIO == large ]] && auto_sync=off
+tmux send-keys -t mailbox-tui "export MAILBOX_CONFIG=$MAILBOX_CONFIG MAILBOX_STATE_DIR=$MAILBOX_STATE_DIR MAILBOX_PASSWORD_E2E=testpass MAILBOX_NOTIFIER=none MAILBOX_CLOCK=$MAILBOX_CLOCK MAILBOX_AUTO_SYNC=$auto_sync" Enter
 tmux send-keys -t mailbox-tui "mailbox tui" Enter
 sleep 1.5
 tmux capture-pane -t mailbox-tui -pe >"$EVIDENCE/tui-${SCENARIO}.txt"

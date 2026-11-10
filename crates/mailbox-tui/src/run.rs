@@ -41,6 +41,20 @@ const TICK: Duration = Duration::from_millis(100);
 /// what §10's "idle CPU ~0%" allows.
 const EXTERNAL_CHECK: Duration = Duration::from_secs(1);
 
+/// How often to sync by itself: the same five minutes as the window and the
+/// iOS app. Counted from the end of the last pass, whoever started it.
+const AUTO_SYNC: Duration = Duration::from_secs(5 * 60);
+
+/// Whether to sync without being asked. `MAILBOX_AUTO_SYNC=off` leaves it to
+/// `@`: for a store seeded with mail no server has, which a sync would
+/// rightly empty — the end-to-end suite's benchmark mailbox.
+fn auto_sync_enabled() -> bool {
+    !matches!(
+        std::env::var("MAILBOX_AUTO_SYNC").as_deref(),
+        Ok("off") | Ok("0") | Ok("false")
+    )
+}
+
 /// Runs the interface until the user quits.
 pub fn run(opts: SessionOptions, tracer: Tracer, clock: Clock) -> Result<()> {
     // Empty is a valid mailbox: §9's setup is one line, and an interface that
@@ -122,6 +136,10 @@ fn event_loop(
     // deleted somewhere else.
     let mut seen = latest_change(workspace);
     let mut last_checked = Instant::now();
+    // Mail that arrived while the interface was shut is what it was opened
+    // for, so the first pass starts straight away.
+    let mut next_sync = Instant::now();
+    let auto_sync = auto_sync_enabled();
 
     loop {
         if needs_redraw {
@@ -141,8 +159,14 @@ fn event_loop(
         while let Ok(update) = rx.try_recv() {
             needs_redraw = true;
             match update {
+                Update::SyncQuiet => {
+                    app.syncing = false;
+                    app.dirty = true;
+                    next_sync = Instant::now() + AUTO_SYNC;
+                }
                 Update::SyncFinished(outcome) => {
                     app.syncing = false;
+                    next_sync = Instant::now() + AUTO_SYNC;
                     app.status = match outcome {
                         Ok(summary) => summary,
                         Err(e) => format!("sync failed: {e}"),
@@ -176,6 +200,23 @@ fn event_loop(
                 // Not a status message: a listing quietly staying correct is
                 // not news, and the alternative is a line that appears every
                 // time anything anywhere touches the mailbox.
+            }
+        }
+
+        if auto_sync && Instant::now() >= next_sync && !app.syncing {
+            // Pushed on whether or not a pass starts, so an interface with no
+            // account yet does not try again ten times a second.
+            next_sync = Instant::now() + AUTO_SYNC;
+            if !app.no_accounts && !workspace.is_empty() {
+                app.syncing = true;
+                needs_redraw = true;
+                start_sync(
+                    opts.clone(),
+                    tracer.clone(),
+                    clock.clone(),
+                    tx.clone(),
+                    true,
+                );
             }
         }
 
@@ -513,7 +554,13 @@ fn apply_effect(
             }
             app.syncing = true;
             app.status = String::new();
-            start_sync(opts.clone(), tracer.clone(), clock.clone(), tx.clone());
+            start_sync(
+                opts.clone(),
+                tracer.clone(),
+                clock.clone(),
+                tx.clone(),
+                false,
+            );
             Ok(false)
         }
         // Not suspended: the opener detaches and its output is discarded, so
@@ -567,50 +614,65 @@ fn apply_effect(
 /// §7 forbids modal "please wait" states, so the sync gets its own thread and
 /// its own store handle; the interface keeps painting from the store it
 /// already has, and picks up the result when it arrives.
-fn start_sync(opts: SessionOptions, tracer: Tracer, clock: Clock, tx: Sender<Update>) {
+///
+/// `auto` is a pass the timer started. It reports only what is news — new
+/// mail, an account that failed — and says nothing when another process holds
+/// the sync (a `sync --watch` elsewhere), which is the normal case for it.
+fn start_sync(opts: SessionOptions, tracer: Tracer, clock: Clock, tx: Sender<Update>, auto: bool) {
     std::thread::spawn(move || {
         let mut writable = opts;
         writable.read_only = false;
-        let outcome = Workspace::open(&writable, tracer, clock)
-            .and_then(|mut w| {
-                // §4.1: one sync engine per account. Held for the pass only,
-                // so this conflicts with something actually syncing — a
-                // `sync --watch` in another terminal — rather than with
-                // anything merely running. The refusal explains that the
-                // user's own flags and moves are queued and will be pushed by
-                // whatever holds it.
-                let _owners: Vec<_> = w
-                    .sessions()
-                    .iter()
-                    .map(|s| mailbox_core::owner::Owner::acquire(s.store().dir(), &s.account_id))
-                    .collect::<mailbox_core::error::Result<_>>()?;
-                w.sync(&SyncOptions::default())
-            })
-            .map(|result| {
+        let outcome = Workspace::open(&writable, tracer, clock).and_then(|mut w| {
+            // §4.1: one sync engine per account. Held for the pass only,
+            // so this conflicts with something actually syncing — a
+            // `sync --watch` in another terminal — rather than with
+            // anything merely running. The refusal explains that the
+            // user's own flags and moves are queued and will be pushed by
+            // whatever holds it.
+            let _owners: Vec<_> = w
+                .sessions()
+                .iter()
+                .map(|s| mailbox_core::owner::Owner::acquire(s.store().dir(), &s.account_id))
+                .collect::<mailbox_core::error::Result<_>>()?;
+            w.sync(&SyncOptions::default())
+        });
+        let update = match outcome {
+            Err(mailbox_core::error::Error::Conflict(_)) if auto => Update::SyncQuiet,
+            Err(e) => Update::SyncFinished(Err(e.to_string())),
+            Ok(result) => {
                 let added: u32 = result.synced.iter().map(|r| r.messages_added).sum();
                 let removed: u32 = result.synced.iter().map(|r| r.messages_removed).sum();
-                let summary = match (added, removed) {
-                    (0, 0) => "up to date".to_string(),
-                    (a, 0) => format!("{a} new"),
-                    (a, r) => format!("{a} new, {r} gone"),
-                };
-                // An account that could not sync would otherwise read as
-                // "up to date" for as long as it keeps failing.
-                match result.errors.as_slice() {
-                    [] => summary,
-                    errors => format!(
-                        "{summary}; not synced: {}",
-                        errors
-                            .iter()
-                            .map(|e| format!("{} ({})", e.account, e.message))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
+                if auto && added == 0 && result.errors.is_empty() {
+                    Update::SyncQuiet
+                } else {
+                    Update::SyncFinished(Ok(sync_summary(&result, added, removed)))
                 }
-            })
-            .map_err(|e| e.to_string());
-        let _ = tx.send(Update::SyncFinished(outcome));
+            }
+        };
+        let _ = tx.send(update);
     });
+}
+
+/// What a pass did, in the status line's few words.
+fn sync_summary(result: &mailbox_api::SyncResult, added: u32, removed: u32) -> String {
+    let summary = match (added, removed) {
+        (0, 0) => "up to date".to_string(),
+        (a, 0) => format!("{a} new"),
+        (a, r) => format!("{a} new, {r} gone"),
+    };
+    // An account that could not sync would otherwise read as "up to date"
+    // for as long as it keeps failing.
+    match result.errors.as_slice() {
+        [] => summary,
+        errors => format!(
+            "{summary}; not synced: {}",
+            errors
+                .iter()
+                .map(|e| format!("{} ({})", e.account, e.message))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 /// Saves a message or an attachment on a worker thread.
