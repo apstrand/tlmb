@@ -161,11 +161,13 @@ fn event_loop(
             match update {
                 Update::SyncQuiet => {
                     app.syncing = false;
+                    app.body_failed.clear();
                     app.dirty = true;
                     next_sync = Instant::now() + AUTO_SYNC;
                 }
                 Update::SyncFinished(outcome) => {
                     app.syncing = false;
+                    app.body_failed.clear();
                     next_sync = Instant::now() + AUTO_SYNC;
                     app.status = match outcome {
                         Ok(summary) => summary,
@@ -174,7 +176,39 @@ fn event_loop(
                     app.dirty = true;
                 }
                 Update::Status(text) => app.status = text,
+                Update::BodyFetched { id, outcome } => {
+                    app.fetching_body = None;
+                    match outcome {
+                        // Only if it is still the message on screen; the
+                        // cursor may have moved on while this was fetching.
+                        Ok(true) => {
+                            let showing = app.open.as_ref().is_some_and(|m| m.summary.id == id);
+                            if showing && app.current_id().as_deref() == Some(id.as_str()) {
+                                let scroll = app.body_scroll;
+                                if load_open_message(app, workspace).is_ok() {
+                                    app.body_scroll = scroll;
+                                }
+                            }
+                        }
+                        Ok(false) => {
+                            app.body_failed
+                                .insert(id, "the server has no copy of it".to_string());
+                        }
+                        Err(e) => {
+                            app.body_failed.insert(id, e);
+                        }
+                    }
+                }
             }
+        }
+
+        // §5.1 fetches bodies lazily, so opening mail older than the prefetch
+        // window is when its body is wanted. The message paints from the store
+        // at once; the body follows from a worker.
+        if let Some(id) = body_to_fetch(app) {
+            app.fetching_body = Some(id.clone());
+            needs_redraw = true;
+            start_body_fetch(opts.clone(), tracer.clone(), clock.clone(), tx.clone(), id);
         }
 
         // Cheap enough to do on a timer: one indexed `MAX(seq)` per account,
@@ -673,6 +707,41 @@ fn sync_summary(result: &mailbox_api::SyncResult, added: u32, removed: u32) -> S
                 .join(", ")
         ),
     }
+}
+
+/// The open message, if its body is missing and nothing has tried for it yet.
+fn body_to_fetch(app: &App) -> Option<String> {
+    if app.no_accounts || app.fetching_body.is_some() {
+        return None;
+    }
+    let open = app.open.as_ref()?;
+    if open.body.is_some() || app.body_failed.contains_key(&open.summary.id) {
+        return None;
+    }
+    Some(open.summary.id.clone())
+}
+
+/// Fetches one message's body on a worker thread, into the store.
+fn start_body_fetch(
+    opts: SessionOptions,
+    tracer: Tracer,
+    clock: Clock,
+    tx: Sender<Update>,
+    id: String,
+) {
+    std::thread::spawn(move || {
+        let outcome = (|| -> Result<bool> {
+            let mut writable = opts;
+            writable.read_only = false;
+            let mut workspace = Workspace::open(&writable, tracer, clock)?;
+            workspace.ensure_body(&IdRef::Id(id.clone()))
+        })()
+        .map_err(|e| match e {
+            Error::Conflict(_) => "another mailbox is syncing; trying again after it".to_string(),
+            e => e.to_string(),
+        });
+        let _ = tx.send(Update::BodyFetched { id, outcome });
+    });
 }
 
 /// Saves a message or an attachment on a worker thread.

@@ -152,6 +152,12 @@ pub enum Update {
     /// A pass nobody asked for ended with nothing worth saying: no new mail,
     /// or another process was already syncing. The list is still reloaded.
     SyncQuiet,
+    /// The body of `id` was fetched (`Ok(true)`), is not on the server any
+    /// more (`Ok(false)`), or could not be fetched.
+    BodyFetched {
+        id: String,
+        outcome: std::result::Result<bool, String>,
+    },
     /// A long-running action reported something worth saying.
     Status(String),
 }
@@ -304,6 +310,12 @@ pub struct App {
     /// afterwards loses the message you were reading, which is the specific
     /// annoyance of asking what a key does *while* using it.
     help_return: View,
+    /// The message whose body a worker is fetching, if any.
+    pub fetching_body: Option<String>,
+    /// Bodies that could not be fetched, and why, so opening the message
+    /// again does not retry on every keystroke. Cleared after each sync,
+    /// which is when the answer may have changed.
+    pub body_failed: std::collections::HashMap<String, String>,
 }
 
 impl App {
@@ -332,6 +344,8 @@ impl App {
             side: Side::None,
             focus: Focus::List,
             help_return: View::List,
+            fetching_body: None,
+            body_failed: std::collections::HashMap::new(),
         }
     }
 

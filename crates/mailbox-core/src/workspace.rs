@@ -322,6 +322,12 @@ impl Workspace {
         self.accounts[i].raw(&IdRef::Id(id))
     }
 
+    /// [`Session::ensure_body`], for whichever account has the message.
+    pub fn ensure_body(&mut self, id_ref: &IdRef) -> Result<bool> {
+        let (i, id) = self.locate(id_ref)?;
+        self.accounts[i].ensure_body(&id)
+    }
+
     /// [`Session::message_file`], for whichever account has the message.
     pub fn message_file(&mut self, id_ref: &IdRef) -> Result<crate::session::SaveFile> {
         let (i, id) = self.locate(id_ref)?;

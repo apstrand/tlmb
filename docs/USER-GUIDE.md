@@ -110,8 +110,10 @@ saves a message and `v` lists its attachments. The terminal interface
 uses the same letters. Keys do nothing while you are typing in a field, which
 saves a surprising amount of grief.
 
-Downloaded mail remains readable offline. Run `mailbox sync --full` if you want
-all bodies and attachments cached rather than recent and opened mail only.
+Downloaded mail remains readable offline. Older mail is kept as headers until
+you open it; the body is fetched then, in the terminal as well. Run
+`mailbox sync --full` if you want all bodies and attachments cached rather
+than recent and opened mail only.
 
 ## Which build is this
 

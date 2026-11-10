@@ -518,8 +518,15 @@ fn draw_message(
             &body.links
         }
         None => {
+            let note = if app.fetching_body.as_deref() == Some(detail.summary.id.as_str()) {
+                "[downloading the body…]".to_string()
+            } else if let Some(why) = app.body_failed.get(&detail.summary.id) {
+                format!("[body not downloaded: {why}]")
+            } else {
+                "[body not downloaded]".to_string()
+            };
             lines.push(BodyLine::plain(vec![Piece::new(
-                "[body not downloaded]",
+                note,
                 Style::default().fg(theme::DIM),
             )]));
             &empty
