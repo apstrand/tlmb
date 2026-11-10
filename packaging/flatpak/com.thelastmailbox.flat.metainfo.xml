@@ -34,6 +34,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.25" date="2026-11-09">
+      <description>
+        <p>Adds an activity log behind the button at the left of the status
+        bar, showing each sync, send and update check, and every error. The
+        Flatpak now reads passwords from the login keyring, so accounts added
+        on the host sync again. Every interface syncs by itself every five
+        minutes, and the terminal interface downloads the body of older mail
+        when it is opened.</p>
+      </description>
+    </release>
     <release version="0.1.24" date="2026-11-07">
       <description>
         <p>Saves messages and attachments from every interface: a Save button
